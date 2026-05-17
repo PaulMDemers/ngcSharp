@@ -8,3 +8,5 @@ TestResults/
 /.dotnet
 /roms
 /Dolphin
+/dolphin-2603a-x64
+*.rvz
