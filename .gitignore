@@ -6,3 +6,5 @@ TestResults/
 *.user
 *.suo
 /.dotnet
+/dolphin-2603a-x64
+*.rvz
