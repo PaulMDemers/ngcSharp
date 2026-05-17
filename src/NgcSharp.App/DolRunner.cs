@@ -407,6 +407,13 @@ public sealed class DolRunner
                     continue;
                 }
 
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardIndexedWordStoreCountLoop(state, bus, out skippedInstructions))
+                {
+                    bulkFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardByteCopyLoop(state, bus, out skippedInstructions))
                 {
                     bulkFastForwardInstructions += (uint)skippedInstructions;
@@ -1294,8 +1301,6 @@ public sealed class DolRunner
     private static bool TryFastForwardKnownIdleLoop(PowerPcState state, GameCubeBus bus, out ulong skippedCycles)
     {
         const uint idlePollPc = 0x801F_BEE8;
-        const uint twilightPrincessSchedulerReadyMaskPollPc = 0x8034_1144;
-        const int twilightPrincessSchedulerReadyMaskOffset = -0x6EC0;
         const uint msrExternalInterruptEnable = 0x0000_8000;
         const int cyclesPerIdleSkip = GameCubeBus.VideoCyclesPerScanline;
 
@@ -1303,15 +1308,9 @@ public sealed class DolRunner
         bool isKnownIdlePoll = state.Pc == idlePollPc
             && bus.SmallDataBaseRegister != 0
             && bus.Read32(bus.SmallDataBaseRegister + 0x3230) == 0;
-        bool isTwilightPrincessSchedulerWait = state.Pc == twilightPrincessSchedulerReadyMaskPollPc
-            && state.Gpr[13] != 0
-            && bus.Read32(state.Pc) == 0x800D_9140
-            && bus.Read32(state.Pc + 0x04) == 0x2800_0000
-            && bus.Read32(state.Pc + 0x08) == 0x4182_FFF8
-            && bus.Memory.IsMainRamAddress(unchecked((uint)((int)state.Gpr[13] + twilightPrincessSchedulerReadyMaskOffset)), sizeof(uint))
-            && bus.Read32(unchecked((uint)((int)state.Gpr[13] + twilightPrincessSchedulerReadyMaskOffset))) == 0;
+        bool isSchedulerReadyMaskWait = IsSchedulerReadyMaskIdlePoll(state, bus);
 
-        if ((!isKnownIdlePoll && !isTwilightPrincessSchedulerWait)
+        if ((!isKnownIdlePoll && !isSchedulerReadyMaskWait)
             || (state.Msr & msrExternalInterruptEnable) == 0
             || bus.HasPendingExternalInterrupt
             || !HasEnabledVideoInterrupt(bus))
@@ -1336,6 +1335,25 @@ public sealed class DolRunner
         bus.Advance((uint)cyclesToSkip);
         skippedCycles = (uint)cyclesToSkip;
         return true;
+    }
+
+    private static bool IsSchedulerReadyMaskIdlePoll(PowerPcState state, GameCubeBus bus)
+    {
+        uint pc = state.Pc;
+        uint load = bus.Read32(pc);
+        if (!TryDecodeDForm(load, primaryOpcode: 32, out int valueRegister, out int baseRegister, out int readyMaskOffset)
+            || valueRegister != 0
+            || baseRegister != 13
+            || state.Gpr[13] == 0
+            || bus.Read32(pc + 0x04) != 0x2800_0000
+            || bus.Read32(pc + 0x08) != 0x4182_FFF8)
+        {
+            return false;
+        }
+
+        uint readyMaskAddress = unchecked((uint)((int)state.Gpr[13] + readyMaskOffset));
+        return bus.Memory.IsMainRamAddress(readyMaskAddress, sizeof(uint))
+            && bus.Read32(readyMaskAddress) == 0;
     }
 
     private static bool TryFastForwardCtrDelayLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
@@ -1670,6 +1688,70 @@ public sealed class DolRunner
         state.Ctr = 0;
         state.Pc = pc + 0x10;
         uint skipped = checked(count * 4);
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+    private static bool TryFastForwardIndexedWordStoreCountLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        if (bus.Read32(pc + 0x00) != 0x80A3_0000
+            || bus.Read32(pc + 0x04) != 0x7CC5_212E
+            || bus.Read32(pc + 0x08) != 0x38E7_0001
+            || bus.Read32(pc + 0x0C) != 0x3884_0004
+            || bus.Read32(pc + 0x10) != 0x8003_0004
+            || bus.Read32(pc + 0x14) != 0x7C07_0040
+            || bus.Read32(pc + 0x18) != 0x4180_FFE8
+            || bus.Read32(pc + 0x1C) != 0x3800_0000
+            || bus.Read32(pc + 0x20) != 0x9003_0020
+            || bus.Read32(pc + 0x24) != 0x4E80_0020)
+        {
+            return false;
+        }
+
+        uint objectAddress = state.Gpr[3];
+        if (!bus.Memory.IsMainRamAddress(objectAddress, 0x24))
+        {
+            return false;
+        }
+
+        uint current = state.Gpr[7];
+        uint limit = bus.Memory.Read32(objectAddress + 4);
+        if (current >= limit)
+        {
+            return false;
+        }
+
+        uint iterations = limit - current;
+        if (iterations > MaxFastForwardMemmoveBytes / sizeof(uint)
+            || !CanFastForwardInstructionCount(state, iterations, instructionsPerIteration: 7, extraInstructions: 3))
+        {
+            return false;
+        }
+
+        int byteCount = checked((int)(iterations * sizeof(uint)));
+        uint baseAddress = bus.Memory.Read32(objectAddress);
+        uint destination = unchecked(baseAddress + state.Gpr[4]);
+        if (!bus.Memory.IsMainRamAddress(destination, byteCount)
+            || RangesOverlap(destination, (uint)byteCount, objectAddress, 0x24))
+        {
+            return false;
+        }
+
+        for (uint offset = 0; offset < (uint)byteCount; offset += sizeof(uint))
+        {
+            bus.Memory.Write32(destination + offset, state.Gpr[6]);
+        }
+
+        bus.Memory.Write32(objectAddress + 0x20, 0);
+        state.Gpr[0] = 0;
+        state.Gpr[4] = unchecked(state.Gpr[4] + (uint)byteCount);
+        state.Gpr[5] = baseAddress;
+        state.Gpr[7] = limit;
+        state.Pc = state.Lr;
+        uint skipped = checked(iterations * 7 + 3);
         AdvanceFastForwardedInstructions(state, bus, skipped);
         skippedInstructions = checked((int)skipped);
         return true;
