@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NgcSharp.App/NgcSharp.App.csproj" />
+    <Project Path="src/NgcSharp.Core/NgcSharp.Core.csproj" />
+    <Project Path="src/NgcSharp.Cpu/NgcSharp.Cpu.csproj" />
+    <Project Path="src/NgcSharp.Hw/NgcSharp.Hw.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NgcSharp.Tests/NgcSharp.Tests.csproj" />
+  </Folder>
+</Solution>
