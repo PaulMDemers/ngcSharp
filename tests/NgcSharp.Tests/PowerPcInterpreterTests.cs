@@ -1565,6 +1565,28 @@ public sealed class PowerPcInterpreterTests
     }
 
     [Fact]
+    public void MoveFromFpscrCopiesStatusToLowFloatingRegisterWord()
+    {
+        GameCubeMemory memory = new();
+        uint pc = 0x8000_3100;
+        WriteInstruction(memory, pc + 0x00, Mffs(fD: 31));
+        WriteInstruction(memory, pc + 0x04, Stfd(fS: 31, rA: 3, displacement: 0));
+
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Fpscr = 0xA55A_1234,
+        };
+        state.Gpr[3] = 0x8000_1000;
+
+        new PowerPcInterpreter().Run(state, memory, 2);
+
+        Assert.Equal(0u, memory.Read32(0x8000_1000));
+        Assert.Equal(0xA55A_1234u, memory.Read32(0x8000_1004));
+        Assert.Equal("mffs f31", PowerPcDisassembler.Disassemble(Mffs(fD: 31)));
+    }
+
+    [Fact]
     public void UpdateStoresWriteBackEffectiveAddress()
     {
         GameCubeMemory memory = new();
@@ -1922,6 +1944,11 @@ public sealed class PowerPcInterpreterTests
     private static uint Mtfsb0(int bit)
     {
         return ((uint)63 << 26) | ((uint)bit << 21) | (70u << 1);
+    }
+
+    private static uint Mffs(int fD)
+    {
+        return ((uint)63 << 26) | ((uint)fD << 21) | (583u << 1);
     }
 
     private static uint XForm(int opcode, int rSOrD, int rA, int rB, int xo, bool record = false)

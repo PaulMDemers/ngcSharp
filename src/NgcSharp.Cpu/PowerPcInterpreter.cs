@@ -1473,6 +1473,9 @@ public sealed class PowerPcInterpreter
             case 264:
                 SetFloatingScalar(state, fD, Math.Abs(state.Fpr[fB]));
                 return;
+            case 583:
+                MoveFromFloatingPointStatusAndControlRegister(state, instruction);
+                return;
             case 711:
                 MoveToFloatingPointStatusAndControlRegisterFields(state, instruction);
                 return;
@@ -1535,6 +1538,11 @@ public sealed class PowerPcInterpreter
             uint mask = 0xFu << shift;
             state.Fpscr = (state.Fpscr & ~mask) | (source & mask);
         }
+    }
+
+    private static void MoveFromFloatingPointStatusAndControlRegister(PowerPcState state, uint instruction)
+    {
+        SetFloatingScalar(state, Rd(instruction), BitConverter.UInt64BitsToDouble(state.Fpscr));
     }
 
     private static void MoveToFpscrBit(PowerPcState state, uint instruction, bool value)

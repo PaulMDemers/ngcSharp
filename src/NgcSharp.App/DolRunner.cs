@@ -400,6 +400,13 @@ public sealed class DolRunner
                     continue;
                 }
 
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardCtrIndexedWordStoreLoop(state, bus, out skippedInstructions))
+                {
+                    bulkFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardByteCopyLoop(state, bus, out skippedInstructions))
                 {
                     bulkFastForwardInstructions += (uint)skippedInstructions;
@@ -457,6 +464,20 @@ public sealed class DolRunner
                 }
 
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardStringCompareRoutine(state, bus, out skippedInstructions))
+                {
+                    stringCompareFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardAlignedStringCompareRoutine(state, bus, out skippedInstructions))
+                {
+                    stringCompareFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSimpleStringCompareRoutine(state, bus, out skippedInstructions))
                 {
                     stringCompareFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
@@ -1273,15 +1294,26 @@ public sealed class DolRunner
     private static bool TryFastForwardKnownIdleLoop(PowerPcState state, GameCubeBus bus, out ulong skippedCycles)
     {
         const uint idlePollPc = 0x801F_BEE8;
+        const uint twilightPrincessSchedulerReadyMaskPollPc = 0x8034_1144;
+        const int twilightPrincessSchedulerReadyMaskOffset = -0x6EC0;
         const uint msrExternalInterruptEnable = 0x0000_8000;
         const int cyclesPerIdleSkip = GameCubeBus.VideoCyclesPerScanline;
 
         skippedCycles = 0;
-        if (state.Pc != idlePollPc
+        bool isKnownIdlePoll = state.Pc == idlePollPc
+            && bus.SmallDataBaseRegister != 0
+            && bus.Read32(bus.SmallDataBaseRegister + 0x3230) == 0;
+        bool isTwilightPrincessSchedulerWait = state.Pc == twilightPrincessSchedulerReadyMaskPollPc
+            && state.Gpr[13] != 0
+            && bus.Read32(state.Pc) == 0x800D_9140
+            && bus.Read32(state.Pc + 0x04) == 0x2800_0000
+            && bus.Read32(state.Pc + 0x08) == 0x4182_FFF8
+            && bus.Memory.IsMainRamAddress(unchecked((uint)((int)state.Gpr[13] + twilightPrincessSchedulerReadyMaskOffset)), sizeof(uint))
+            && bus.Read32(unchecked((uint)((int)state.Gpr[13] + twilightPrincessSchedulerReadyMaskOffset))) == 0;
+
+        if ((!isKnownIdlePoll && !isTwilightPrincessSchedulerWait)
             || (state.Msr & msrExternalInterruptEnable) == 0
             || bus.HasPendingExternalInterrupt
-            || bus.SmallDataBaseRegister == 0
-            || bus.Read32(bus.SmallDataBaseRegister + 0x3230) != 0
             || !HasEnabledVideoInterrupt(bus))
         {
             return false;
@@ -1592,6 +1624,52 @@ public sealed class DolRunner
         state.Pc = remainingIterations == 0 ? pc + 44 : pc;
 
         uint skipped = checked(iterationsToClear * 11);
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+    private static bool TryFastForwardCtrIndexedWordStoreLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        if (bus.Read32(pc + 0x00) != 0x80A3_0000
+            || bus.Read32(pc + 0x04) != 0x7C05_212E
+            || bus.Read32(pc + 0x08) != 0x3884_0004
+            || bus.Read32(pc + 0x0C) != 0x4200_FFF4
+            || state.Ctr == 0
+            || state.Ctr > MaxFastForwardMemmoveBytes / sizeof(uint))
+        {
+            return false;
+        }
+
+        uint pointerAddress = state.Gpr[3];
+        if (!bus.Memory.IsMainRamAddress(pointerAddress, sizeof(uint)))
+        {
+            return false;
+        }
+
+        uint count = state.Ctr;
+        int byteCount = checked((int)(count * sizeof(uint)));
+        uint baseAddress = bus.Memory.Read32(pointerAddress);
+        uint destination = unchecked(baseAddress + state.Gpr[4]);
+        if (!bus.Memory.IsMainRamAddress(destination, byteCount)
+            || RangesOverlap(destination, (uint)byteCount, pointerAddress, sizeof(uint))
+            || !CanFastForwardInstructionCount(state, count, instructionsPerIteration: 4, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        for (uint offset = 0; offset < (uint)byteCount; offset += sizeof(uint))
+        {
+            bus.Memory.Write32(destination + offset, state.Gpr[0]);
+        }
+
+        state.Gpr[5] = baseAddress;
+        state.Gpr[4] = unchecked(state.Gpr[4] + (uint)byteCount);
+        state.Ctr = 0;
+        state.Pc = pc + 0x10;
+        uint skipped = checked(count * 4);
         AdvanceFastForwardedInstructions(state, bus, skipped);
         skippedInstructions = checked((int)skipped);
         return true;
@@ -1956,6 +2034,11 @@ public sealed class DolRunner
             return TryFastForwardWordEqualsLeaf(state, bus, pc, out skippedInstructions);
         }
 
+        if (first == 0x8063_001C)
+        {
+            return TryFastForwardWordAtOffsetLeaf(state, bus, pc, out skippedInstructions);
+        }
+
         if (first == 0x7C60_00A6)
         {
             if (TryFastForwardDisableExternalInterruptLeaf(state, bus, pc, out skippedInstructions))
@@ -2094,6 +2177,27 @@ public sealed class DolRunner
         state.Pc = state.Lr;
         AdvanceFastForwardedInstructions(state, bus, 5);
         skippedInstructions = 5;
+        return true;
+    }
+
+    private static bool TryFastForwardWordAtOffsetLeaf(PowerPcState state, GameCubeBus bus, uint pc, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (bus.Read32(pc + 0x04) != 0x4E80_0020)
+        {
+            return false;
+        }
+
+        uint address = state.Gpr[3] + 0x1C;
+        if (!bus.Memory.IsMainRamAddress(address, sizeof(uint)))
+        {
+            return false;
+        }
+
+        state.Gpr[3] = bus.Memory.Read32(address);
+        state.Pc = state.Lr;
+        AdvanceFastForwardedInstructions(state, bus, 2);
+        skippedInstructions = 2;
         return true;
     }
 
@@ -2334,6 +2438,184 @@ public sealed class DolRunner
         SetCr0(state, result);
         state.Pc = state.Lr;
         uint skipped = checked(comparedBytes * 12 + 24);
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+    private static bool TryFastForwardAlignedStringCompareRoutine(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        if (state.Gpr[3] == state.Gpr[4]
+            && bus.Read32(pc + 0x000) == 0x88A3_0000
+            && bus.Read32(pc + 0x004) == 0x8804_0000
+            && bus.Read32(pc + 0x008) == 0x7C00_2851
+            && bus.Read32(pc + 0x00C) == 0x4182_000C
+            && bus.Read32(pc + 0x010) == 0x7C03_0378
+            && bus.Read32(pc + 0x014) == 0x4E80_0020)
+        {
+            state.Gpr[0] = 0;
+            state.Gpr[3] = 0;
+            SetCr0(state, 0);
+            state.Pc = state.Lr;
+            AdvanceFastForwardedInstructions(state, bus, 6);
+            skippedInstructions = 6;
+            return true;
+        }
+
+        if (bus.Read32(pc + 0x000) != 0x88A3_0000
+            || bus.Read32(pc + 0x004) != 0x8804_0000
+            || bus.Read32(pc + 0x008) != 0x7C00_2851
+            || bus.Read32(pc + 0x00C) != 0x4182_000C
+            || bus.Read32(pc + 0x018) != 0x5480_07BE
+            || bus.Read32(pc + 0x01C) != 0x5466_07BE
+            || bus.Read32(pc + 0x020) != 0x7C00_3040
+            || bus.Read32(pc + 0x024) != 0x4082_00C8
+            || bus.Read32(pc + 0x028) != 0x2806_0000
+            || bus.Read32(pc + 0x02C) != 0x4182_0058
+            || bus.Read32(pc + 0x0D8) != 0x88A3_0000
+            || bus.Read32(pc + 0x0DC) != 0x8804_0000
+            || bus.Read32(pc + 0x0E0) != 0x7C00_2851
+            || bus.Read32(pc + 0x0E4) != 0x4182_000C
+            || bus.Read32(pc + 0x0F0) != 0x2805_0000
+            || bus.Read32(pc + 0x0F4) != 0x4082_000C
+            || bus.Read32(pc + 0x100) != 0x8CA3_0001
+            || bus.Read32(pc + 0x104) != 0x8C04_0001
+            || bus.Read32(pc + 0x108) != 0x7C00_2851
+            || bus.Read32(pc + 0x118) != 0x2805_0000
+            || bus.Read32(pc + 0x11C) != 0x4082_FFE4
+            || bus.Read32(pc + 0x120) != 0x3860_0000
+            || bus.Read32(pc + 0x124) != 0x4E80_0020)
+        {
+            return false;
+        }
+
+        uint leftAddress = state.Gpr[3];
+        uint rightAddress = state.Gpr[4];
+        uint comparedBytes = 0;
+        byte left = 0;
+        byte right = 0;
+        bool finished = false;
+        while (comparedBytes < MaxFastForwardStringCompareBytes)
+        {
+            uint leftCurrent = unchecked(leftAddress + comparedBytes);
+            uint rightCurrent = unchecked(rightAddress + comparedBytes);
+            if (!bus.Memory.IsMainRamAddress(leftCurrent, 1) || !bus.Memory.IsMainRamAddress(rightCurrent, 1))
+            {
+                return false;
+            }
+
+            left = bus.Memory.Read8(leftCurrent);
+            right = bus.Memory.Read8(rightCurrent);
+            comparedBytes++;
+            if (left != right || left == 0)
+            {
+                finished = true;
+                break;
+            }
+        }
+
+        if (!finished || !CanFastForwardInstructionCount(state, comparedBytes, 12, 24))
+        {
+            return false;
+        }
+
+        uint result = unchecked((uint)(left - right));
+        state.Gpr[0] = result;
+        state.Gpr[3] = result;
+        state.Gpr[5] = left;
+        SetCr0(state, result);
+        state.Pc = state.Lr;
+        uint skipped = checked(comparedBytes * 12 + 24);
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+    private static bool TryFastForwardSimpleStringCompareRoutine(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        bool startsAtEntry =
+            bus.Read32(pc + 0x00) == 0x88A3_0000
+            && bus.Read32(pc + 0x04) == 0x8804_0000
+            && bus.Read32(pc + 0x08) == 0x7C00_2851
+            && bus.Read32(pc + 0x0C) == 0x4182_000C
+            && bus.Read32(pc + 0x10) == 0x7C03_0378
+            && bus.Read32(pc + 0x14) == 0x4E80_0020
+            && bus.Read32(pc + 0x18) == 0x2805_0000
+            && bus.Read32(pc + 0x1C) == 0x4082_000C
+            && bus.Read32(pc + 0x20) == 0x3860_0000
+            && bus.Read32(pc + 0x24) == 0x4E80_0020
+            && bus.Read32(pc + 0x28) == 0x8CA3_0001
+            && bus.Read32(pc + 0x2C) == 0x8C04_0001
+            && bus.Read32(pc + 0x30) == 0x7C00_2851
+            && bus.Read32(pc + 0x34) == 0x4182_000C
+            && bus.Read32(pc + 0x38) == 0x7C03_0378
+            && bus.Read32(pc + 0x3C) == 0x4E80_0020
+            && bus.Read32(pc + 0x40) == 0x2805_0000
+            && bus.Read32(pc + 0x44) == 0x4082_FFE4
+            && bus.Read32(pc + 0x48) == 0x3860_0000
+            && bus.Read32(pc + 0x4C) == 0x4E80_0020;
+
+        bool startsAtLoop =
+            bus.Read32(pc + 0x00) == 0x8CA3_0001
+            && bus.Read32(pc + 0x04) == 0x8C04_0001
+            && bus.Read32(pc + 0x08) == 0x7C00_2851
+            && bus.Read32(pc + 0x0C) == 0x4182_000C
+            && bus.Read32(pc + 0x10) == 0x7C03_0378
+            && bus.Read32(pc + 0x14) == 0x4E80_0020
+            && bus.Read32(pc + 0x18) == 0x2805_0000
+            && bus.Read32(pc + 0x1C) == 0x4082_FFE4
+            && bus.Read32(pc + 0x20) == 0x3860_0000
+            && bus.Read32(pc + 0x24) == 0x4E80_0020;
+
+        if (!startsAtEntry && !startsAtLoop)
+        {
+            return false;
+        }
+
+        uint leftBase = state.Gpr[3];
+        uint rightBase = state.Gpr[4];
+        uint comparedBytes = 0;
+        byte left = 0;
+        byte right = 0;
+        bool finished = false;
+        uint initialOffset = startsAtLoop ? 1u : 0u;
+        while (comparedBytes < MaxFastForwardStringCompareBytes)
+        {
+            uint offset = initialOffset + comparedBytes;
+            uint leftCurrent = unchecked(leftBase + offset);
+            uint rightCurrent = unchecked(rightBase + offset);
+            if (!bus.Memory.IsMainRamAddress(leftCurrent, 1) || !bus.Memory.IsMainRamAddress(rightCurrent, 1))
+            {
+                return false;
+            }
+
+            left = bus.Memory.Read8(leftCurrent);
+            right = bus.Memory.Read8(rightCurrent);
+            comparedBytes++;
+            if (left != right || left == 0)
+            {
+                state.Gpr[4] = rightCurrent;
+                finished = true;
+                break;
+            }
+        }
+
+        if (!finished || !CanFastForwardInstructionCount(state, comparedBytes, 8, 8))
+        {
+            return false;
+        }
+
+        uint result = unchecked((uint)(left - right));
+        state.Gpr[0] = result;
+        state.Gpr[3] = result;
+        state.Gpr[5] = left;
+        SetCr0(state, result);
+        state.Pc = state.Lr;
+        uint skipped = checked(comparedBytes * 8 + 8);
         AdvanceFastForwardedInstructions(state, bus, skipped);
         skippedInstructions = checked((int)skipped);
         return true;
@@ -4310,6 +4592,13 @@ public sealed class DolRunner
 
         ulong skipped = (ulong)iterations * instructionsPerIteration + extraInstructions;
         return skipped <= decrementer;
+    }
+
+    private static bool RangesOverlap(uint firstStart, uint firstLength, uint secondStart, uint secondLength)
+    {
+        ulong firstEnd = (ulong)firstStart + firstLength;
+        ulong secondEnd = (ulong)secondStart + secondLength;
+        return (ulong)firstStart < secondEnd && (ulong)secondStart < firstEnd;
     }
 
     private static void AdvanceFastForwardedInstructions(PowerPcState state, GameCubeBus bus, uint instructions)

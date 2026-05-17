@@ -6,3 +6,5 @@ TestResults/
 *.user
 *.suo
 /.dotnet
+/roms
+/Dolphin
