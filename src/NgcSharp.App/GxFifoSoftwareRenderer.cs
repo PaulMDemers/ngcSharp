@@ -4224,14 +4224,22 @@ public static class GxFifoSoftwareRenderer
                 && options.DestinationWidth == copyWidth
                 && options.DestinationHeight == copyHeight
                 && options.Gamma == 0
-                && IsSonicDisplayFilter(options.VerticalFilter)
                 && sourceLeft >= 0
                 && sourceTop >= 0
                 && sourceLeft + copyWidth <= frameWidth
                 && sourceTop + copyHeight <= frameHeight)
             {
-                WriteEfbDisplayCopySonicFilter(memory, destinationAddress, rgb, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight);
-                return false;
+                if (IsSonicDisplayFilter(options.VerticalFilter))
+                {
+                    WriteEfbDisplayCopySonicFilter(memory, destinationAddress, rgb, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight);
+                    return false;
+                }
+
+                if (IsPikminDisplayFilter(options.VerticalFilter))
+                {
+                    WriteEfbDisplayCopyPikminFilter(memory, destinationAddress, rgb, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight);
+                    return false;
+                }
             }
 
             if (options.VerticalFilterEnabled
@@ -4330,6 +4338,16 @@ public static class GxFifoSoftwareRenderer
             && filter[5] == 8
             && filter[6] == 8;
 
+        private static bool IsPikminDisplayFilter(int[] filter) =>
+            filter.Length == 7
+            && filter[0] == 5
+            && filter[1] == 6
+            && filter[2] == 14
+            && filter[3] == 14
+            && filter[4] == 14
+            && filter[5] == 6
+            && filter[6] == 5;
+
         private static void WriteEfbDisplayCopySonicFilter(
             GameCubeMemory memory,
             uint destinationAddress,
@@ -4382,6 +4400,60 @@ public static class GxFifoSoftwareRenderer
             r = (byte)((rgb[o0] * 8 + rgb[o1] * 8 + rgb[o2] * 10 + rgb[o3] * 12 + rgb[o4] * 10 + rgb[o5] * 8 + rgb[o6] * 8 + 32) >> 6);
             g = (byte)((rgb[o0 + 1] * 8 + rgb[o1 + 1] * 8 + rgb[o2 + 1] * 10 + rgb[o3 + 1] * 12 + rgb[o4 + 1] * 10 + rgb[o5 + 1] * 8 + rgb[o6 + 1] * 8 + 32) >> 6);
             b = (byte)((rgb[o0 + 2] * 8 + rgb[o1 + 2] * 8 + rgb[o2 + 2] * 10 + rgb[o3 + 2] * 12 + rgb[o4 + 2] * 10 + rgb[o5 + 2] * 8 + rgb[o6 + 2] * 8 + 32) >> 6);
+        }
+
+        private static void WriteEfbDisplayCopyPikminFilter(
+            GameCubeMemory memory,
+            uint destinationAddress,
+            byte[] rgb,
+            int frameWidth,
+            int frameHeight,
+            int sourceLeft,
+            int sourceTop,
+            int width,
+            int height)
+        {
+            int destinationStridePairs = (width + 1) / 2;
+            byte[] row = new byte[destinationStridePairs * 4];
+            Span<int> tapRows = stackalloc int[7];
+            for (int y = 0; y < height; y++)
+            {
+                for (int tap = 0; tap < 7; tap++)
+                {
+                    int tapY = Math.Clamp(sourceTop + y + tap - 3, 0, frameHeight - 1);
+                    tapRows[tap] = (tapY * frameWidth + sourceLeft) * 3;
+                }
+
+                for (int x = 0; x < width; x += 2)
+                {
+                    SamplePikminFilterPixel(rgb, tapRows, x, out byte r0, out byte g0, out byte b0);
+                    SamplePikminFilterPixel(rgb, tapRows, Math.Min(x + 1, width - 1), out byte r1, out byte g1, out byte b1);
+                    RgbToYcbcr(r0, g0, b0, out byte y0, out byte cb0, out byte cr0);
+                    RgbToYcbcr(r1, g1, b1, out byte y1, out byte cb1, out byte cr1);
+                    int rowOffset = (x / 2) * 4;
+                    row[rowOffset] = y0;
+                    row[rowOffset + 1] = (byte)((cb0 + cb1 + 1) / 2);
+                    row[rowOffset + 2] = y1;
+                    row[rowOffset + 3] = (byte)((cr0 + cr1 + 1) / 2);
+                }
+
+                memory.Load(destinationAddress + (uint)(y * row.Length), row);
+            }
+        }
+
+        private static void SamplePikminFilterPixel(byte[] rgb, ReadOnlySpan<int> tapRows, int x, out byte r, out byte g, out byte b)
+        {
+            int xOffset = x * 3;
+            int o0 = tapRows[0] + xOffset;
+            int o1 = tapRows[1] + xOffset;
+            int o2 = tapRows[2] + xOffset;
+            int o3 = tapRows[3] + xOffset;
+            int o4 = tapRows[4] + xOffset;
+            int o5 = tapRows[5] + xOffset;
+            int o6 = tapRows[6] + xOffset;
+            r = (byte)((rgb[o0] * 5 + rgb[o1] * 6 + rgb[o2] * 14 + rgb[o3] * 14 + rgb[o4] * 14 + rgb[o5] * 6 + rgb[o6] * 5 + 32) >> 6);
+            g = (byte)((rgb[o0 + 1] * 5 + rgb[o1 + 1] * 6 + rgb[o2 + 1] * 14 + rgb[o3 + 1] * 14 + rgb[o4 + 1] * 14 + rgb[o5 + 1] * 6 + rgb[o6 + 1] * 5 + 32) >> 6);
+            b = (byte)((rgb[o0 + 2] * 5 + rgb[o1 + 2] * 6 + rgb[o2 + 2] * 14 + rgb[o3 + 2] * 14 + rgb[o4 + 2] * 14 + rgb[o5 + 2] * 6 + rgb[o6 + 2] * 5 + 32) >> 6);
         }
 
         private static void WriteEfbDisplayCopyFilteredNoScale(
