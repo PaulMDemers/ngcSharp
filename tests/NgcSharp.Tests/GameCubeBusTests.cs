@@ -1305,6 +1305,61 @@ public sealed class GameCubeBusTests
     }
 
     [Fact]
+    public void SerialInterfacePollRegisterSkipsDisconnectedPorts()
+    {
+        GameCubeBus bus = new()
+        {
+            SerialInterfaceControllerButtons = GameCubeBus.SerialInterfaceControllerButtonA,
+        };
+
+        bus.Write32(0xCC00_6400, 0x0040_0300);
+        bus.Write32(0xCC00_640C, 0x0040_0300);
+        bus.Write32(0xCC00_6418, 0x0040_0300);
+        bus.Write32(0xCC00_6424, 0x0040_0300);
+        bus.Write32(0xCC00_6430, 0x00F7_0100 | 0xF0);
+
+        uint status = bus.Read32(0xCC00_6438);
+        Assert.Equal(0x2000_0000u, status & 0x2000_0000u);
+        Assert.Equal(0u, status & 0x0020_2020u);
+        Assert.Equal(0u, status & 0x0008_0808u);
+        Assert.Equal(0x0100_8080u, bus.Read32(0xCC00_6404));
+        Assert.Equal(0xC000_0000u, bus.Read32(0xCC00_6410) & 0xC000_0000u);
+    }
+
+    [Fact]
+    public void SerialInterfaceCommunicationTransferReportsNoResponseForDisconnectedPort()
+    {
+        GameCubeBus bus = new();
+
+        bus.Write32(0xCC00_6434, 0xC001_0303);
+
+        Assert.Equal(0x0008_0000u, bus.Read32(0xCC00_6438) & 0x0008_0000u);
+        Assert.Equal(0xC000_0000u, bus.Read32(0xCC00_6410) & 0xC000_0000u);
+
+        bus.Write32(0xCC00_6438, 0x0008_0000);
+
+        Assert.Equal(0u, bus.Read32(0xCC00_6438) & 0x0008_0000u);
+        Assert.Equal(0u, bus.Read32(0xCC00_6410) & 0xC000_0000u);
+    }
+
+    [Fact]
+    public void SerialInterfaceCanConnectAdditionalControllerPorts()
+    {
+        GameCubeBus bus = new()
+        {
+            SerialInterfaceControllerPort1Connected = true,
+            SerialInterfaceControllerButtons = GameCubeBus.SerialInterfaceControllerButtonA,
+        };
+
+        bus.Write32(0xCC00_640C, 0x0040_0300);
+        bus.Write32(0xCC00_6430, 0x00F7_0100 | 0x20);
+
+        Assert.Equal(0x0020_0000u, bus.Read32(0xCC00_6438) & 0x0020_0000u);
+        Assert.Equal(0x0100_8080u, bus.Read32(0xCC00_6410));
+        Assert.Equal(GameCubeBus.SerialInterfaceNeutralControllerLow, bus.Read32(0xCC00_6414));
+    }
+
+    [Fact]
     public void SerialInterfaceCommunicationTransferPopulatesIoBuffer()
     {
         GameCubeBus bus = new()

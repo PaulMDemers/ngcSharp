@@ -197,6 +197,14 @@ public sealed class GameCubeBus : IMemoryBus
 
     public ushort SerialInterfaceControllerButtons { get; set; }
 
+    public bool SerialInterfaceControllerPort0Connected { get; set; } = true;
+
+    public bool SerialInterfaceControllerPort1Connected { get; set; }
+
+    public bool SerialInterfaceControllerPort2Connected { get; set; }
+
+    public bool SerialInterfaceControllerPort3Connected { get; set; }
+
     public uint ExternalInterfaceRtcCounter { get; set; } = CreateDefaultExternalInterfaceRtcCounter();
 
     public bool ExternalInterfaceMemoryCardSlotAInserted { get; set; }
@@ -3136,6 +3144,7 @@ public sealed class GameCubeBus : IMemoryBus
         }
 
         _mmioValues[SerialInterfaceStatusAddress] = nextValue;
+        RefreshSerialInterfaceErrorLatches();
         UpdateSerialInterfaceReadStatusInterrupt();
         return nextValue;
     }
@@ -3186,6 +3195,13 @@ public sealed class GameCubeBus : IMemoryBus
     {
         int transferChannel = SerialInterfaceCommunicationTransferChannel(control);
         _serialInterfaceCommunicationTransferChannel = transferChannel;
+        if (!IsSerialInterfaceControllerConnected(transferChannel))
+        {
+            SetSerialInterfaceNoResponse(transferChannel);
+            SetSerialInterfaceNoControllerInput(transferChannel);
+            return;
+        }
+
         _mmioValues.TryGetValue(SerialInterfaceOutputBufferAddress(transferChannel), out uint outputBuffer);
         byte command = (control & SerialInterfaceTransferStart) != 0 && _serialInterfaceIoBuffer[0] == SerialInterfaceControllerCommandId
             ? SerialInterfaceOutputBufferCommand(outputBuffer)
@@ -3208,6 +3224,13 @@ public sealed class GameCubeBus : IMemoryBus
         {
             if ((enabled & (1u << channel)) == 0)
             {
+                continue;
+            }
+
+            if (!IsSerialInterfaceControllerConnected(channel))
+            {
+                SetSerialInterfaceNoControllerInput(channel);
+                status &= ~SerialInterfaceReadStatusBit(channel);
                 continue;
             }
 
@@ -3250,6 +3273,29 @@ public sealed class GameCubeBus : IMemoryBus
 
         _mmioValues[SerialInterfaceInputBufferHighAddress(channel)] = high;
         _mmioValues[SerialInterfaceInputBufferLowAddress(channel)] = SerialInterfaceNeutralControllerLow;
+    }
+
+    private void SetSerialInterfaceNoResponse(int channel)
+    {
+        if (channel is < 0 or > 3)
+        {
+            return;
+        }
+
+        _mmioValues[SerialInterfaceStatusAddress] =
+            ReadMmioValue(SerialInterfaceStatusAddress) | SerialInterfaceNoResponseBit(channel);
+    }
+
+    private void SetSerialInterfaceNoControllerInput(int channel)
+    {
+        if (channel is < 0 or > 3)
+        {
+            return;
+        }
+
+        _mmioValues[SerialInterfaceInputBufferHighAddress(channel)] =
+            SerialInterfaceInputErrorStatus | SerialInterfaceInputErrorLatch;
+        _mmioValues[SerialInterfaceInputBufferLowAddress(channel)] = 0;
     }
 
     private uint SerialInterfaceControllerHigh() =>
@@ -3301,6 +3347,24 @@ public sealed class GameCubeBus : IMemoryBus
         uint status = ReadMmioValue(SerialInterfaceStatusAddress) & ~SerialInterfaceReadStatusBit(channel);
         _mmioValues[SerialInterfaceStatusAddress] = status;
         UpdateSerialInterfaceReadStatusInterrupt();
+    }
+
+    private void RefreshSerialInterfaceErrorLatches()
+    {
+        for (int channel = 0; channel < 4; channel++)
+        {
+            uint inputHigh = ReadMmioValue(SerialInterfaceInputBufferHighAddress(channel));
+            if ((ReadMmioValue(SerialInterfaceStatusAddress) & SerialInterfaceChannelErrorMask(channel)) != 0)
+            {
+                inputHigh |= SerialInterfaceInputErrorStatus | SerialInterfaceInputErrorLatch;
+            }
+            else
+            {
+                inputHigh &= ~(SerialInterfaceInputErrorStatus | SerialInterfaceInputErrorLatch);
+            }
+
+            _mmioValues[SerialInterfaceInputBufferHighAddress(channel)] = inputHigh;
+        }
     }
 
     private void UpdateSerialInterfaceProcessorInterrupt(uint control)
@@ -3426,6 +3490,10 @@ public sealed class GameCubeBus : IMemoryBus
 
     private static uint SerialInterfaceWriteStatusBit(int channel) => 0x1000_0000u >> (channel * 8);
 
+    private static uint SerialInterfaceNoResponseBit(int channel) => 0x0800_0000u >> (channel * 8);
+
+    private static uint SerialInterfaceChannelErrorMask(int channel) => 0x0F00_0000u >> (channel * 8);
+
     private static byte SerialInterfaceOutputBufferCommand(uint outputBuffer) => (byte)((outputBuffer >> 16) & 0xFF);
 
     private static bool ShouldStartSerialInterfaceCommunicationTransfer(uint control)
@@ -3443,6 +3511,16 @@ public sealed class GameCubeBus : IMemoryBus
 
         return (int)((control >> 25) & 0x3);
     }
+
+    private bool IsSerialInterfaceControllerConnected(int channel) =>
+        channel switch
+        {
+            0 => SerialInterfaceControllerPort0Connected,
+            1 => SerialInterfaceControllerPort1Connected,
+            2 => SerialInterfaceControllerPort2Connected,
+            3 => SerialInterfaceControllerPort3Connected,
+            _ => false,
+        };
 
     private static bool IsAramDmaRegister(uint alignedAddress)
     {
@@ -3500,6 +3578,8 @@ public sealed class GameCubeBus : IMemoryBus
     private const uint SerialInterfaceWriteStatusMask = 0x1010_1010;
     private const uint SerialInterfaceStatusClearMask = 0x2F2F_2F2F;
     private const uint SerialInterfacePollMask = 0x03FF_FFF0;
+    private const uint SerialInterfaceInputErrorStatus = 0x8000_0000;
+    private const uint SerialInterfaceInputErrorLatch = 0x4000_0000;
     private const ulong SerialInterfaceAutoPollCycles = 4096;
     private const uint SerialInterfaceCommunicationControlWriteMask =
         SerialInterfaceTransferCompleteMask |
