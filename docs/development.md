@@ -86,6 +86,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-sonic-check.ps1 -NoBuild
 ```
 
 These write timestamped runs under `artifacts/compat-runs` with per-target `run.json`, auto-selected GX frames, EXI summaries, GX copy summaries, and suite-level `summary.csv` / `summary.json`.
+The default `sonic-20m` target uses a lighter GX frame budget and skips the copy CSV so the routine suite remains bounded; add `-DeepGx` when chasing copy/presentation details.
 
 Regenerate summaries from existing trace artifacts:
 

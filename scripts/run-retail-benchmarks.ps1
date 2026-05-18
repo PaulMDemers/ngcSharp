@@ -6,7 +6,8 @@ param(
     [int]$TimeoutSeconds = 300,
     [int]$ProgressIntervalSeconds = 15,
     [switch]$NoBuild,
-    [switch]$SkipMissing
+    [switch]$SkipMissing,
+    [switch]$DeepGx
 )
 
 $ErrorActionPreference = "Stop"
@@ -159,6 +160,7 @@ $targetDefinitions = @{
         gxFrameSource = "auto"
         gxFrameMaxDraws = 700
         gxFrameMaxRasterPixels = 12000000
+        dumpGxCopies = $true
         extraArgs = @("--memory-card-a", "--controller-button", "a")
     }
     "sonic-20m" = [pscustomobject]@{
@@ -168,8 +170,9 @@ $targetDefinitions = @{
         maxInstructions = 20000000
         timeoutSeconds = $TimeoutSeconds
         gxFrameSource = "auto"
-        gxFrameMaxDraws = 900
-        gxFrameMaxRasterPixels = 12000000
+        gxFrameMaxDraws = 160
+        gxFrameMaxRasterPixels = 3000000
+        dumpGxCopies = $false
         extraArgs = @("--memory-card-a", "--controller-button", "a")
     }
     "pikmin-5m" = [pscustomobject]@{
@@ -181,6 +184,7 @@ $targetDefinitions = @{
         gxFrameSource = "auto"
         gxFrameMaxDraws = 700
         gxFrameMaxRasterPixels = 12000000
+        dumpGxCopies = $true
         extraArgs = @()
     }
     "pikmin-20m" = [pscustomobject]@{
@@ -192,6 +196,7 @@ $targetDefinitions = @{
         gxFrameSource = "auto"
         gxFrameMaxDraws = 1100
         gxFrameMaxRasterPixels = 12000000
+        dumpGxCopies = $true
         extraArgs = @()
     }
 }
@@ -232,6 +237,10 @@ foreach ($targetName in $Targets) {
     $exiJsonPath = Join-Path $targetRoot "exi.summary.json"
     $runJsonPath = Join-Path $targetRoot "run.json"
 
+    $gxFrameMaxDraws = if ($DeepGx -and $target.slug -eq "sonic-20m") { 900 } else { $target.gxFrameMaxDraws }
+    $gxFrameMaxRasterPixels = if ($DeepGx -and $target.slug -eq "sonic-20m") { 12000000 } else { $target.gxFrameMaxRasterPixels }
+    $dumpGxCopies = $DeepGx -or [bool]$target.dumpGxCopies
+
     $runArgs = @(
         $appDll,
         "run-disc",
@@ -241,13 +250,15 @@ foreach ($targetName in $Targets) {
         "--fast-forward-write-watch",
         "--dump-gx-frame", $framePath,
         "--gx-frame-source", $target.gxFrameSource,
-        "--gx-frame-max-draws", "$($target.gxFrameMaxDraws)",
-        "--gx-frame-max-raster-pixels", "$($target.gxFrameMaxRasterPixels)",
-        "--dump-gx-copies", $copyCsvPath,
+        "--gx-frame-max-draws", "$gxFrameMaxDraws",
+        "--gx-frame-max-raster-pixels", "$gxFrameMaxRasterPixels",
         "--trace-exi", $exiTracePath,
         "--no-registers",
         "--quiet"
     ) + $target.extraArgs
+    if ($dumpGxCopies) {
+        $runArgs += @("--dump-gx-copies", $copyCsvPath)
+    }
 
     Write-Host "Running $($target.slug): $($target.game) at $($target.maxInstructions) instructions..."
     $result = Invoke-ProcessWithWatchdog `
@@ -293,6 +304,10 @@ foreach ($targetName in $Targets) {
         exitCode = $result.exitCode
         elapsedSeconds = $result.elapsedSeconds
         timeoutSeconds = $target.timeoutSeconds
+        deepGx = [bool]$DeepGx
+        gxFrameMaxDraws = $gxFrameMaxDraws
+        gxFrameMaxRasterPixels = $gxFrameMaxRasterPixels
+        gxCopiesRequested = $dumpGxCopies
         frame = $frameSummary
         exiSummary = $exiSummary
         gxCopySummary = $gxSummary

@@ -152,6 +152,7 @@ Workflow update:
 
 - Added `scripts/run-retail-benchmarks.ps1` and `scripts/run-sonic-check.ps1` for repeatable Sonic/Pikmin compatibility probes. The harness applies a wall-clock watchdog, emits progress updates, captures auto-selected GX frames, EXI traces, GX copy CSVs, per-target `run.json` ledgers, and suite-level `summary.csv` / `summary.json`.
 - Added `scripts/summarize-exi-trace.ps1` and `scripts/summarize-gx-copies.ps1` so old artifacts can be converted into compact milestone JSON without rerunning retail images. The EXI summary tracks memory-card command milestones such as `0x52` read-array sector reads; the GX summary tracks display/texture copy counts and nonblack display-copy milestones.
+- Tuned the default `sonic-20m` benchmark to use a lighter GX frame budget and skip copy CSV generation. The full copy-heavy path remains available through `-DeepGx`, but the routine four-target suite now stays useful as a bounded regression loop.
 
 Next useful targets:
 
