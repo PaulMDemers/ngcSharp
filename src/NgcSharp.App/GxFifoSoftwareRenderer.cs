@@ -2690,7 +2690,7 @@ public static class GxFifoSoftwareRenderer
             && b.TryGetTexCoord(texCoord, out bTexS, out bTexT)
             && c.TryGetTexCoord(texCoord, out cTexS, out cTexT);
         GxTevStage0Mode stage0Mode = state.Stage0Mode;
-        bool canEvaluateSingleTevStageFast = state.TryCreateSingleTevStageFastEvaluator(out GxVertexState.SingleTevStageFastEvaluator singleTevStageFast);
+        bool canEvaluateSingleTevStageFast = state.TryCreateSingleTevStageFastEvaluator(memory, out GxVertexState.SingleTevStageFastEvaluator singleTevStageFast);
         if (timings is not null)
         {
             timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
@@ -5147,7 +5147,7 @@ public static class GxFifoSoftwareRenderer
             };
         }
 
-        public bool TryCreateSingleTevStageFastEvaluator(out SingleTevStageFastEvaluator evaluator)
+        public bool TryCreateSingleTevStageFastEvaluator(GameCubeMemory? memory, out SingleTevStageFastEvaluator evaluator)
         {
             evaluator = default;
             if (TevStageCount != 1
@@ -5166,6 +5166,7 @@ public static class GxFifoSoftwareRenderer
             }
 
             TevOrder order = GetTevOrder(0);
+            TryCreateFastTextureSampler(memory, order.TexMap, out FastTextureSampler textureSampler);
             evaluator = new SingleTevStageFastEvaluator(
                 order,
                 hasColorEnv,
@@ -5175,7 +5176,43 @@ public static class GxFifoSoftwareRenderer
                 TevRasterSwapTable(alphaEnv),
                 TevTextureSwapTable(alphaEnv),
                 GetKonstColor(0),
-                GetKonstAlpha(0));
+                GetKonstAlpha(0),
+                textureSampler);
+            return true;
+        }
+
+        private bool TryCreateFastTextureSampler(GameCubeMemory? memory, int textureMap, out FastTextureSampler sampler)
+        {
+            sampler = default;
+            if (memory is null
+                || MemorySnapshots is not null
+                || textureMap is < 0 or >= 8)
+            {
+                return false;
+            }
+
+            GxTextureState texture = _textures[textureMap];
+            int sourceByteLength = TextureSourceByteLength(texture.Width, texture.Height, texture.Format);
+            if (!texture.HasImage0
+                || !texture.HasImage3
+                || texture.Width <= 0
+                || texture.Height <= 0
+                || sourceByteLength <= 0
+                || texture.Format is 8 or 9
+                || !GameCubeAddress.TryTranslateMainRam(texture.SourceAddress, out int sourceOffset)
+                || sourceOffset > GameCubeAddress.MainRamSize - sourceByteLength)
+            {
+                return false;
+            }
+
+            sampler = new FastTextureSampler(
+                sourceOffset,
+                texture.Width,
+                texture.Height,
+                texture.Format,
+                texture.WrapS,
+                texture.WrapT,
+                texture.MagFilter);
             return true;
         }
 
@@ -5188,7 +5225,8 @@ public static class GxFifoSoftwareRenderer
             int RasterSwapTable,
             int TextureSwapTable,
             GxTevColor KonstColor,
-            int KonstAlpha)
+            int KonstAlpha,
+            FastTextureSampler TextureSampler)
         {
             public void Evaluate(
                 GxVertexState state,
@@ -5215,7 +5253,9 @@ public static class GxFifoSoftwareRenderer
 
                 GxTevColor previous = new(rasterR, rasterG, rasterB, rasterA);
                 IndirectOffsetState indirectOffset = default;
-                GxTevColor texture = state.SampleTevTexture(memory, 0, Order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset);
+                GxTevColor texture = TextureSampler.IsValid && Order.TextureEnabled && TryInterpolateTexCoord(a, b, c, Order.TexCoord, aWeight, bWeight, cWeight, out float s, out float t)
+                    ? TextureSampler.Sample(memory!, s, t)
+                    : state.SampleTevTexture(memory, 0, Order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset);
                 GxTevColor raster = SelectTevRasterColor(0, Order, previous, indirectOffset);
                 raster = state.ApplyTevSwap(raster, RasterSwapTable);
                 texture = state.ApplyTevSwap(texture, TextureSwapTable);
@@ -5232,6 +5272,152 @@ public static class GxFifoSoftwareRenderer
                     alpha = EvaluateTevAlphaFast(AlphaEnv, previous, texture, raster, KonstAlpha);
                 }
             }
+        }
+
+        public readonly record struct FastTextureSampler(
+            int SourceOffset,
+            int Width,
+            int Height,
+            int Format,
+            int WrapS,
+            int WrapT,
+            int MagFilter)
+        {
+            public bool IsValid => Width > 0 && Height > 0;
+
+            public GxTevColor Sample(GameCubeMemory memory, float s, float t)
+            {
+                ReadOnlySpan<byte> ram = memory.MainRam.Span;
+                if (MagFilter == 1)
+                {
+                    SampleCoordinate sampleS = TextureCoordinateToLinearSample(s, Width, WrapS);
+                    SampleCoordinate sampleT = TextureCoordinateToLinearSample(t, Height, WrapT);
+                    GxTevColor c00 = SampleTexel(ram, sampleS.Index0, sampleT.Index0);
+                    GxTevColor c10 = SampleTexel(ram, sampleS.Index1, sampleT.Index0);
+                    GxTevColor c01 = SampleTexel(ram, sampleS.Index0, sampleT.Index1);
+                    GxTevColor c11 = SampleTexel(ram, sampleS.Index1, sampleT.Index1);
+                    return new GxTevColor(
+                        BilinearByte(c00.R, c10.R, c01.R, c11.R, sampleS.Fraction, sampleT.Fraction),
+                        BilinearByte(c00.G, c10.G, c01.G, c11.G, sampleS.Fraction, sampleT.Fraction),
+                        BilinearByte(c00.B, c10.B, c01.B, c11.B, sampleS.Fraction, sampleT.Fraction),
+                        BilinearByte(c00.A, c10.A, c01.A, c11.A, sampleS.Fraction, sampleT.Fraction));
+                }
+
+                int x = TextureCoordinateToIndex(s, Width, WrapS);
+                int y = TextureCoordinateToIndex(t, Height, WrapT);
+                return SampleTexel(ram, x, y);
+            }
+
+            private GxTevColor SampleTexel(ReadOnlySpan<byte> ram, int x, int y) =>
+                Format switch
+                {
+                    0 => SampleI4(ram, x, y),
+                    1 => SampleI8(ram, x, y),
+                    2 => SampleIA4(ram, x, y),
+                    3 => SampleIA8(ram, x, y),
+                    4 => SampleRgb565(ram, x, y),
+                    5 => SampleRgb5A3(ram, x, y),
+                    6 => SampleRgba8(ram, x, y),
+                    14 => SampleCmpr(ram, x, y),
+                    _ => GxTevColor.One,
+                };
+
+            private GxTevColor SampleI4(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                int blockColumns = (Width + 7) / 8;
+                int block = (y / 8) * blockColumns + x / 8;
+                int offset = block * 32 + (y & 7) * 4 + (x & 7) / 2;
+                byte packed = ram[SourceOffset + offset];
+                int nibble = (x & 1) == 0 ? packed >> 4 : packed & 0x0F;
+                byte intensity = Expand4(nibble);
+                return new GxTevColor(intensity, intensity, intensity, 255);
+            }
+
+            private GxTevColor SampleI8(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                int blockColumns = (Width + 7) / 8;
+                int block = (y / 4) * blockColumns + x / 8;
+                int offset = block * 32 + (y & 3) * 8 + (x & 7);
+                byte intensity = ram[SourceOffset + offset];
+                return new GxTevColor(intensity, intensity, intensity, 255);
+            }
+
+            private GxTevColor SampleIA4(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                int blockColumns = (Width + 7) / 8;
+                int block = (y / 4) * blockColumns + x / 8;
+                int offset = block * 32 + (y & 3) * 8 + (x & 7);
+                byte packed = ram[SourceOffset + offset];
+                byte intensity = Expand4(packed & 0x0F);
+                return new GxTevColor(intensity, intensity, intensity, Expand4(packed >> 4));
+            }
+
+            private GxTevColor SampleIA8(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                ushort value = ReadTiled16(ram, x, y);
+                byte intensity = (byte)value;
+                return new GxTevColor(intensity, intensity, intensity, (byte)(value >> 8));
+            }
+
+            private GxTevColor SampleRgb565(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                DecodeRgb565(ReadTiled16(ram, x, y), out byte r, out byte g, out byte b);
+                return new GxTevColor(r, g, b, 255);
+            }
+
+            private GxTevColor SampleRgb5A3(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                DecodeRgb5A3(ReadTiled16(ram, x, y), out byte r, out byte g, out byte b, out byte a);
+                return new GxTevColor(r, g, b, a);
+            }
+
+            private GxTevColor SampleRgba8(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                int blockColumns = (Width + 3) / 4;
+                int block = (y / 4) * blockColumns + x / 4;
+                int texel = (y & 3) * 4 + (x & 3);
+                int offset = SourceOffset + block * 64 + texel * 2;
+                return new GxTevColor(ram[offset + 1], ram[offset + 32], ram[offset + 33], ram[offset]);
+            }
+
+            private GxTevColor SampleCmpr(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                int blockColumns = (Width + 7) / 8;
+                int block = (y / 8) * blockColumns + x / 8;
+                int subBlock = ((y >> 2) & 1) * 2 + ((x >> 2) & 1);
+                int offset = SourceOffset + block * 32 + subBlock * 8;
+                ushort color0 = ReadUInt16(ram, offset);
+                ushort color1 = ReadUInt16(ram, offset + 2);
+                uint selectors = ReadUInt32(ram, offset + 4);
+                int selectorShift = 30 - 2 * (((y & 3) * 4) + (x & 3));
+                int selector = (int)((selectors >> selectorShift) & 3);
+
+                DecodeRgb565(color0, out byte r0, out byte g0, out byte b0);
+                DecodeRgb565(color1, out byte r1, out byte g1, out byte b1);
+                return selector switch
+                {
+                    0 => new GxTevColor(r0, g0, b0, 255),
+                    1 => new GxTevColor(r1, g1, b1, 255),
+                    2 when color0 > color1 => new GxTevColor((byte)((2 * r0 + r1) / 3), (byte)((2 * g0 + g1) / 3), (byte)((2 * b0 + b1) / 3), 255),
+                    3 when color0 > color1 => new GxTevColor((byte)((r0 + 2 * r1) / 3), (byte)((g0 + 2 * g1) / 3), (byte)((b0 + 2 * b1) / 3), 255),
+                    2 => new GxTevColor((byte)((r0 + r1) / 2), (byte)((g0 + g1) / 2), (byte)((b0 + b1) / 2), 255),
+                    _ => GxTevColor.Zero,
+                };
+            }
+
+            private ushort ReadTiled16(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                int blockColumns = (Width + 3) / 4;
+                int block = (y / 4) * blockColumns + x / 4;
+                int offset = SourceOffset + block * 32 + ((y & 3) * 4 + (x & 3)) * 2;
+                return ReadUInt16(ram, offset);
+            }
+
+            private static ushort ReadUInt16(ReadOnlySpan<byte> ram, int offset) =>
+                (ushort)((ram[offset] << 8) | ram[offset + 1]);
+
+            private static uint ReadUInt32(ReadOnlySpan<byte> ram, int offset) =>
+                ((uint)ram[offset] << 24) | ((uint)ram[offset + 1] << 16) | ((uint)ram[offset + 2] << 8) | ram[offset + 3];
         }
 
         public bool TryEvaluateTevStages(
