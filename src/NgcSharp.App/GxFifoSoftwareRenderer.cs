@@ -5698,8 +5698,8 @@ public static class GxFifoSoftwareRenderer
                 colorEnv,
                 hasAlphaEnv,
                 alphaEnv,
-                TevRasterSwapTable(alphaEnv),
-                TevTextureSwapTable(alphaEnv),
+                GetTevSwapTable(TevRasterSwapTable(alphaEnv)),
+                GetTevSwapTable(TevTextureSwapTable(alphaEnv)),
                 GetKonstColor(0),
                 GetKonstAlpha(0),
                 textureSampler,
@@ -5812,8 +5812,8 @@ public static class GxFifoSoftwareRenderer
             uint ColorEnv,
             bool HasAlphaEnv,
             uint AlphaEnv,
-            int RasterSwapTable,
-            int TextureSwapTable,
+            TevSwapTable RasterSwap,
+            TevSwapTable TextureSwap,
             GxTevColor KonstColor,
             int KonstAlpha,
             FastTextureSampler TextureSampler,
@@ -5856,8 +5856,8 @@ public static class GxFifoSoftwareRenderer
                         ? GxTevColor.One
                     : state.SampleTevTexture(memory, 0, Order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset);
                 GxTevColor raster = SelectTevRasterColor(0, Order, previous, indirectOffset);
-                raster = state.ApplyTevSwap(raster, RasterSwapTable);
-                texture = state.ApplyTevSwap(texture, TextureSwapTable);
+                raster = ApplyTevSwap(raster, RasterSwap);
+                texture = ApplyTevSwap(texture, TextureSwap);
 
                 if (HasColorEnv)
                 {
@@ -6829,13 +6829,15 @@ public static class GxFifoSoftwareRenderer
 
         private GxTevColor ApplyTevSwap(GxTevColor input, int table)
         {
-            TevSwapTable swap = GetTevSwapTable(table);
-            return new GxTevColor(
+            return ApplyTevSwap(input, GetTevSwapTable(table));
+        }
+
+        private static GxTevColor ApplyTevSwap(GxTevColor input, TevSwapTable swap) =>
+            new(
                 SwapComponent(input, swap.R),
                 SwapComponent(input, swap.G),
                 SwapComponent(input, swap.B),
                 SwapComponent(input, swap.A));
-        }
 
         private TevSwapTable GetTevSwapTable(int table)
         {
@@ -7116,7 +7118,7 @@ public static class GxFifoSoftwareRenderer
 
         public readonly record struct TevOrder(int TexMap, int TexCoord, bool TextureEnabled, int ColorChannel);
 
-        private readonly record struct TevSwapTable(int R, int G, int B, int A);
+        public readonly record struct TevSwapTable(int R, int G, int B, int A);
 
         private readonly record struct IndirectOffsetState(float S, float T, int BumpAlphaBits);
 
