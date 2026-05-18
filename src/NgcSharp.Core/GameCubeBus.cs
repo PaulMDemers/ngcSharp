@@ -3109,8 +3109,32 @@ public sealed class GameCubeBus : IMemoryBus
         byte[] sram = new byte[64];
         sram[0x12] = 0;
         sram[0x13] = 0x2C;
+        WriteExternalInterfaceSramMemoryCardFlashId(sram.AsSpan(0x14, 12));
+        WriteExternalInterfaceSramMemoryCardFlashId(sram.AsSpan(0x20, 12));
+        sram[0x3A] = CalculateExternalInterfaceSramMemoryCardFlashIdChecksum(sram.AsSpan(0x14, 12));
+        sram[0x3B] = CalculateExternalInterfaceSramMemoryCardFlashIdChecksum(sram.AsSpan(0x20, 12));
         RefreshExternalInterfaceSramChecksum(sram);
         return sram;
+    }
+
+    private static void WriteExternalInterfaceSramMemoryCardFlashId(Span<byte> destination)
+    {
+        Span<byte> flashId = stackalloc byte[12]
+        {
+            0x00, 0x17, 0x5E, 0xA1, 0x23, 0x42, 0x7C, 0x09, 0x10, 0x33, 0x56, 0xC7,
+        };
+        flashId.CopyTo(destination);
+    }
+
+    private static byte CalculateExternalInterfaceSramMemoryCardFlashIdChecksum(ReadOnlySpan<byte> flashId)
+    {
+        byte checksum = 0;
+        foreach (byte value in flashId)
+        {
+            checksum = unchecked((byte)(checksum + value));
+        }
+
+        return unchecked((byte)(checksum ^ 0xFF));
     }
 
     private static void RefreshExternalInterfaceSramChecksum(Span<byte> sram)
@@ -3147,8 +3171,9 @@ public sealed class GameCubeBus : IMemoryBus
     private const byte ExternalInterfaceMemoryCardReadyStatus = 0x01;
     private const byte ExternalInterfaceMemoryCardSleepStatus = 0x20;
     private const byte ExternalInterfaceMemoryCardUnlockedStatus = 0x40;
+    private const byte ExternalInterfaceMemoryCardBusyStatus = 0x80;
     private const byte ExternalInterfaceMemoryCardDefaultStatus =
-        ExternalInterfaceMemoryCardReadyStatus | ExternalInterfaceMemoryCardUnlockedStatus;
+        ExternalInterfaceMemoryCardBusyStatus | ExternalInterfaceMemoryCardReadyStatus | ExternalInterfaceMemoryCardUnlockedStatus;
 
     private uint NormalizeSerialInterfaceWrite(uint alignedAddress, uint value)
     {

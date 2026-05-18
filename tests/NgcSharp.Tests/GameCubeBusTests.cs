@@ -108,6 +108,10 @@ public sealed class GameCubeBusTests
         ushort inverseChecksum = bus.Memory.Read16(0x8000_1002);
         Assert.Equal((ushort)~checksum, inverseChecksum);
         Assert.Equal(0x2C, bus.Memory.Read8(0x8000_1013));
+        Assert.Equal(0x00, bus.Memory.Read8(0x8000_1014));
+        Assert.Equal(0x17, bus.Memory.Read8(0x8000_1015));
+        Assert.Equal(0x9F, bus.Memory.Read8(0x8000_103A));
+        Assert.Equal(0x9F, bus.Memory.Read8(0x8000_103B));
     }
 
     [Fact]
@@ -166,7 +170,7 @@ public sealed class GameCubeBusTests
         bus.Write32(0xCC00_680C, 0x05);
         bus.Write32(0xCC00_680C, 0x01);
 
-        Assert.Equal(0x4100_0000u, bus.Read32(0xCC00_6810));
+        Assert.Equal(0xC100_0000u, bus.Read32(0xCC00_6810));
     }
 
     [Fact]
@@ -181,7 +185,7 @@ public sealed class GameCubeBusTests
         bus.Write32(0xCC00_6810, 0x8300_0000);
         bus.Write32(0xCC00_680C, 0x05);
         bus.Write32(0xCC00_680C, 0x01);
-        Assert.Equal(0x4100_0000u, bus.Read32(0xCC00_6810));
+        Assert.Equal(0xC100_0000u, bus.Read32(0xCC00_6810));
 
         bus.Write32(0xCC00_6810, 0x8800_0000);
         bus.Write32(0xCC00_680C, 0x05);
@@ -195,7 +199,7 @@ public sealed class GameCubeBusTests
         bus.Write32(0xCC00_6810, 0x8300_0000);
         bus.Write32(0xCC00_680C, 0x05);
         bus.Write32(0xCC00_680C, 0x01);
-        Assert.Equal(0x4100_0000u, bus.Read32(0xCC00_6810));
+        Assert.Equal(0xC100_0000u, bus.Read32(0xCC00_6810));
     }
 
     [Fact]
@@ -255,7 +259,7 @@ public sealed class GameCubeBusTests
         bus.Write32(0xCC00_680C, 0x15);
         bus.Write32(0xCC00_680C, 0x01);
 
-        Assert.Equal(0x4100_0000u, bus.Read32(0xCC00_6810));
+        Assert.Equal(0xC100_0000u, bus.Read32(0xCC00_6810));
     }
 
     [Fact]
