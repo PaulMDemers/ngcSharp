@@ -3,6 +3,7 @@ namespace NgcSharp.App;
 public enum GxFrameDumpSource
 {
     Efb,
+    Auto,
     LastDisplayCopy,
     LastNonBlackDisplayCopy,
     LargestDisplayCopy,
@@ -34,6 +35,7 @@ public sealed record RunDolOptions(
     bool GxDisableAutoTextureSnapshots = false,
     string? ExiTracePath = null,
     string? SiTracePath = null,
+    string? MmioTracePath = null,
     bool MemoryCardSlotAInserted = false,
     bool MemoryCardSlotBInserted = false,
     uint? FrameAddress = null,
@@ -85,7 +87,9 @@ public sealed record RunDolOptions(
     bool GxFrameIgnoreEfbCopyClear = false,
     int GxDrawSkipDraws = 0,
     int GxDrawMaxDraws = 10,
-    bool TracePrsDecompress = false)
+    bool TracePrsDecompress = false,
+    string? SchedulerTracePath = null,
+    string? RunSummaryPath = null)
 {
     public const int DefaultGxFrameMaxDraws = 500;
     public const int DefaultGxFrameMaxRasterPixels = 8_000_000;
@@ -120,6 +124,9 @@ public sealed record RunDolOptions(
         bool gxDisableAutoTextureSnapshots = false;
         string? exiTracePath = null;
         string? siTracePath = null;
+        string? mmioTracePath = null;
+        string? schedulerTracePath = null;
+        string? runSummaryPath = null;
         bool memoryCardSlotAInserted = false;
         bool memoryCardSlotBInserted = false;
         uint? frameAddress = null;
@@ -272,7 +279,7 @@ public sealed record RunDolOptions(
                 case "--gx-frame-source":
                     if (index + 1 >= args.Length || !TryParseGxFrameSource(args[++index], out gxFrameSource))
                     {
-                        error.WriteLine("--gx-frame-source must be one of: efb, last-display-copy, last-nonblack-display-copy, largest-display-copy, last-nonblack-efb, vi-framebuffer, last-nonblack-vi-framebuffer, copy-index, copy-source-index.");
+                        error.WriteLine("--gx-frame-source must be one of: efb, auto, last-display-copy, last-nonblack-display-copy, largest-display-copy, last-nonblack-efb, vi-framebuffer, last-nonblack-vi-framebuffer, copy-index, copy-source-index.");
                         return false;
                     }
 
@@ -390,6 +397,33 @@ public sealed record RunDolOptions(
                     }
 
                     siTracePath = args[++index];
+                    break;
+                case "--trace-mmio":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-mmio requires a path.");
+                        return false;
+                    }
+
+                    mmioTracePath = args[++index];
+                    break;
+                case "--trace-scheduler":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-scheduler requires a path.");
+                        return false;
+                    }
+
+                    schedulerTracePath = args[++index];
+                    break;
+                case "--run-summary":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--run-summary requires a path.");
+                        return false;
+                    }
+
+                    runSummaryPath = args[++index];
                     break;
                 case "--memory-card-a":
                     memoryCardSlotAInserted = true;
@@ -762,7 +796,7 @@ public sealed record RunDolOptions(
             return false;
         }
 
-        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, pcProfileTop, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress);
+        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, pcProfileTop, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath);
         return true;
     }
 
@@ -772,6 +806,11 @@ public sealed record RunDolOptions(
         {
             case "efb":
                 source = GxFrameDumpSource.Efb;
+                return true;
+            case "auto":
+            case "best":
+            case "best-frame":
+                source = GxFrameDumpSource.Auto;
                 return true;
             case "last-display-copy":
             case "display-copy":

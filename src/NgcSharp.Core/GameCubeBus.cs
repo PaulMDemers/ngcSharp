@@ -54,6 +54,10 @@ public sealed class GameCubeBus : IMemoryBus
     public const uint DiscInterfaceStatusMask = 0x0000_007F;
     public const uint DiscInterfaceInterruptStatusMask = DiscInterfaceDeviceErrorInterruptStatus | DiscInterfaceTransferComplete | DiscInterfaceBreakInterruptStatus;
     public const uint DiscInterfaceInterruptMaskBits = DiscInterfaceDeviceErrorInterruptMask | DiscInterfaceInterruptMask | DiscInterfaceBreakInterruptMask;
+    public const uint DiscInterfaceCoverOpened = 0x0000_0001;
+    public const uint DiscInterfaceCoverInterruptMask = 0x0000_0002;
+    public const uint DiscInterfaceCoverInterruptStatus = 0x0000_0004;
+    public const uint DiscInterfaceConfiguration = 0x0000_0001;
     public const uint AudioInterfacePlayStatus = 0x0000_0001;
     public const uint AudioInterfaceInterruptMask = 0x0000_0004;
     public const uint AudioInterfaceInterruptStatus = 0x0000_0008;
@@ -123,6 +127,7 @@ public sealed class GameCubeBus : IMemoryBus
     private readonly HashSet<uint> _completedDspTaskCallbacks = [];
     private readonly Dictionary<uint, uint> _trivialDspTaskCallbackTargets = [];
     private readonly Dictionary<uint, uint> _decrementWordDspTaskCallbackTargets = [];
+    private readonly Dictionary<uint, uint> _byteSetDspTaskCallbackTargets = [];
     private readonly Dictionary<uint, GlobalWordSetDspTaskCallback> _globalWordSetDspTaskCallbacks = [];
     private readonly Dictionary<uint, SlotClearDspTaskCallback> _slotClearDspTaskCallbacks = [];
     private readonly byte[] _serialInterfaceIoBuffer = new byte[0x80];
@@ -196,6 +201,14 @@ public sealed class GameCubeBus : IMemoryBus
     public uint SmallDataBaseRegister { get; set; }
 
     public ushort SerialInterfaceControllerButtons { get; set; }
+
+    public bool SerialInterfaceControllerPort0Connected { get; set; } = true;
+
+    public bool SerialInterfaceControllerPort1Connected { get; set; }
+
+    public bool SerialInterfaceControllerPort2Connected { get; set; }
+
+    public bool SerialInterfaceControllerPort3Connected { get; set; }
 
     public uint ExternalInterfaceRtcCounter { get; set; } = CreateDefaultExternalInterfaceRtcCounter();
 
@@ -833,6 +846,11 @@ public sealed class GameCubeBus : IMemoryBus
             TryExecuteDecrementWordDspTaskCallback(targetAddress);
         }
 
+        foreach ((uint callbackAddress, uint targetAddress) in _byteSetDspTaskCallbackTargets)
+        {
+            TryExecuteByteSetDspTaskCallback(callbackAddress, targetAddress);
+        }
+
         foreach (GlobalWordSetDspTaskCallback callback in _globalWordSetDspTaskCallbacks.Values)
         {
             TryExecuteGlobalWordSetDspTaskCallback(callback);
@@ -843,6 +861,7 @@ public sealed class GameCubeBus : IMemoryBus
     {
         RecordTrivialDspTaskCallback(callbackAddress);
         RecordDecrementWordDspTaskCallback(callbackAddress);
+        RecordByteSetDspTaskCallback(callbackAddress);
         RecordGlobalWordSetDspTaskCallback(callbackAddress);
         RecordSlotClearDspTaskCallback(callbackAddress);
     }
@@ -886,6 +905,19 @@ public sealed class GameCubeBus : IMemoryBus
         _globalWordSetDspTaskCallbacks[callbackAddress] = callback;
     }
 
+    private void RecordByteSetDspTaskCallback(uint callbackAddress)
+    {
+        if (SmallDataBaseRegister == 0
+            || callbackAddress == 0
+            || _byteSetDspTaskCallbackTargets.ContainsKey(callbackAddress)
+            || !TryGetByteSetDspTaskCallbackTarget(callbackAddress, out uint targetAddress))
+        {
+            return;
+        }
+
+        _byteSetDspTaskCallbackTargets[callbackAddress] = targetAddress;
+    }
+
     private void RecordSlotClearDspTaskCallback(uint callbackAddress)
     {
         if (SmallDataBaseRegister == 0
@@ -927,6 +959,20 @@ public sealed class GameCubeBus : IMemoryBus
         if (value != 0)
         {
             Memory.Write32(targetAddress, value - 1);
+        }
+    }
+
+    private void TryExecuteByteSetDspTaskCallback(uint callbackAddress, uint targetAddress)
+    {
+        if (callbackAddress == 0 || _completedDspTaskCallbacks.Contains(callbackAddress))
+        {
+            return;
+        }
+
+        if (GameCubeAddress.TryTranslateMainRam(targetAddress, out _))
+        {
+            Memory.Write8(targetAddress, 1);
+            _completedDspTaskCallbacks.Add(callbackAddress);
         }
     }
 
@@ -1151,6 +1197,41 @@ public sealed class GameCubeBus : IMemoryBus
 
         targetAddress = unchecked(SmallDataBaseRegister + (uint)(short)(load & 0xFFFF));
         return GameCubeAddress.TryTranslateMainRam(targetAddress, out _);
+    }
+
+    private bool TryGetByteSetDspTaskCallbackTarget(uint callbackAddress, out uint targetAddress)
+    {
+        targetAddress = 0;
+        if (!GameCubeAddress.TryTranslateMainRam(callbackAddress, out _))
+        {
+            return false;
+        }
+
+        for (uint offset = 0; offset <= 0x100; offset += sizeof(uint))
+        {
+            uint branch = Memory.Read32(callbackAddress + offset);
+            if (!TryGetRelativeBranchTarget(branch, callbackAddress + offset, out uint setterAddress)
+                || !GameCubeAddress.TryTranslateMainRam(setterAddress, out _))
+            {
+                continue;
+            }
+
+            uint loadOne = Memory.Read32(setterAddress);
+            uint storeByte = Memory.Read32(setterAddress + 4);
+            uint ret = Memory.Read32(setterAddress + 8);
+            if (!IsAddi(loadOne, rD: 0, rA: 0)
+                || (short)(loadOne & 0xFFFF) != 1
+                || !IsStb(storeByte, rS: 0, rA: 13)
+                || ret != 0x4E80_0020)
+            {
+                continue;
+            }
+
+            targetAddress = unchecked(SmallDataBaseRegister + (uint)(short)(storeByte & 0xFFFF));
+            return GameCubeAddress.TryTranslateMainRam(targetAddress, out _);
+        }
+
+        return false;
     }
 
     private bool TryGetGlobalWordSetDspTaskCallback(uint callbackAddress, out GlobalWordSetDspTaskCallback callback)
@@ -1459,6 +1540,7 @@ public sealed class GameCubeBus : IMemoryBus
     private bool IsRecordedDspTaskCallback(uint callbackAddress) =>
         _trivialDspTaskCallbackTargets.ContainsKey(callbackAddress)
         || _decrementWordDspTaskCallbackTargets.ContainsKey(callbackAddress)
+        || _byteSetDspTaskCallbackTargets.ContainsKey(callbackAddress)
         || _globalWordSetDspTaskCallbacks.ContainsKey(callbackAddress)
         || _slotClearDspTaskCallbacks.ContainsKey(callbackAddress);
 
@@ -1491,6 +1573,11 @@ public sealed class GameCubeBus : IMemoryBus
         if (_decrementWordDspTaskCallbackTargets.TryGetValue(request.CallbackAddress, out uint targetAddress))
         {
             TryExecuteDecrementWordDspTaskCallback(targetAddress);
+        }
+
+        if (_byteSetDspTaskCallbackTargets.TryGetValue(request.CallbackAddress, out uint byteSetTargetAddress))
+        {
+            TryExecuteByteSetDspTaskCallback(request.CallbackAddress, byteSetTargetAddress);
         }
 
         if (_globalWordSetDspTaskCallbacks.TryGetValue(request.CallbackAddress, out GlobalWordSetDspTaskCallback globalWordSetCallback))
@@ -1884,6 +1971,16 @@ public sealed class GameCubeBus : IMemoryBus
             return nextValue;
         }
 
+        if (alignedAddress == 0xCC00_6004)
+        {
+            uint existing = DiscInterfaceCoverRegister();
+            uint interruptStatus = existing & DiscInterfaceCoverInterruptStatus;
+            interruptStatus &= ~(value & DiscInterfaceCoverInterruptStatus);
+            uint nextValue = interruptStatus | (value & DiscInterfaceCoverInterruptMask);
+            SetDiscProcessorInterrupt(DiscProcessorInterruptPending(ReadMmioValue(0xCC00_6000)) || DiscCoverProcessorInterruptPending(nextValue));
+            return nextValue;
+        }
+
         if (alignedAddress == 0xCC00_601C)
         {
             if ((value & 1) != 0)
@@ -1893,6 +1990,11 @@ public sealed class GameCubeBus : IMemoryBus
             }
 
             return value & ~1u;
+        }
+
+        if (alignedAddress == 0xCC00_6024)
+        {
+            return DiscInterfaceConfiguration;
         }
 
         return value;
@@ -1905,6 +2007,11 @@ public sealed class GameCubeBus : IMemoryBus
             return value & DiscInterfaceStatusMask;
         }
 
+        if (alignedAddress == 0xCC00_6004)
+        {
+            return DiscInterfaceCoverRegister();
+        }
+
         if (alignedAddress == 0xCC00_601C)
         {
             return _pendingDiscCommand is null ? value & ~1u : value | 1u;
@@ -1912,10 +2019,16 @@ public sealed class GameCubeBus : IMemoryBus
 
         if (alignedAddress == 0xCC00_6024)
         {
-            return 0;
+            return DiscInterfaceConfiguration;
         }
 
         return value;
+    }
+
+    private uint DiscInterfaceCoverRegister()
+    {
+        _mmioValues.TryGetValue(0xCC00_6004, out uint value);
+        return value & (DiscInterfaceCoverInterruptMask | DiscInterfaceCoverInterruptStatus);
     }
 
     private void ScheduleDiscInterfaceCommand()
@@ -2217,6 +2330,9 @@ public sealed class GameCubeBus : IMemoryBus
         ((status & DiscInterfaceDeviceErrorInterruptStatus) != 0 && (status & DiscInterfaceDeviceErrorInterruptMask) != 0) ||
         ((status & DiscInterfaceTransferComplete) != 0 && (status & DiscInterfaceInterruptMask) != 0) ||
         ((status & DiscInterfaceBreakInterruptStatus) != 0 && (status & DiscInterfaceBreakInterruptMask) != 0);
+
+    private static bool DiscCoverProcessorInterruptPending(uint status) =>
+        (status & DiscInterfaceCoverInterruptStatus) != 0 && (status & DiscInterfaceCoverInterruptMask) != 0;
 
     private uint ReadMmioValue(uint address)
     {
@@ -2564,23 +2680,41 @@ public sealed class GameCubeBus : IMemoryBus
             state.MemoryCardAddress = 0;
             state.MemoryCardAddressBytesReceived = 0;
             state.MemoryCardDataBytesTransferred = 0;
-            state.MemoryCardStatus = ExternalInterfaceMemoryCardReadyStatus;
             state.MemoryCardCommand = value switch
             {
                 0x00 => ExternalInterfaceMemoryCardCommand.GetDeviceId,
                 0x52 => ExternalInterfaceMemoryCardCommand.ReadBlock,
+                0x53 => ExternalInterfaceMemoryCardCommand.ArrayToBuffer,
+                0x81 => ExternalInterfaceMemoryCardCommand.SetInterrupt,
+                0x82 => ExternalInterfaceMemoryCardCommand.WriteBuffer,
                 0x83 => ExternalInterfaceMemoryCardCommand.GetStatus,
                 0x85 => ExternalInterfaceMemoryCardCommand.GetId,
+                0x86 => ExternalInterfaceMemoryCardCommand.ReadErrorBuffer,
+                0x87 => ExternalInterfaceMemoryCardCommand.WakeUp,
+                0x88 => ExternalInterfaceMemoryCardCommand.Sleep,
                 0x89 => ExternalInterfaceMemoryCardCommand.ClearStatus,
                 0xF1 => ExternalInterfaceMemoryCardCommand.EraseSector,
                 0xF2 => ExternalInterfaceMemoryCardCommand.WriteBlock,
+                0xF3 => ExternalInterfaceMemoryCardCommand.ExtraByteProgram,
                 0xF4 => ExternalInterfaceMemoryCardCommand.EraseCard,
                 _ => ExternalInterfaceMemoryCardCommand.None,
             };
 
             if (state.MemoryCardCommand == ExternalInterfaceMemoryCardCommand.ClearStatus)
             {
-                state.MemoryCardStatus = ExternalInterfaceMemoryCardReadyStatus;
+                state.MemoryCardStatus = ExternalInterfaceMemoryCardDefaultStatus;
+                state.MemoryCardCommandStarted = false;
+            }
+
+            if (state.MemoryCardCommand == ExternalInterfaceMemoryCardCommand.WakeUp)
+            {
+                state.MemoryCardStatus = ExternalInterfaceMemoryCardDefaultStatus;
+                state.MemoryCardCommandStarted = false;
+            }
+
+            if (state.MemoryCardCommand == ExternalInterfaceMemoryCardCommand.Sleep)
+            {
+                state.MemoryCardStatus = ExternalInterfaceMemoryCardSleepStatus;
                 state.MemoryCardCommandStarted = false;
             }
 
@@ -2595,6 +2729,25 @@ public sealed class GameCubeBus : IMemoryBus
 
         if (state.MemoryCardCommand == ExternalInterfaceMemoryCardCommand.GetStatus && state.MemoryCardCommandByteCount >= 2)
         {
+            return;
+        }
+
+        if (state.MemoryCardCommand == ExternalInterfaceMemoryCardCommand.SetInterrupt)
+        {
+            if (state.MemoryCardCommandByteCount >= 2)
+            {
+                state.MemoryCardInterruptEnabled = value != 0;
+                state.MemoryCardCommandStarted = false;
+            }
+
+            return;
+        }
+
+        if (state.MemoryCardCommand is ExternalInterfaceMemoryCardCommand.ArrayToBuffer
+            or ExternalInterfaceMemoryCardCommand.WriteBuffer
+            or ExternalInterfaceMemoryCardCommand.ExtraByteProgram)
+        {
+            state.MemoryCardCommandStarted = false;
             return;
         }
 
@@ -2681,6 +2834,7 @@ public sealed class GameCubeBus : IMemoryBus
             ExternalInterfaceMemoryCardCommand.GetDeviceId => state.MemoryCardDataBytesTransferred >= sizeof(uint),
             ExternalInterfaceMemoryCardCommand.GetId => state.MemoryCardDataBytesTransferred >= sizeof(ushort),
             ExternalInterfaceMemoryCardCommand.GetStatus => state.MemoryCardDataBytesTransferred >= 1,
+            ExternalInterfaceMemoryCardCommand.ReadErrorBuffer => state.MemoryCardDataBytesTransferred >= 1,
             ExternalInterfaceMemoryCardCommand.ReadBlock => state.MemoryCardDataBytesTransferred >= ExternalInterfaceMemoryCardWriteBlockSize,
             ExternalInterfaceMemoryCardCommand.WriteBlock => state.MemoryCardDataBytesTransferred >= ExternalInterfaceMemoryCardWriteBlockSize,
             ExternalInterfaceMemoryCardCommand.None => true,
@@ -2706,6 +2860,7 @@ public sealed class GameCubeBus : IMemoryBus
             ExternalInterfaceMemoryCardCommand.GetDeviceId => ReadExternalInterfaceMemoryCardDeviceIdByte(state),
             ExternalInterfaceMemoryCardCommand.GetId => ReadExternalInterfaceMemoryCardIdByte(state),
             ExternalInterfaceMemoryCardCommand.GetStatus => ReadExternalInterfaceMemoryCardStatusByte(state),
+            ExternalInterfaceMemoryCardCommand.ReadErrorBuffer => ReadExternalInterfaceMemoryCardErrorByte(state),
             ExternalInterfaceMemoryCardCommand.ReadBlock => ReadExternalInterfaceMemoryCardDataByte(channel, state),
             _ => 0xFF,
         };
@@ -2718,6 +2873,13 @@ public sealed class GameCubeBus : IMemoryBus
         byte value = state.MemoryCardDataBytesTransferred < id.Length
             ? id[state.MemoryCardDataBytesTransferred]
             : (byte)0xFF;
+        state.MemoryCardDataBytesTransferred++;
+        return value;
+    }
+
+    private static byte ReadExternalInterfaceMemoryCardErrorByte(ExternalInterfaceChannelState state)
+    {
+        byte value = state.MemoryCardDataBytesTransferred == 0 ? (byte)0 : (byte)0xFF;
         state.MemoryCardDataBytesTransferred++;
         return value;
     }
@@ -3022,8 +3184,32 @@ public sealed class GameCubeBus : IMemoryBus
         byte[] sram = new byte[64];
         sram[0x12] = 0;
         sram[0x13] = 0x2C;
+        WriteExternalInterfaceSramMemoryCardFlashId(sram.AsSpan(0x14, 12));
+        WriteExternalInterfaceSramMemoryCardFlashId(sram.AsSpan(0x20, 12));
+        sram[0x3A] = CalculateExternalInterfaceSramMemoryCardFlashIdChecksum(sram.AsSpan(0x14, 12));
+        sram[0x3B] = CalculateExternalInterfaceSramMemoryCardFlashIdChecksum(sram.AsSpan(0x20, 12));
         RefreshExternalInterfaceSramChecksum(sram);
         return sram;
+    }
+
+    private static void WriteExternalInterfaceSramMemoryCardFlashId(Span<byte> destination)
+    {
+        Span<byte> flashId = stackalloc byte[12]
+        {
+            0x00, 0x17, 0x5E, 0xA1, 0x23, 0x42, 0x7C, 0x09, 0x10, 0x33, 0x56, 0xC7,
+        };
+        flashId.CopyTo(destination);
+    }
+
+    private static byte CalculateExternalInterfaceSramMemoryCardFlashIdChecksum(ReadOnlySpan<byte> flashId)
+    {
+        byte checksum = 0;
+        foreach (byte value in flashId)
+        {
+            checksum = unchecked((byte)(checksum + value));
+        }
+
+        return unchecked((byte)(checksum ^ 0xFF));
     }
 
     private static void RefreshExternalInterfaceSramChecksum(Span<byte> sram)
@@ -3058,6 +3244,11 @@ public sealed class GameCubeBus : IMemoryBus
     private const uint ExternalInterfaceRtcCounterOffset = 0x2000_0000;
     private const uint ExternalInterfaceSramBaseOffset = 0x2000_0100;
     private const byte ExternalInterfaceMemoryCardReadyStatus = 0x01;
+    private const byte ExternalInterfaceMemoryCardSleepStatus = 0x20;
+    private const byte ExternalInterfaceMemoryCardUnlockedStatus = 0x40;
+    private const byte ExternalInterfaceMemoryCardBusyStatus = 0x80;
+    private const byte ExternalInterfaceMemoryCardDefaultStatus =
+        ExternalInterfaceMemoryCardBusyStatus | ExternalInterfaceMemoryCardReadyStatus | ExternalInterfaceMemoryCardUnlockedStatus;
 
     private uint NormalizeSerialInterfaceWrite(uint alignedAddress, uint value)
     {
@@ -3136,6 +3327,7 @@ public sealed class GameCubeBus : IMemoryBus
         }
 
         _mmioValues[SerialInterfaceStatusAddress] = nextValue;
+        RefreshSerialInterfaceErrorLatches();
         UpdateSerialInterfaceReadStatusInterrupt();
         return nextValue;
     }
@@ -3186,6 +3378,13 @@ public sealed class GameCubeBus : IMemoryBus
     {
         int transferChannel = SerialInterfaceCommunicationTransferChannel(control);
         _serialInterfaceCommunicationTransferChannel = transferChannel;
+        if (!IsSerialInterfaceControllerConnected(transferChannel))
+        {
+            SetSerialInterfaceNoResponse(transferChannel);
+            SetSerialInterfaceNoControllerInput(transferChannel);
+            return;
+        }
+
         _mmioValues.TryGetValue(SerialInterfaceOutputBufferAddress(transferChannel), out uint outputBuffer);
         byte command = (control & SerialInterfaceTransferStart) != 0 && _serialInterfaceIoBuffer[0] == SerialInterfaceControllerCommandId
             ? SerialInterfaceOutputBufferCommand(outputBuffer)
@@ -3208,6 +3407,13 @@ public sealed class GameCubeBus : IMemoryBus
         {
             if ((enabled & (1u << channel)) == 0)
             {
+                continue;
+            }
+
+            if (!IsSerialInterfaceControllerConnected(channel))
+            {
+                SetSerialInterfaceNoControllerInput(channel);
+                status &= ~SerialInterfaceReadStatusBit(channel);
                 continue;
             }
 
@@ -3250,6 +3456,29 @@ public sealed class GameCubeBus : IMemoryBus
 
         _mmioValues[SerialInterfaceInputBufferHighAddress(channel)] = high;
         _mmioValues[SerialInterfaceInputBufferLowAddress(channel)] = SerialInterfaceNeutralControllerLow;
+    }
+
+    private void SetSerialInterfaceNoResponse(int channel)
+    {
+        if (channel is < 0 or > 3)
+        {
+            return;
+        }
+
+        _mmioValues[SerialInterfaceStatusAddress] =
+            ReadMmioValue(SerialInterfaceStatusAddress) | SerialInterfaceNoResponseBit(channel);
+    }
+
+    private void SetSerialInterfaceNoControllerInput(int channel)
+    {
+        if (channel is < 0 or > 3)
+        {
+            return;
+        }
+
+        _mmioValues[SerialInterfaceInputBufferHighAddress(channel)] =
+            SerialInterfaceInputErrorStatus | SerialInterfaceInputErrorLatch;
+        _mmioValues[SerialInterfaceInputBufferLowAddress(channel)] = 0;
     }
 
     private uint SerialInterfaceControllerHigh() =>
@@ -3303,6 +3532,24 @@ public sealed class GameCubeBus : IMemoryBus
         UpdateSerialInterfaceReadStatusInterrupt();
     }
 
+    private void RefreshSerialInterfaceErrorLatches()
+    {
+        for (int channel = 0; channel < 4; channel++)
+        {
+            uint inputHigh = ReadMmioValue(SerialInterfaceInputBufferHighAddress(channel));
+            if ((ReadMmioValue(SerialInterfaceStatusAddress) & SerialInterfaceChannelErrorMask(channel)) != 0)
+            {
+                inputHigh |= SerialInterfaceInputErrorStatus | SerialInterfaceInputErrorLatch;
+            }
+            else
+            {
+                inputHigh &= ~(SerialInterfaceInputErrorStatus | SerialInterfaceInputErrorLatch);
+            }
+
+            _mmioValues[SerialInterfaceInputBufferHighAddress(channel)] = inputHigh;
+        }
+    }
+
     private void UpdateSerialInterfaceProcessorInterrupt(uint control)
     {
         bool pending =
@@ -3324,7 +3571,7 @@ public sealed class GameCubeBus : IMemoryBus
         foreach (uint address in VideoInterruptRegisters())
         {
             _mmioValues.TryGetValue(address, out uint value);
-            if ((value & VideoInterruptEnable) != 0 && (value & VideoInterruptLineMask) == line)
+            if ((value & VideoInterruptLineMask) == line)
             {
                 RaiseVideoInterrupt(address);
             }
@@ -3335,19 +3582,25 @@ public sealed class GameCubeBus : IMemoryBus
     {
         _mmioValues.TryGetValue(address, out uint value);
         _mmioValues[address] = value | VideoInterruptStatus;
-        RaiseProcessorInterrupt(ProcessorInterfaceVideoInterrupt);
+        UpdateVideoProcessorInterrupt();
     }
 
     private void ClearVideoInterruptIfAcknowledged(uint acknowledgedAddress, uint acknowledgedValue)
     {
+        UpdateVideoProcessorInterrupt(acknowledgedAddress, acknowledgedValue);
+    }
+
+    private void UpdateVideoProcessorInterrupt(uint? overrideAddress = null, uint overrideValue = 0)
+    {
         foreach (uint address in VideoInterruptRegisters())
         {
-            uint value = address == acknowledgedAddress
-                ? acknowledgedValue
+            uint value = address == overrideAddress
+                ? overrideValue
                 : _mmioValues.TryGetValue(address, out uint storedValue) ? storedValue : 0;
 
-            if ((value & VideoInterruptStatus) != 0)
+            if ((value & (VideoInterruptStatus | VideoInterruptEnable)) == (VideoInterruptStatus | VideoInterruptEnable))
             {
+                RaiseProcessorInterrupt(ProcessorInterfaceVideoInterrupt);
                 return;
             }
         }
@@ -3426,6 +3679,10 @@ public sealed class GameCubeBus : IMemoryBus
 
     private static uint SerialInterfaceWriteStatusBit(int channel) => 0x1000_0000u >> (channel * 8);
 
+    private static uint SerialInterfaceNoResponseBit(int channel) => 0x0800_0000u >> (channel * 8);
+
+    private static uint SerialInterfaceChannelErrorMask(int channel) => 0x0F00_0000u >> (channel * 8);
+
     private static byte SerialInterfaceOutputBufferCommand(uint outputBuffer) => (byte)((outputBuffer >> 16) & 0xFF);
 
     private static bool ShouldStartSerialInterfaceCommunicationTransfer(uint control)
@@ -3443,6 +3700,16 @@ public sealed class GameCubeBus : IMemoryBus
 
         return (int)((control >> 25) & 0x3);
     }
+
+    private bool IsSerialInterfaceControllerConnected(int channel) =>
+        channel switch
+        {
+            0 => SerialInterfaceControllerPort0Connected,
+            1 => SerialInterfaceControllerPort1Connected,
+            2 => SerialInterfaceControllerPort2Connected,
+            3 => SerialInterfaceControllerPort3Connected,
+            _ => false,
+        };
 
     private static bool IsAramDmaRegister(uint alignedAddress)
     {
@@ -3479,6 +3746,24 @@ public sealed class GameCubeBus : IMemoryBus
     private static bool IsStw(uint instruction, int rS, int rA) =>
         (instruction >> 26) == 36 && ((instruction >> 21) & 0x1F) == rS && ((instruction >> 16) & 0x1F) == rA;
 
+    private static bool TryGetRelativeBranchTarget(uint instruction, uint pc, out uint target)
+    {
+        target = 0;
+        if ((instruction >> 26) != 18 || (instruction & 0x2) != 0)
+        {
+            return false;
+        }
+
+        int displacement = (int)(instruction & 0x03FF_FFFCu);
+        if ((displacement & 0x0200_0000) != 0)
+        {
+            displacement |= unchecked((int)0xFC00_0000);
+        }
+
+        target = unchecked(pc + (uint)displacement);
+        return true;
+    }
+
     private static uint SerialInterfaceOutputBufferAddress(int channel) => 0xCC00_6400u + (uint)channel * 0xC;
 
     private static uint SerialInterfaceInputBufferHighAddress(int channel) => SerialInterfaceOutputBufferAddress(channel) + 4;
@@ -3500,6 +3785,8 @@ public sealed class GameCubeBus : IMemoryBus
     private const uint SerialInterfaceWriteStatusMask = 0x1010_1010;
     private const uint SerialInterfaceStatusClearMask = 0x2F2F_2F2F;
     private const uint SerialInterfacePollMask = 0x03FF_FFF0;
+    private const uint SerialInterfaceInputErrorStatus = 0x8000_0000;
+    private const uint SerialInterfaceInputErrorLatch = 0x4000_0000;
     private const ulong SerialInterfaceAutoPollCycles = 4096;
     private const uint SerialInterfaceCommunicationControlWriteMask =
         SerialInterfaceTransferCompleteMask |
@@ -3605,9 +3892,16 @@ public sealed class GameCubeBus : IMemoryBus
         GetId,
         GetStatus,
         ClearStatus,
+        SetInterrupt,
+        ReadErrorBuffer,
+        WakeUp,
+        Sleep,
+        ArrayToBuffer,
+        WriteBuffer,
         ReadBlock,
         WriteBlock,
         EraseSector,
+        ExtraByteProgram,
         EraseCard,
     }
 
@@ -3624,7 +3918,8 @@ public sealed class GameCubeBus : IMemoryBus
         public uint MemoryCardAddress;
         public uint MemoryCardOffset;
         public int MemoryCardDataBytesTransferred;
-        public byte MemoryCardStatus = ExternalInterfaceMemoryCardReadyStatus;
+        public byte MemoryCardStatus = ExternalInterfaceMemoryCardDefaultStatus;
+        public bool MemoryCardInterruptEnabled;
     }
 
     private enum GxFifoPayloadKind

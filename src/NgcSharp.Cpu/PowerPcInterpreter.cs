@@ -1474,7 +1474,7 @@ public sealed class PowerPcInterpreter
                 SetFloatingScalar(state, fD, Math.Abs(state.Fpr[fB]));
                 return;
             case 583:
-                MoveFromFloatingPointStatusAndControlRegister(state, instruction);
+                SetFloatingScalarBits(state, fD, state.Fpscr);
                 return;
             case 711:
                 MoveToFloatingPointStatusAndControlRegisterFields(state, instruction);
@@ -1710,6 +1710,13 @@ public sealed class PowerPcInterpreter
     {
         state.Fpr[register] = value;
         state.FprPair1[register] = value;
+    }
+
+    private static void SetFloatingScalarBits(PowerPcState state, int register, ulong value)
+    {
+        double raw = BitConverter.Int64BitsToDouble(unchecked((long)value));
+        state.Fpr[register] = raw;
+        state.FprPair1[register] = raw;
     }
 
     private static void DataCacheBlockSetToZero(PowerPcState state, IMemoryBus memory, uint instruction)

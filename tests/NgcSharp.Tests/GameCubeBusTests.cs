@@ -108,6 +108,10 @@ public sealed class GameCubeBusTests
         ushort inverseChecksum = bus.Memory.Read16(0x8000_1002);
         Assert.Equal((ushort)~checksum, inverseChecksum);
         Assert.Equal(0x2C, bus.Memory.Read8(0x8000_1013));
+        Assert.Equal(0x00, bus.Memory.Read8(0x8000_1014));
+        Assert.Equal(0x17, bus.Memory.Read8(0x8000_1015));
+        Assert.Equal(0x9F, bus.Memory.Read8(0x8000_103A));
+        Assert.Equal(0x9F, bus.Memory.Read8(0x8000_103B));
     }
 
     [Fact]
@@ -166,7 +170,36 @@ public sealed class GameCubeBusTests
         bus.Write32(0xCC00_680C, 0x05);
         bus.Write32(0xCC00_680C, 0x01);
 
-        Assert.Equal(0x0100_0000u, bus.Read32(0xCC00_6810));
+        Assert.Equal(0xC100_0000u, bus.Read32(0xCC00_6810));
+    }
+
+    [Fact]
+    public void ExiMemoryCardStatusReportsUnlockedAndSupportsSleepWake()
+    {
+        GameCubeBus bus = new()
+        {
+            ExternalInterfaceMemoryCardSlotAInserted = true,
+        };
+
+        bus.Write32(0xCC00_6800, 0x80);
+        bus.Write32(0xCC00_6810, 0x8300_0000);
+        bus.Write32(0xCC00_680C, 0x05);
+        bus.Write32(0xCC00_680C, 0x01);
+        Assert.Equal(0xC100_0000u, bus.Read32(0xCC00_6810));
+
+        bus.Write32(0xCC00_6810, 0x8800_0000);
+        bus.Write32(0xCC00_680C, 0x05);
+        bus.Write32(0xCC00_6810, 0x8300_0000);
+        bus.Write32(0xCC00_680C, 0x05);
+        bus.Write32(0xCC00_680C, 0x01);
+        Assert.Equal(0x2000_0000u, bus.Read32(0xCC00_6810));
+
+        bus.Write32(0xCC00_6810, 0x8700_0000);
+        bus.Write32(0xCC00_680C, 0x05);
+        bus.Write32(0xCC00_6810, 0x8300_0000);
+        bus.Write32(0xCC00_680C, 0x05);
+        bus.Write32(0xCC00_680C, 0x01);
+        Assert.Equal(0xC100_0000u, bus.Read32(0xCC00_6810));
     }
 
     [Fact]
@@ -226,7 +259,7 @@ public sealed class GameCubeBusTests
         bus.Write32(0xCC00_680C, 0x15);
         bus.Write32(0xCC00_680C, 0x01);
 
-        Assert.Equal(0x0100_0000u, bus.Read32(0xCC00_6810));
+        Assert.Equal(0xC100_0000u, bus.Read32(0xCC00_6810));
     }
 
     [Fact]
@@ -525,6 +558,30 @@ public sealed class GameCubeBusTests
         bus.Write32(0xCC00_5028, 0);
 
         Assert.Equal(0u, bus.Memory.Read32(counterAddress));
+    }
+
+    [Fact]
+    public void AramDmaCompletesByteSetDspTaskCallbacks()
+    {
+        GameCubeBus bus = new()
+        {
+            SmallDataBaseRegister = 0x8000_3000,
+        };
+
+        uint taskAddress = 0x8000_1000;
+        uint callbackAddress = 0x8000_2000;
+        uint setterAddress = 0x8000_2800;
+        uint flagAddress = 0x8000_2FFC;
+
+        bus.Memory.Write32(callbackAddress + 0x20, 0x4800_07E1);
+        bus.Memory.Write32(setterAddress, 0x3800_0001);
+        bus.Memory.Write32(setterAddress + 4, 0x980D_FFFC);
+        bus.Memory.Write32(setterAddress + 8, 0x4E80_0020);
+        bus.Write32(taskAddress + 0x28, callbackAddress);
+
+        bus.Write32(0xCC00_5028, 0);
+
+        Assert.Equal(1, bus.Memory.Read8(flagAddress));
     }
 
     [Fact]
@@ -1018,6 +1075,38 @@ public sealed class GameCubeBusTests
     }
 
     [Fact]
+    public void DiscInterfaceCoverRegisterReportsClosedCoverAndPreservesMask()
+    {
+        GameCubeBus bus = new();
+
+        Assert.Equal(0u, bus.Read32(0xCC00_6004) & GameCubeBus.DiscInterfaceCoverOpened);
+
+        bus.Write32(
+            0xCC00_6004,
+            GameCubeBus.DiscInterfaceCoverOpened |
+            GameCubeBus.DiscInterfaceCoverInterruptMask |
+            GameCubeBus.DiscInterfaceCoverInterruptStatus);
+
+        Assert.Equal(GameCubeBus.DiscInterfaceCoverInterruptMask, bus.Read32(0xCC00_6004));
+
+        bus.Write32(0xCC00_6004, 0);
+
+        Assert.Equal(0u, bus.Read32(0xCC00_6004));
+    }
+
+    [Fact]
+    public void DiscInterfaceConfigurationRegisterIsReadOnly()
+    {
+        GameCubeBus bus = new();
+
+        Assert.Equal(GameCubeBus.DiscInterfaceConfiguration, bus.Read32(0xCC00_6024));
+
+        bus.Write32(0xCC00_6024, 0xFFFF_FFFF);
+
+        Assert.Equal(GameCubeBus.DiscInterfaceConfiguration, bus.Read32(0xCC00_6024));
+    }
+
+    [Fact]
     public void DiscInterfaceInquiryWritesBasicDriveDescriptor()
     {
         GameCubeBus bus = new();
@@ -1183,6 +1272,42 @@ public sealed class GameCubeBusTests
     }
 
     [Fact]
+    public void VideoDisplayInterruptStatusLatchesWhenInterruptIsDisabled()
+    {
+        GameCubeBus bus = new();
+
+        bus.Write32(0xCC00_3004, GameCubeBus.ProcessorInterfaceVideoInterrupt);
+        bus.Write16(0xCC00_2038, 42);
+
+        bus.Advance((ulong)GameCubeBus.VideoCyclesPerScanline * 42);
+
+        Assert.Equal(GameCubeBus.VideoInterruptStatus, bus.Read16(0xCC00_2038) & GameCubeBus.VideoInterruptStatus);
+        Assert.False(bus.HasPendingExternalInterrupt);
+        Assert.Equal(0u, bus.Read32(0xCC00_3000) & GameCubeBus.ProcessorInterfaceVideoInterrupt);
+    }
+
+    [Fact]
+    public void VideoProcessorInterruptClearsWhenOnlyDisabledStatusRemains()
+    {
+        GameCubeBus bus = new();
+
+        bus.Write32(0xCC00_3004, GameCubeBus.ProcessorInterfaceVideoInterrupt);
+        bus.Write16(0xCC00_2030, (ushort)(GameCubeBus.VideoInterruptEnable | 42));
+        bus.Write16(0xCC00_2038, 42);
+
+        bus.Advance((ulong)GameCubeBus.VideoCyclesPerScanline * 42);
+
+        Assert.True(bus.HasPendingExternalInterrupt);
+        Assert.Equal(GameCubeBus.VideoInterruptStatus, bus.Read16(0xCC00_2038) & GameCubeBus.VideoInterruptStatus);
+
+        bus.Write16(0xCC00_2030, (ushort)(GameCubeBus.VideoInterruptEnable | 42));
+
+        Assert.Equal(GameCubeBus.VideoInterruptStatus, bus.Read16(0xCC00_2038) & GameCubeBus.VideoInterruptStatus);
+        Assert.False(bus.HasPendingExternalInterrupt);
+        Assert.Equal(0u, bus.Read32(0xCC00_3000) & GameCubeBus.ProcessorInterfaceVideoInterrupt);
+    }
+
+    [Fact]
     public void ProcessorInterfaceReportsResetSwitchReleasedWithoutPendingInterrupt()
     {
         GameCubeBus bus = new();
@@ -1302,6 +1427,61 @@ public sealed class GameCubeBusTests
 
         Assert.Equal(0x2000_0000u, bus.Read32(0xCC00_6438) & 0x2000_0000u);
         Assert.Equal(0x0100_8080u, bus.Read32(0xCC00_6404));
+    }
+
+    [Fact]
+    public void SerialInterfacePollRegisterSkipsDisconnectedPorts()
+    {
+        GameCubeBus bus = new()
+        {
+            SerialInterfaceControllerButtons = GameCubeBus.SerialInterfaceControllerButtonA,
+        };
+
+        bus.Write32(0xCC00_6400, 0x0040_0300);
+        bus.Write32(0xCC00_640C, 0x0040_0300);
+        bus.Write32(0xCC00_6418, 0x0040_0300);
+        bus.Write32(0xCC00_6424, 0x0040_0300);
+        bus.Write32(0xCC00_6430, 0x00F7_0100 | 0xF0);
+
+        uint status = bus.Read32(0xCC00_6438);
+        Assert.Equal(0x2000_0000u, status & 0x2000_0000u);
+        Assert.Equal(0u, status & 0x0020_2020u);
+        Assert.Equal(0u, status & 0x0008_0808u);
+        Assert.Equal(0x0100_8080u, bus.Read32(0xCC00_6404));
+        Assert.Equal(0xC000_0000u, bus.Read32(0xCC00_6410) & 0xC000_0000u);
+    }
+
+    [Fact]
+    public void SerialInterfaceCommunicationTransferReportsNoResponseForDisconnectedPort()
+    {
+        GameCubeBus bus = new();
+
+        bus.Write32(0xCC00_6434, 0xC001_0303);
+
+        Assert.Equal(0x0008_0000u, bus.Read32(0xCC00_6438) & 0x0008_0000u);
+        Assert.Equal(0xC000_0000u, bus.Read32(0xCC00_6410) & 0xC000_0000u);
+
+        bus.Write32(0xCC00_6438, 0x0008_0000);
+
+        Assert.Equal(0u, bus.Read32(0xCC00_6438) & 0x0008_0000u);
+        Assert.Equal(0u, bus.Read32(0xCC00_6410) & 0xC000_0000u);
+    }
+
+    [Fact]
+    public void SerialInterfaceCanConnectAdditionalControllerPorts()
+    {
+        GameCubeBus bus = new()
+        {
+            SerialInterfaceControllerPort1Connected = true,
+            SerialInterfaceControllerButtons = GameCubeBus.SerialInterfaceControllerButtonA,
+        };
+
+        bus.Write32(0xCC00_640C, 0x0040_0300);
+        bus.Write32(0xCC00_6430, 0x00F7_0100 | 0x20);
+
+        Assert.Equal(0x0020_0000u, bus.Read32(0xCC00_6438) & 0x0020_0000u);
+        Assert.Equal(0x0100_8080u, bus.Read32(0xCC00_6410));
+        Assert.Equal(GameCubeBus.SerialInterfaceNeutralControllerLow, bus.Read32(0xCC00_6414));
     }
 
     [Fact]

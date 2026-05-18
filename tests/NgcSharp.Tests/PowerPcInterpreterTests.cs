@@ -1544,6 +1544,26 @@ public sealed class PowerPcInterpreterTests
     }
 
     [Fact]
+    public void MoveFromFpscrCopiesRawBitsToFloatingRegister()
+    {
+        GameCubeMemory memory = new();
+        uint pc = 0x8000_3100;
+        WriteInstruction(memory, pc, AForm(opcode: 63, fD: 7, fA: 0, fB: 0, fC: 0, xo: 583));
+
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Fpscr = 0xF00D_CAFE,
+        };
+
+        new PowerPcInterpreter().Step(state, memory);
+
+        Assert.Equal(0x0000_0000_F00D_CAFEul, unchecked((ulong)BitConverter.DoubleToInt64Bits(state.Fpr[7])));
+        Assert.Equal(0x0000_0000_F00D_CAFEul, unchecked((ulong)BitConverter.DoubleToInt64Bits(state.FprPair1[7])));
+        Assert.Equal("mffs f7", PowerPcDisassembler.Disassemble(AForm(opcode: 63, fD: 7, fA: 0, fB: 0, fC: 0, xo: 583)));
+    }
+
+    [Fact]
     public void MoveToFpscrBitSetsAndClearsBits()
     {
         GameCubeMemory memory = new();

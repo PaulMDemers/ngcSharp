@@ -4,6 +4,7 @@ The local retail benchmark images are user-provided RVZ files in the workspace r
 
 - `Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz`
 - `Pikmin (USA).rvz`
+- `Mario Kart - Double Dash!! (USA) (Debug).rvz`
 
 Use short bounded diagnostics first, then raise the instruction budget only when the previous artifact explains the next blocker.
 
@@ -147,6 +148,16 @@ After Sonic copy-loop fast-forwards and EFB-clear diagnostics:
 
 - Added smarter display-copy frame sources: `last-nonblack-display-copy` and `largest-display-copy`. The renderer snapshots selected display-copy pixels at copy time, so later black copies to the same XFB address no longer overwrite the diagnostic selection. At 50M Sonic, `artifacts/sonic-gx-50m-last-nonblack-display-copy/gx-frame.png` recovers the late nonblack XFB with 52,981 nonblack pixels, and `artifacts/sonic-gx-50m-largest-display-copy/gx-frame.png` picks a slightly fuller variant with 53,655 nonblack pixels. Both are still the lower title/menu strip rather than a complete scene, which means the final black frame was a selection problem, but the emulator has still not reached/presented a full post-prompt scene by 50M.
 - Added `--dump-pointer-table <addr> <count> <stride> <ptr-offset> <target-words>` for compact resource/list diagnostics. Sonic's `0x80116B9C` tail is a 0x500-entry, 0x18-byte resource table lookup loaded from `r13 - 29196/-29192`; at the first late stop around 45.5M it searched for key `0x0089549A` before that object was registered, while the 50M table contains 41 active resources including `0x0089549A..0x008954A9`. A 50M-era stop now searches for `0x007A1201`, and the PC profile is dominated by the variable bitstream/decompression routine at `0x800D2684..0x800D2824`, so the next CPU-side target is understanding resource decode/progression rather than treating the table scan as an idle wait.
+
+Workflow update:
+
+- Added `scripts/run-retail-benchmarks.ps1` and `scripts/run-sonic-check.ps1` for repeatable Sonic/Pikmin compatibility probes. The harness applies a wall-clock watchdog, emits progress updates, captures auto-selected GX frames, EXI traces, GX copy CSVs, per-target `run.json` ledgers, and suite-level `summary.csv` / `summary.json`.
+- Added `scripts/summarize-exi-trace.ps1` and `scripts/summarize-gx-copies.ps1` so old artifacts can be converted into compact milestone JSON without rerunning retail images. The EXI summary tracks memory-card command milestones such as `0x52` read-array sector reads; the GX summary tracks display/texture copy counts and nonblack display-copy milestones.
+- Tuned the default `sonic-20m` benchmark to use a lighter GX frame budget and skip copy CSV generation. The full copy-heavy path remains available through `-DeepGx`, but the routine four-target suite now stays useful as a bounded regression loop.
+- Added `--run-summary <json-path>` and wired it into the retail benchmark harness. Each target now writes `emulator-summary.json`, and `summary.csv` includes executed instructions, stop reason, and final PC without requiring console-log parsing.
+- Added a narrow Pikmin heap-wait fast-forward for the `0x800466C0..0x800466C8` poll loop. It advances emulated hardware time to video interrupt opportunities instead of modifying the waited-on game flag directly. The 20M Pikmin benchmark now moves from the heap wait at `0x800466C8` to runtime code around `0x80045B90`, with GX FIFO capture increasing from roughly 230K to 549K bytes.
+- Added optional `mariokart-debug-5m` and `mariokart-debug-20m` benchmark targets. The debug build first exposed missing CPU `mffs`; after implementing it, the next blocker was its JAS/DSP task-ready callback at `0x800A4880`, which now completes through a recognized byte-set callback shape instead of spinning at `0x800A49A0`/`0x800A5040`. The current wall is the debug image's MetroTRK/NUB path, so the Mario Kart targets skip GX frame/copy dumps until execution reaches game-rendering code.
+- Mario Kart's debug image is useful as a CPU/DSP/debug-runtime probe, but not yet as a rendering benchmark: MetroTRK/NUB startup dominates before GX FIFO traffic appears. Added exact fast-forwards for the SDK `strlen` leaf, the varargs register-save stub, and trivial `return 0` leaves; a 20M probe now reports roughly 2.9M string-length and 5.8M small-leaf instructions skipped while still ending inside debug monitor startup with zero GX FIFO bytes.
 
 Next useful targets:
 

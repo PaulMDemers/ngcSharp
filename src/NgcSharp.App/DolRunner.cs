@@ -1,3 +1,4 @@
+using System.Text.Json;
 using NgcSharp.Core;
 using NgcSharp.Cpu;
 
@@ -8,6 +9,7 @@ public sealed class DolRunner
     private const uint MaxFastForwardMemmoveBytes = 16 * 1024 * 1024;
     private const uint MaxFastForwardStringCopyBytes = 1 * 1024 * 1024;
     private const uint MaxFastForwardStringCompareBytes = 1 * 1024 * 1024;
+    private const uint MaxFastForwardStringLengthBytes = 1 * 1024 * 1024;
     private const uint MaxFastForwardPrsOutputBytes = 16 * 1024 * 1024;
     private const uint MaxFastForwardTrigTableEntries = 0x0001_0000;
     private const uint SonicTrigTableInstructionsPerEntry = 180;
@@ -122,6 +124,7 @@ public sealed class DolRunner
         ulong textureSampleFastForwardInstructions = 0;
         ulong stringCopyFastForwardInstructions = 0;
         ulong stringCompareFastForwardInstructions = 0;
+        ulong stringLengthFastForwardInstructions = 0;
         ulong prsDecompressFastForwardInstructions = 0;
         ulong trigTableFastForwardInstructions = 0;
         ulong bitUnpackFastForwardInstructions = 0;
@@ -228,6 +231,18 @@ public sealed class DolRunner
             };
         }
 
+        using TextWriter? mmioTrace = OpenTraceFile(options.MmioTracePath);
+        if (mmioTrace is not null)
+        {
+            mmioTrace.WriteLine("instruction,pc,opcode,disassembly,device,kind,width,address,value");
+            Action<MmioAccess>? chainedMmioObserver = bus.MmioAccessObserver;
+            bus.MmioAccessObserver = access =>
+            {
+                chainedMmioObserver?.Invoke(access);
+                mmioTrace.WriteLine($"{executed + 1},0x{currentPc:X8},0x{currentInstruction:X8},\"{PowerPcDisassembler.Disassemble(currentInstruction).Replace("\"", "\"\"", StringComparison.Ordinal)}\",{access.DeviceName},{access.Kind},{access.Width},0x{access.Address:X8},0x{access.Value:X8}");
+            };
+        }
+
         if (HasWriteWatch(options))
         {
             int emittedWriteWatchChanges = 0;
@@ -298,6 +313,165 @@ public sealed class DolRunner
             };
         }
 
+        using TextWriter? schedulerTrace = OpenTraceFile(options.SchedulerTracePath);
+        if (schedulerTrace is not null)
+        {
+            SchedulerTraceRecorder schedulerTraceRecorder = new(schedulerTrace, bus);
+            Action<uint, int, uint>? chainedStoreObserver = bus.Memory.MainRamStoreObserver;
+            Action<uint, int>? chainedBulkWriteObserver = bus.Memory.MainRamBulkWriteObserver;
+            bus.Memory.MainRamStoreObserver = (address, width, value) =>
+            {
+                chainedStoreObserver?.Invoke(address, width, value);
+                schedulerTraceRecorder.RecordStore(executed + 1, currentPc, currentInstruction, state, address, width, value);
+            };
+            bus.Memory.MainRamBulkWriteObserver = (address, length) =>
+            {
+                chainedBulkWriteObserver?.Invoke(address, length);
+                schedulerTraceRecorder.RecordBulkWrite(executed + 1, currentPc, currentInstruction, address, length);
+            };
+        }
+
+        string GetStopReason(string? overrideReason = null)
+        {
+            if (overrideReason is not null)
+            {
+                return overrideReason;
+            }
+
+            if (state.Halted)
+            {
+                return "halted";
+            }
+
+            if (stoppedOnPc)
+            {
+                return "pc";
+            }
+
+            if (stoppedOnHotPc is not null)
+            {
+                return "hot-pc";
+            }
+
+            if (stoppedAfterWriteWatch)
+            {
+                return "write-watch";
+            }
+
+            if (stoppedOnGxFifoOffset)
+            {
+                return "gx-fifo-offset";
+            }
+
+            return executed >= options.MaxInstructions ? "max-instructions" : "completed";
+        }
+
+        void WriteRunSummary(int exitCode, string? stopReasonOverride = null, string? diagnosticFailure = null, string? exceptionType = null, uint? exceptionAddress = null, uint? exceptionInstruction = null)
+        {
+            if (options.RunSummaryPath is null)
+            {
+                return;
+            }
+
+            try
+            {
+                string fullPath = Path.GetFullPath(options.RunSummaryPath);
+                string? directory = Path.GetDirectoryName(fullPath);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                uint summaryInstruction = exceptionInstruction ?? currentInstruction;
+                object summary = new
+                {
+                    schema = "ngcsharp.run-summary.v1",
+                    path = Path.GetFullPath(options.Path),
+                    maxInstructions = options.MaxInstructions,
+                    executedInstructions = executed,
+                    exitCode,
+                    stopReason = GetStopReason(stopReasonOverride),
+                    diagnosticFailure,
+                    exception = exceptionType is null ? null : new
+                    {
+                        type = exceptionType,
+                        address = exceptionAddress is uint address ? $"0x{address:X8}" : null,
+                        instruction = exceptionInstruction is uint instruction ? $"0x{instruction:X8}" : null,
+                        disassembly = exceptionInstruction is uint exceptionOpcode ? PowerPcDisassembler.Disassemble(exceptionOpcode) : null,
+                    },
+                    pc = $"0x{state.Pc:X8}",
+                    lastPc = $"0x{currentPc:X8}",
+                    lastInstruction = $"0x{summaryInstruction:X8}",
+                    lastDisassembly = summaryInstruction == 0 ? null : PowerPcDisassembler.Disassemble(summaryInstruction),
+                    registers = new
+                    {
+                        lr = $"0x{state.Lr:X8}",
+                        ctr = $"0x{state.Ctr:X8}",
+                        cr = $"0x{state.Cr:X8}",
+                        r0 = $"0x{state.Gpr[0]:X8}",
+                        r1 = $"0x{state.Gpr[1]:X8}",
+                        r2 = $"0x{state.Gpr[2]:X8}",
+                        r3 = $"0x{state.Gpr[3]:X8}",
+                        r4 = $"0x{state.Gpr[4]:X8}",
+                        r5 = $"0x{state.Gpr[5]:X8}",
+                        r6 = $"0x{state.Gpr[6]:X8}",
+                        r10 = $"0x{state.Gpr[10]:X8}",
+                        r13 = $"0x{state.Gpr[13]:X8}",
+                        r31 = $"0x{state.Gpr[31]:X8}",
+                    },
+                    stopped = new
+                    {
+                        onPc = stoppedOnPc,
+                        onHotPc = stoppedOnHotPc is uint hotPc ? $"0x{hotPc:X8}" : null,
+                        onHotPcCount = stoppedOnHotPcCount,
+                        afterWriteWatch = stoppedAfterWriteWatch,
+                        afterWriteWatchCount = stoppedAfterWriteWatchCount,
+                        onGxFifoOffset = stoppedOnGxFifoOffset,
+                        gxFifoOffset = options.StopOnGxFifoOffset,
+                    },
+                    gx = new
+                    {
+                        fifoBytesWritten = gxFifoBytesWritten,
+                        memoryCheckpointsRequested = gxMemoryCheckpoints.Length,
+                        memoryCheckpointsWritten = gxMemoryCheckpointsWritten,
+                        autoTextureSnapshots = gxTextureSnapshotCollector?.Snapshots.Count ?? 0,
+                        autoTextureSnapshotDrawsSeen = gxTextureSnapshotCollector?.DrawsSeen ?? 0,
+                    },
+                    fastForward = new
+                    {
+                        idleCycles = idleFastForwardCycles,
+                        ctrDelayInstructions = ctrDelayFastForwardInstructions,
+                        bulkMemoryInstructions = bulkFastForwardInstructions,
+                        cacheInstructions = cacheFastForwardInstructions,
+                        leafHelperInstructions = leafFastForwardInstructions,
+                        memoryCopyInstructions = memoryCopyFastForwardInstructions,
+                        textureSampleInstructions = textureSampleFastForwardInstructions,
+                        stringCopyInstructions = stringCopyFastForwardInstructions,
+                        stringCompareInstructions = stringCompareFastForwardInstructions,
+                        stringLengthInstructions = stringLengthFastForwardInstructions,
+                        prsDecompressInstructions = prsDecompressFastForwardInstructions,
+                        trigTableInstructions = trigTableFastForwardInstructions,
+                        bitUnpackInstructions = bitUnpackFastForwardInstructions,
+                        tickWaitInstructions = tickWaitFastForwardInstructions,
+                        callbackWaitInstructions = callbackWaitFastForwardInstructions,
+                        dotProductInstructions = dotProductFastForwardInstructions,
+                        resourceLookupInstructions = resourceLookupFastForwardInstructions,
+                        gxAttributeFlushInstructions = gxAttributeFlushFastForwardInstructions,
+                        bitPlaneCropInstructions = bitPlaneCropFastForwardInstructions,
+                        byteTableLookupInstructions = byteTableLookupFastForwardInstructions,
+                        gxVertexEmitInstructions = gxVertexEmitFastForwardInstructions,
+                        normalizedStringScanInstructions = normalizedStringScanFastForwardInstructions,
+                    },
+                };
+
+                File.WriteAllText(fullPath, JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+            {
+                _error.WriteLine($"Run summary write failed: {ex.Message}");
+            }
+        }
+
         stepObserver?.Invoke(new DolRunStep(0, state.Pc, 0, state, bus, IsInitial: true));
 
         try
@@ -366,7 +540,13 @@ public sealed class DolRunner
                     }
                 }
 
-                if (options.FastForwardIdle && TryFastForwardKnownIdleLoop(state, bus, out ulong skippedIdleCycles))
+                if (options.FastForwardIdle && TryFastForwardPikminHeapWaitLoop(state, bus, out ulong skippedIdleCycles))
+                {
+                    idleFastForwardCycles += skippedIdleCycles;
+                    continue;
+                }
+
+                if (options.FastForwardIdle && TryFastForwardKnownIdleLoop(state, bus, out skippedIdleCycles))
                 {
                     idleFastForwardCycles += skippedIdleCycles;
                     continue;
@@ -477,6 +657,13 @@ public sealed class DolRunner
                     continue;
                 }
 
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardLongDivisionLeaf(state, bus, out skippedInstructions))
+                {
+                    leafFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardMemmoveRoutine(state, bus, out skippedInstructions))
                 {
                     memoryCopyFastForwardInstructions += (uint)skippedInstructions;
@@ -508,6 +695,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSimpleStringCompareRoutine(state, bus, out skippedInstructions))
                 {
                     stringCompareFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardStringLengthRoutine(state, bus, out skippedInstructions))
+                {
+                    stringLengthFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -545,6 +739,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicPrsDecompressCore(state, bus, out skippedInstructions, tracePrsDecompress))
                 {
                     prsDecompressFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardMetroTrkEventLoop(state, bus, out skippedInstructions))
+                {
+                    leafFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -767,6 +968,7 @@ public sealed class DolRunner
 
             WriteRequestedMemoryDumps(options, bus, _error);
 
+            WriteRunSummary(2, stopReasonOverride: "unsupported-instruction", exceptionType: nameof(UnsupportedInstructionException), exceptionAddress: ex.Address, exceptionInstruction: ex.Instruction);
             return 2;
         }
         catch (AddressTranslationException ex)
@@ -804,6 +1006,7 @@ public sealed class DolRunner
 
             WriteRequestedMemoryDumps(options, bus, _error);
 
+            WriteRunSummary(4, stopReasonOverride: "address-translation", exceptionType: nameof(AddressTranslationException), exceptionAddress: ex.Address);
             return 4;
         }
 
@@ -891,6 +1094,11 @@ public sealed class DolRunner
                 _output.WriteLine($"Fast-forwarded {stringCompareFastForwardInstructions} string compare instruction(s).");
             }
 
+            if (stringLengthFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {stringLengthFastForwardInstructions} string length instruction(s).");
+            }
+
             if (prsDecompressFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {prsDecompressFastForwardInstructions} PRS decompression instruction(s).");
@@ -973,6 +1181,7 @@ public sealed class DolRunner
             if (!GxFifoSoftwareRenderer.TryRender(bus.MmioAccesses, bus.Memory, options.GxFrameDumpPath, gxWidth, gxHeight, gxFrameMaxDraws, options.GxFrameSkipDraws, stopAfterMaxDraws: true, maxRasterizedPixels: gxFrameMaxRasterPixels, ignoreEfbCopyClear: options.GxFrameIgnoreEfbCopyClear, source: options.GxFrameSource, displayCopyIndex: options.GxFrameCopyIndex, out GxFifoSoftwareRenderResult? gxFrame, out string? gxFrameError, memorySnapshots: gxMemorySnapshots))
             {
                 _error.WriteLine($"GX frame dump failed: {gxFrameError}");
+                WriteRunSummary(3, diagnosticFailure: $"gx-frame-dump: {gxFrameError}");
                 return 3;
             }
 
@@ -990,6 +1199,7 @@ public sealed class DolRunner
 
         if (options.GxFrameSweep is not null && WriteGxFrameSweep(bus, options, gxMemorySnapshots) != 0)
         {
+            WriteRunSummary(3, diagnosticFailure: "gx-frame-sweep");
             return 3;
         }
 
@@ -998,6 +1208,7 @@ public sealed class DolRunner
             if (!FramebufferDumper.TryDump(bus, options, out FramebufferDumpResult? frameDump, out string? frameDumpError))
             {
                 _error.WriteLine($"Frame dump failed: {frameDumpError}");
+                WriteRunSummary(3, diagnosticFailure: $"frame-dump: {frameDumpError}");
                 return 3;
             }
 
@@ -1012,6 +1223,7 @@ public sealed class DolRunner
             if (!GxFifoSoftwareRenderer.TryWriteDrawDiagnostics(bus.MmioAccesses, bus.Memory, options.GxDrawDumpPath, options.GxDrawSkipDraws, options.GxDrawMaxDraws, out GxFifoDrawDiagnosticResult? gxDraws, out string? gxDrawError))
             {
                 _error.WriteLine($"GX draw dump failed: {gxDrawError}");
+                WriteRunSummary(3, diagnosticFailure: $"gx-draw-dump: {gxDrawError}");
                 return 3;
             }
 
@@ -1030,6 +1242,7 @@ public sealed class DolRunner
             if (!GxFifoSoftwareRenderer.TryWriteCopyDiagnostics(bus.MmioAccesses, bus.Memory, options.GxCopyDumpPath, gxWidth, gxHeight, gxFrameMaxRasterPixels, options.GxFrameIgnoreEfbCopyClear, out GxFifoCopyDiagnosticResult? gxCopies, out string? gxCopyError))
             {
                 _error.WriteLine($"GX copy dump failed: {gxCopyError}");
+                WriteRunSummary(3, diagnosticFailure: $"gx-copy-dump: {gxCopyError}");
                 return 3;
             }
 
@@ -1049,6 +1262,7 @@ public sealed class DolRunner
             if (!GxFifoSoftwareRenderer.TryWriteDrawCoverageDiagnostics(bus.MmioAccesses, bus.Memory, options.GxCoverageDumpPath, gxWidth, gxHeight, gxFrameMaxRasterPixels, options.GxFrameIgnoreEfbCopyClear, options.GxFrameSkipDraws, gxFrameMaxDraws, out GxFifoCoverageDiagnosticResult? gxCoverage, out string? gxCoverageError))
             {
                 _error.WriteLine($"GX coverage dump failed: {gxCoverageError}");
+                WriteRunSummary(3, diagnosticFailure: $"gx-coverage-dump: {gxCoverageError}");
                 return 3;
             }
 
@@ -1065,6 +1279,7 @@ public sealed class DolRunner
             if (!GxFifoSoftwareRenderer.TryWriteTevSampleDiagnostics(bus.MmioAccesses, bus.Memory, options.GxTevSampleDumpPath, options.GxDrawSkipDraws, options.GxDrawMaxDraws, out GxFifoTevSampleDiagnosticResult? gxTevSamples, out string? gxTevSampleError))
             {
                 _error.WriteLine($"GX TEV sample dump failed: {gxTevSampleError}");
+                WriteRunSummary(3, diagnosticFailure: $"gx-tev-sample-dump: {gxTevSampleError}");
                 return 3;
             }
 
@@ -1080,6 +1295,7 @@ public sealed class DolRunner
             if (!GxFifoSoftwareRenderer.TryWriteTextureDiagnostics(bus.MmioAccesses, bus.Memory, options.GxTextureDumpPath, options.GxDrawSkipDraws, options.GxDrawMaxDraws, out GxFifoTextureDiagnosticResult? gxTextures, out string? gxTextureError, memorySnapshots: gxMemorySnapshots))
             {
                 _error.WriteLine($"GX texture dump failed: {gxTextureError}");
+                WriteRunSummary(3, diagnosticFailure: $"gx-texture-dump: {gxTextureError}");
                 return 3;
             }
 
@@ -1124,6 +1340,7 @@ public sealed class DolRunner
 
         WriteRequestedMemoryDumps(options, bus, _output);
 
+        WriteRunSummary(0);
         return 0;
     }
 
@@ -1141,7 +1358,7 @@ public sealed class DolRunner
             Directory.CreateDirectory(directory);
         }
 
-            return new StreamWriter(File.Create(fullPath));
+        return new StreamWriter(File.Create(fullPath));
     }
 
     private int WriteGxFrameSweep(GameCubeBus bus, RunDolOptions options, GxMemorySnapshotSet? gxMemorySnapshots)
@@ -1375,6 +1592,46 @@ public sealed class DolRunner
         uint readyMaskAddress = unchecked((uint)((int)state.Gpr[13] + readyMaskOffset));
         return bus.Memory.IsMainRamAddress(readyMaskAddress, sizeof(uint))
             && bus.Read32(readyMaskAddress) == 0;
+    }
+
+    private static bool TryFastForwardPikminHeapWaitLoop(PowerPcState state, GameCubeBus bus, out ulong skippedCycles)
+    {
+        const uint waitPc = 0x8004_66C0;
+        const uint msrExternalInterruptEnable = 0x0000_8000;
+        const int cyclesPerIdleSkip = GameCubeBus.VideoCyclesPerScanline;
+
+        skippedCycles = 0;
+        if (state.Pc != waitPc
+            || (state.Msr & msrExternalInterruptEnable) == 0
+            || bus.HasPendingExternalInterrupt
+            || bus.Read32(waitPc) != 0x8003_032C
+            || bus.Read32(waitPc + 4) != 0x2800_0000
+            || bus.Read32(waitPc + 8) != 0x4182_FFF8
+            || state.Gpr[3] == 0
+            || !bus.Memory.IsMainRamAddress(state.Gpr[3], 0x330)
+            || bus.Read32(state.Gpr[3] + 0x32C) != 0
+            || !HasEnabledVideoInterrupt(bus))
+        {
+            return false;
+        }
+
+        uint decrementer = state.Spr[22];
+        if ((decrementer & 0x8000_0000) == 0 && decrementer == 0)
+        {
+            return false;
+        }
+
+        int cyclesToSkip = cyclesPerIdleSkip;
+        if ((decrementer & 0x8000_0000) == 0 && decrementer < cyclesToSkip)
+        {
+            cyclesToSkip = (int)decrementer;
+        }
+
+        state.TimeBase += (uint)cyclesToSkip;
+        state.Spr[22] = unchecked(decrementer - (uint)cyclesToSkip);
+        bus.Advance((uint)cyclesToSkip);
+        skippedCycles = (uint)cyclesToSkip;
+        return true;
     }
 
     private static bool TryFastForwardCtrDelayLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
@@ -2273,6 +2530,16 @@ public sealed class DolRunner
             return TryFastForwardFourShortStoreLeaf(state, bus, pc, out skippedInstructions);
         }
 
+        if (first == 0x9421_FFF0)
+        {
+            return TryFastForwardLongDivisionLeaf(state, bus, out skippedInstructions);
+        }
+
+        if (first == 0x9421_FF90)
+        {
+            return TryFastForwardVariadicRegisterSaveStub(state, bus, pc, out skippedInstructions);
+        }
+
         if (first == 0x3800_0000)
         {
             if (TryFastForwardZeroThreeWordsLeaf(state, bus, pc, out skippedInstructions))
@@ -2284,6 +2551,11 @@ public sealed class DolRunner
             {
                 return true;
             }
+        }
+
+        if (first == 0x3860_0000)
+        {
+            return TryFastForwardReturnZeroLeaf(state, bus, pc, out skippedInstructions);
         }
 
         if (first == 0x8003_0000)
@@ -2316,6 +2588,219 @@ public sealed class DolRunner
 
         return false;
     }
+
+    private static bool TryFastForwardReturnZeroLeaf(PowerPcState state, GameCubeBus bus, uint pc, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (bus.Read32(pc + 4) != 0x4E80_0020 || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 2, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        state.Gpr[3] = 0;
+        state.Pc = state.Lr;
+        AdvanceFastForwardedInstructions(state, bus, 2);
+        skippedInstructions = 2;
+        return true;
+    }
+
+    private static bool TryFastForwardVariadicRegisterSaveStub(PowerPcState state, GameCubeBus bus, uint pc, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (bus.Read32(pc + 0x00) != 0x9421_FF90
+            || bus.Read32(pc + 0x04) != 0x4086_0024
+            || bus.Read32(pc + 0x08) != 0xD821_0028
+            || bus.Read32(pc + 0x24) != 0xD901_0060
+            || bus.Read32(pc + 0x28) != 0x9061_0008
+            || bus.Read32(pc + 0x44) != 0x9141_0024
+            || bus.Read32(pc + 0x48) != 0x3821_0070
+            || bus.Read32(pc + 0x4C) != 0x4E80_0020
+            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 20, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        state.Pc = state.Lr;
+        AdvanceFastForwardedInstructions(state, bus, 20);
+        skippedInstructions = 20;
+        return true;
+    }
+
+    private static bool TryFastForwardLongDivisionLeaf(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+
+        if (MatchesSignedLongDivisionLoop(bus, pc))
+        {
+            uint iterations = state.Ctr;
+            if (iterations == 0 || !CanFastForwardInstructionCount(state, iterations, instructionsPerIteration: 10, extraInstructions: 8))
+            {
+                return false;
+            }
+
+            for (uint index = 0; index < iterations; index++)
+            {
+                state.Gpr[4] = AddExtended(state, state.Gpr[4], state.Gpr[4]);
+                state.Gpr[3] = AddExtended(state, state.Gpr[3], state.Gpr[3]);
+                state.Gpr[8] = AddExtended(state, state.Gpr[8], state.Gpr[8]);
+                state.Gpr[7] = AddExtended(state, state.Gpr[7], state.Gpr[7]);
+                state.Gpr[0] = SubtractFromCarrying(state, state.Gpr[6], state.Gpr[8]);
+                state.Gpr[9] = SubtractFromExtended(state, state.Gpr[5], state.Gpr[7]);
+                SetCr0(state, state.Gpr[9]);
+                if ((state.Gpr[9] & 0x8000_0000) == 0)
+                {
+                    state.Gpr[8] = state.Gpr[0];
+                    state.Gpr[7] = state.Gpr[9];
+                }
+
+                state.Gpr[0] = AddCarrying(state, state.Gpr[10], 1);
+            }
+
+            state.Ctr = 0;
+            state.Gpr[4] = AddExtended(state, state.Gpr[4], state.Gpr[4]);
+            state.Gpr[3] = AddExtended(state, state.Gpr[3], state.Gpr[3]);
+            uint dividendSign = bus.Read32(state.Gpr[1] + 8);
+            uint divisorSign = bus.Read32(state.Gpr[1] + 12);
+            state.Gpr[7] = dividendSign ^ divisorSign;
+            SetCr0(state, state.Gpr[7]);
+            if (state.Gpr[7] != 0)
+            {
+                state.Gpr[4] = SubtractFromCarrying(state, state.Gpr[4], 0);
+                state.Gpr[3] = SubtractFromZeroExtended(state, state.Gpr[3]);
+            }
+
+            state.Gpr[1] = unchecked(state.Gpr[1] + 16);
+            state.Pc = state.Lr;
+            uint skipped = checked(iterations * 10 + 8);
+            AdvanceFastForwardedInstructions(state, bus, skipped);
+            skippedInstructions = checked((int)skipped);
+            return true;
+        }
+
+        if (MatchesSignedLongDivisionLeaf(bus, pc))
+        {
+            ulong divisor = CombineU64(state.Gpr[5], state.Gpr[6]);
+            if (divisor == 0 || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 160, extraInstructions: 0))
+            {
+                return false;
+            }
+
+            ulong dividend = CombineU64(state.Gpr[3], state.Gpr[4]);
+            long dividendSigned = unchecked((long)dividend);
+            long divisorSigned = unchecked((long)divisor);
+            ulong dividendMagnitude = dividendSigned < 0 ? unchecked(0ul - dividend) : dividend;
+            ulong divisorMagnitude = divisorSigned < 0 ? unchecked(0ul - divisor) : divisor;
+            ulong quotient = dividendMagnitude / divisorMagnitude;
+            if ((dividendSigned < 0) != (divisorSigned < 0))
+            {
+                quotient = unchecked(0ul - quotient);
+            }
+
+            state.Gpr[1] = unchecked(state.Gpr[1] + 16);
+            SetLongResult(state, quotient);
+            state.Pc = state.Lr;
+            SetCr0(state, state.Gpr[3]);
+            AdvanceFastForwardedInstructions(state, bus, 160);
+            skippedInstructions = 160;
+            return true;
+        }
+
+        if (MatchesUnsignedLongDivisionLeaf(bus, pc))
+        {
+            ulong divisor = CombineU64(state.Gpr[5], state.Gpr[6]);
+            if (divisor == 0 || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 120, extraInstructions: 0))
+            {
+                return false;
+            }
+
+            ulong quotient = CombineU64(state.Gpr[3], state.Gpr[4]) / divisor;
+            SetLongResult(state, quotient);
+            state.Pc = state.Lr;
+            SetCr0(state, state.Gpr[3]);
+            AdvanceFastForwardedInstructions(state, bus, 120);
+            skippedInstructions = 120;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool MatchesSignedLongDivisionLoop(GameCubeBus bus, uint pc) =>
+        bus.Read32(pc + 0x00) == 0x7C84_2114
+        && bus.Read32(pc + 0x04) == 0x7C63_1914
+        && bus.Read32(pc + 0x08) == 0x7D08_4114
+        && bus.Read32(pc + 0x0C) == 0x7CE7_3914
+        && bus.Read32(pc + 0x10) == 0x7C06_4010
+        && bus.Read32(pc + 0x14) == 0x7D25_3911
+        && bus.Read32(pc + 0x28) == 0x4200_FFD8
+        && bus.Read32(pc + 0x2C) == 0x7C84_2114
+        && bus.Read32(pc + 0x30) == 0x7C63_1914
+        && bus.Read32(pc + 0x4C) == 0x7C63_0190
+        && bus.Read32(pc + 0x50) == 0x4800_000C;
+
+    private static bool MatchesSignedLongDivisionLeaf(GameCubeBus bus, uint pc) =>
+        bus.Read32(pc + 0x000) == 0x9421_FFF0
+        && bus.Read32(pc + 0x004) == 0x5469_0001
+        && bus.Read32(pc + 0x014) == 0x54A9_0001
+        && bus.Read32(pc + 0x02C) == 0x7C60_0034
+        && bus.Read32(pc + 0x034) == 0x7C89_0034
+        && bus.Read32(pc + 0x0D4) == 0x7C84_2114
+        && bus.Read32(pc + 0x0FC) == 0x4200_FFD8
+        && bus.Read32(pc + 0x120) == 0x7C63_0190
+        && bus.Read32(pc + 0x130) == 0x3821_0010
+        && bus.Read32(pc + 0x134) == 0x4E80_0020;
+
+    private static bool MatchesUnsignedLongDivisionLeaf(GameCubeBus bus, uint pc) =>
+        bus.Read32(pc + 0x000) == 0x2C03_0000
+        && bus.Read32(pc + 0x004) == 0x7C60_0034
+        && bus.Read32(pc + 0x014) == 0x7CCA_0034
+        && bus.Read32(pc + 0x0A8) == 0x7C84_2114
+        && bus.Read32(pc + 0x0D4) == 0x7D04_4378
+        && bus.Read32(pc + 0x0D8) == 0x7CE3_3B78
+        && bus.Read32(pc + 0x0DC) == 0x4E80_0020
+        && bus.Read32(pc + 0x0E0) == 0x4E80_0020;
+
+    private static ulong CombineU64(uint high, uint low) => ((ulong)high << 32) | low;
+
+    private static void SetLongResult(PowerPcState state, ulong value)
+    {
+        state.Gpr[3] = (uint)(value >> 32);
+        state.Gpr[4] = (uint)value;
+    }
+
+    private static uint AddExtended(PowerPcState state, uint left, uint right)
+    {
+        ulong carry = (state.Xer & 0x2000_0000) != 0 ? 1u : 0u;
+        ulong result = (ulong)left + right + carry;
+        SetCarry(state, result > uint.MaxValue);
+        return (uint)result;
+    }
+
+    private static uint AddCarrying(PowerPcState state, uint left, uint right)
+    {
+        uint result = unchecked(left + right);
+        SetCarry(state, result < left);
+        return result;
+    }
+
+    private static uint SubtractFromCarrying(PowerPcState state, uint subtrahend, uint minuend)
+    {
+        uint result = unchecked(minuend - subtrahend);
+        SetCarry(state, minuend >= subtrahend);
+        return result;
+    }
+
+    private static uint SubtractFromExtended(PowerPcState state, uint subtrahend, uint minuend)
+    {
+        ulong carry = (state.Xer & 0x2000_0000) != 0 ? 1u : 0u;
+        ulong result = (ulong)minuend + (~subtrahend & 0xFFFF_FFFFu) + carry;
+        SetCarry(state, result > uint.MaxValue);
+        return (uint)result;
+    }
+
+    private static uint SubtractFromZeroExtended(PowerPcState state, uint subtrahend) =>
+        SubtractFromExtended(state, subtrahend, 0);
 
     private static bool TryFastForwardFourShortStoreLeaf(PowerPcState state, GameCubeBus bus, uint pc, out int skippedInstructions)
     {
@@ -2999,6 +3484,70 @@ public sealed class DolRunner
         return true;
     }
 
+
+    private static bool TryFastForwardStringLengthRoutine(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        if (bus.Read32(pc + 0x00) != 0x9421_FFF0
+            || bus.Read32(pc + 0x04) != 0x93E1_000C
+            || bus.Read32(pc + 0x08) != 0x3BE0_FFFF
+            || bus.Read32(pc + 0x0C) != 0x93C1_0008
+            || bus.Read32(pc + 0x10) != 0x3BC3_FFFF
+            || bus.Read32(pc + 0x14) != 0x8C1E_0001
+            || bus.Read32(pc + 0x18) != 0x3BFF_0001
+            || bus.Read32(pc + 0x1C) != 0x2800_0000
+            || bus.Read32(pc + 0x20) != 0x4082_FFF4
+            || bus.Read32(pc + 0x24) != 0x7FE3_FB78
+            || bus.Read32(pc + 0x28) != 0x83E1_000C
+            || bus.Read32(pc + 0x2C) != 0x83C1_0008
+            || bus.Read32(pc + 0x30) != 0x3821_0010
+            || bus.Read32(pc + 0x34) != 0x4E80_0020)
+        {
+            return false;
+        }
+
+        uint stringAddress = state.Gpr[3];
+        uint length = 0;
+        bool foundTerminator = false;
+        while (length < MaxFastForwardStringLengthBytes)
+        {
+            uint address = unchecked(stringAddress + length);
+            if (!bus.Memory.IsMainRamAddress(address, 1))
+            {
+                return false;
+            }
+
+            if (bus.Memory.Read8(address) == 0)
+            {
+                foundTerminator = true;
+                break;
+            }
+
+            length++;
+        }
+
+        if (!foundTerminator)
+        {
+            return false;
+        }
+
+        uint skipped = checked(10 + (length + 1) * 4);
+        if (!CanFastForwardInstructionCount(state, iterations: skipped, instructionsPerIteration: 1, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        state.Gpr[0] = 0;
+        state.Gpr[3] = length;
+        SetCr0(state, 0);
+        state.Pc = state.Lr;
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+
     private static bool TryFastForwardTextureSampleLeaf(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         skippedInstructions = 0;
@@ -3151,6 +3700,37 @@ public sealed class DolRunner
         AdvanceFastForwardedInstructions(state, bus, skipped);
         skippedInstructions = checked((int)skipped);
         trace?.Invoke($"fast-forwarded pc=0x{pc:X8} source=0x{source:X8} sourceEnd=0x{sourceEnd:X8} destination=0x{destination:X8} output=0x{output.Length:X} skipped=0x{skipped:X}");
+        return true;
+    }
+
+    private static bool TryFastForwardMetroTrkEventLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        if (bus.Read32(pc - 0x20) != 0x9421_FFE0
+            || bus.Read32(pc - 0x1C) != 0x7C08_02A6
+            || bus.Read32(pc - 0x08) != 0x3BC0_0000
+            || bus.Read32(pc + 0x00) != 0x3861_0008
+            || bus.Read32(pc + 0x04) != 0x4800_01F1
+            || bus.Read32(pc + 0xB8) != 0x2C1F_0000
+            || bus.Read32(pc + 0xBC) != 0x4182_FF44
+            || bus.Read32(pc + 0xC0) != 0x8001_0024
+            || bus.Read32(pc + 0xCC) != 0x7C08_03A6)
+        {
+            return false;
+        }
+
+        if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 48, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        state.Gpr[31] = 1;
+        state.Gpr[30] = 0;
+        state.Pc = pc + 0xC0;
+        SetCr0(state, 1);
+        AdvanceFastForwardedInstructions(state, bus, 48);
+        skippedInstructions = 48;
         return true;
     }
 
@@ -5336,6 +5916,7 @@ public sealed class DolRunner
     private static string FormatGxFrameSource(GxFrameDumpSource source) =>
         source switch
         {
+            GxFrameDumpSource.Auto => "automatic best frame",
             GxFrameDumpSource.LastDisplayCopy => "last display copy",
             GxFrameDumpSource.LastNonBlackDisplayCopy => "last nonblack display copy",
             GxFrameDumpSource.LargestDisplayCopy => "largest display copy",
