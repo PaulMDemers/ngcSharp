@@ -54,6 +54,10 @@ public sealed class GameCubeBus : IMemoryBus
     public const uint DiscInterfaceStatusMask = 0x0000_007F;
     public const uint DiscInterfaceInterruptStatusMask = DiscInterfaceDeviceErrorInterruptStatus | DiscInterfaceTransferComplete | DiscInterfaceBreakInterruptStatus;
     public const uint DiscInterfaceInterruptMaskBits = DiscInterfaceDeviceErrorInterruptMask | DiscInterfaceInterruptMask | DiscInterfaceBreakInterruptMask;
+    public const uint DiscInterfaceCoverOpened = 0x0000_0001;
+    public const uint DiscInterfaceCoverInterruptMask = 0x0000_0002;
+    public const uint DiscInterfaceCoverInterruptStatus = 0x0000_0004;
+    public const uint DiscInterfaceConfiguration = 0x0000_0001;
     public const uint AudioInterfacePlayStatus = 0x0000_0001;
     public const uint AudioInterfaceInterruptMask = 0x0000_0004;
     public const uint AudioInterfaceInterruptStatus = 0x0000_0008;
@@ -1892,6 +1896,16 @@ public sealed class GameCubeBus : IMemoryBus
             return nextValue;
         }
 
+        if (alignedAddress == 0xCC00_6004)
+        {
+            uint existing = DiscInterfaceCoverRegister();
+            uint interruptStatus = existing & DiscInterfaceCoverInterruptStatus;
+            interruptStatus &= ~(value & DiscInterfaceCoverInterruptStatus);
+            uint nextValue = interruptStatus | (value & DiscInterfaceCoverInterruptMask);
+            SetDiscProcessorInterrupt(DiscProcessorInterruptPending(ReadMmioValue(0xCC00_6000)) || DiscCoverProcessorInterruptPending(nextValue));
+            return nextValue;
+        }
+
         if (alignedAddress == 0xCC00_601C)
         {
             if ((value & 1) != 0)
@@ -1901,6 +1915,11 @@ public sealed class GameCubeBus : IMemoryBus
             }
 
             return value & ~1u;
+        }
+
+        if (alignedAddress == 0xCC00_6024)
+        {
+            return DiscInterfaceConfiguration;
         }
 
         return value;
@@ -1913,6 +1932,11 @@ public sealed class GameCubeBus : IMemoryBus
             return value & DiscInterfaceStatusMask;
         }
 
+        if (alignedAddress == 0xCC00_6004)
+        {
+            return DiscInterfaceCoverRegister();
+        }
+
         if (alignedAddress == 0xCC00_601C)
         {
             return _pendingDiscCommand is null ? value & ~1u : value | 1u;
@@ -1920,10 +1944,16 @@ public sealed class GameCubeBus : IMemoryBus
 
         if (alignedAddress == 0xCC00_6024)
         {
-            return 0;
+            return DiscInterfaceConfiguration;
         }
 
         return value;
+    }
+
+    private uint DiscInterfaceCoverRegister()
+    {
+        _mmioValues.TryGetValue(0xCC00_6004, out uint value);
+        return value & (DiscInterfaceCoverInterruptMask | DiscInterfaceCoverInterruptStatus);
     }
 
     private void ScheduleDiscInterfaceCommand()
@@ -2225,6 +2255,9 @@ public sealed class GameCubeBus : IMemoryBus
         ((status & DiscInterfaceDeviceErrorInterruptStatus) != 0 && (status & DiscInterfaceDeviceErrorInterruptMask) != 0) ||
         ((status & DiscInterfaceTransferComplete) != 0 && (status & DiscInterfaceInterruptMask) != 0) ||
         ((status & DiscInterfaceBreakInterruptStatus) != 0 && (status & DiscInterfaceBreakInterruptMask) != 0);
+
+    private static bool DiscCoverProcessorInterruptPending(uint status) =>
+        (status & DiscInterfaceCoverInterruptStatus) != 0 && (status & DiscInterfaceCoverInterruptMask) != 0;
 
     private uint ReadMmioValue(uint address)
     {
@@ -2572,23 +2605,41 @@ public sealed class GameCubeBus : IMemoryBus
             state.MemoryCardAddress = 0;
             state.MemoryCardAddressBytesReceived = 0;
             state.MemoryCardDataBytesTransferred = 0;
-            state.MemoryCardStatus = ExternalInterfaceMemoryCardReadyStatus;
             state.MemoryCardCommand = value switch
             {
                 0x00 => ExternalInterfaceMemoryCardCommand.GetDeviceId,
                 0x52 => ExternalInterfaceMemoryCardCommand.ReadBlock,
+                0x53 => ExternalInterfaceMemoryCardCommand.ArrayToBuffer,
+                0x81 => ExternalInterfaceMemoryCardCommand.SetInterrupt,
+                0x82 => ExternalInterfaceMemoryCardCommand.WriteBuffer,
                 0x83 => ExternalInterfaceMemoryCardCommand.GetStatus,
                 0x85 => ExternalInterfaceMemoryCardCommand.GetId,
+                0x86 => ExternalInterfaceMemoryCardCommand.ReadErrorBuffer,
+                0x87 => ExternalInterfaceMemoryCardCommand.WakeUp,
+                0x88 => ExternalInterfaceMemoryCardCommand.Sleep,
                 0x89 => ExternalInterfaceMemoryCardCommand.ClearStatus,
                 0xF1 => ExternalInterfaceMemoryCardCommand.EraseSector,
                 0xF2 => ExternalInterfaceMemoryCardCommand.WriteBlock,
+                0xF3 => ExternalInterfaceMemoryCardCommand.ExtraByteProgram,
                 0xF4 => ExternalInterfaceMemoryCardCommand.EraseCard,
                 _ => ExternalInterfaceMemoryCardCommand.None,
             };
 
             if (state.MemoryCardCommand == ExternalInterfaceMemoryCardCommand.ClearStatus)
             {
-                state.MemoryCardStatus = ExternalInterfaceMemoryCardReadyStatus;
+                state.MemoryCardStatus = ExternalInterfaceMemoryCardDefaultStatus;
+                state.MemoryCardCommandStarted = false;
+            }
+
+            if (state.MemoryCardCommand == ExternalInterfaceMemoryCardCommand.WakeUp)
+            {
+                state.MemoryCardStatus = ExternalInterfaceMemoryCardDefaultStatus;
+                state.MemoryCardCommandStarted = false;
+            }
+
+            if (state.MemoryCardCommand == ExternalInterfaceMemoryCardCommand.Sleep)
+            {
+                state.MemoryCardStatus = ExternalInterfaceMemoryCardSleepStatus;
                 state.MemoryCardCommandStarted = false;
             }
 
@@ -2603,6 +2654,25 @@ public sealed class GameCubeBus : IMemoryBus
 
         if (state.MemoryCardCommand == ExternalInterfaceMemoryCardCommand.GetStatus && state.MemoryCardCommandByteCount >= 2)
         {
+            return;
+        }
+
+        if (state.MemoryCardCommand == ExternalInterfaceMemoryCardCommand.SetInterrupt)
+        {
+            if (state.MemoryCardCommandByteCount >= 2)
+            {
+                state.MemoryCardInterruptEnabled = value != 0;
+                state.MemoryCardCommandStarted = false;
+            }
+
+            return;
+        }
+
+        if (state.MemoryCardCommand is ExternalInterfaceMemoryCardCommand.ArrayToBuffer
+            or ExternalInterfaceMemoryCardCommand.WriteBuffer
+            or ExternalInterfaceMemoryCardCommand.ExtraByteProgram)
+        {
+            state.MemoryCardCommandStarted = false;
             return;
         }
 
@@ -2689,6 +2759,7 @@ public sealed class GameCubeBus : IMemoryBus
             ExternalInterfaceMemoryCardCommand.GetDeviceId => state.MemoryCardDataBytesTransferred >= sizeof(uint),
             ExternalInterfaceMemoryCardCommand.GetId => state.MemoryCardDataBytesTransferred >= sizeof(ushort),
             ExternalInterfaceMemoryCardCommand.GetStatus => state.MemoryCardDataBytesTransferred >= 1,
+            ExternalInterfaceMemoryCardCommand.ReadErrorBuffer => state.MemoryCardDataBytesTransferred >= 1,
             ExternalInterfaceMemoryCardCommand.ReadBlock => state.MemoryCardDataBytesTransferred >= ExternalInterfaceMemoryCardWriteBlockSize,
             ExternalInterfaceMemoryCardCommand.WriteBlock => state.MemoryCardDataBytesTransferred >= ExternalInterfaceMemoryCardWriteBlockSize,
             ExternalInterfaceMemoryCardCommand.None => true,
@@ -2714,6 +2785,7 @@ public sealed class GameCubeBus : IMemoryBus
             ExternalInterfaceMemoryCardCommand.GetDeviceId => ReadExternalInterfaceMemoryCardDeviceIdByte(state),
             ExternalInterfaceMemoryCardCommand.GetId => ReadExternalInterfaceMemoryCardIdByte(state),
             ExternalInterfaceMemoryCardCommand.GetStatus => ReadExternalInterfaceMemoryCardStatusByte(state),
+            ExternalInterfaceMemoryCardCommand.ReadErrorBuffer => ReadExternalInterfaceMemoryCardErrorByte(state),
             ExternalInterfaceMemoryCardCommand.ReadBlock => ReadExternalInterfaceMemoryCardDataByte(channel, state),
             _ => 0xFF,
         };
@@ -2726,6 +2798,13 @@ public sealed class GameCubeBus : IMemoryBus
         byte value = state.MemoryCardDataBytesTransferred < id.Length
             ? id[state.MemoryCardDataBytesTransferred]
             : (byte)0xFF;
+        state.MemoryCardDataBytesTransferred++;
+        return value;
+    }
+
+    private static byte ReadExternalInterfaceMemoryCardErrorByte(ExternalInterfaceChannelState state)
+    {
+        byte value = state.MemoryCardDataBytesTransferred == 0 ? (byte)0 : (byte)0xFF;
         state.MemoryCardDataBytesTransferred++;
         return value;
     }
@@ -3066,6 +3145,10 @@ public sealed class GameCubeBus : IMemoryBus
     private const uint ExternalInterfaceRtcCounterOffset = 0x2000_0000;
     private const uint ExternalInterfaceSramBaseOffset = 0x2000_0100;
     private const byte ExternalInterfaceMemoryCardReadyStatus = 0x01;
+    private const byte ExternalInterfaceMemoryCardSleepStatus = 0x20;
+    private const byte ExternalInterfaceMemoryCardUnlockedStatus = 0x40;
+    private const byte ExternalInterfaceMemoryCardDefaultStatus =
+        ExternalInterfaceMemoryCardReadyStatus | ExternalInterfaceMemoryCardUnlockedStatus;
 
     private uint NormalizeSerialInterfaceWrite(uint alignedAddress, uint value)
     {
@@ -3691,9 +3774,16 @@ public sealed class GameCubeBus : IMemoryBus
         GetId,
         GetStatus,
         ClearStatus,
+        SetInterrupt,
+        ReadErrorBuffer,
+        WakeUp,
+        Sleep,
+        ArrayToBuffer,
+        WriteBuffer,
         ReadBlock,
         WriteBlock,
         EraseSector,
+        ExtraByteProgram,
         EraseCard,
     }
 
@@ -3710,7 +3800,8 @@ public sealed class GameCubeBus : IMemoryBus
         public uint MemoryCardAddress;
         public uint MemoryCardOffset;
         public int MemoryCardDataBytesTransferred;
-        public byte MemoryCardStatus = ExternalInterfaceMemoryCardReadyStatus;
+        public byte MemoryCardStatus = ExternalInterfaceMemoryCardDefaultStatus;
+        public bool MemoryCardInterruptEnabled;
     }
 
     private enum GxFifoPayloadKind

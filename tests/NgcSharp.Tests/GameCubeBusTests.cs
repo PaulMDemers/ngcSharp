@@ -166,7 +166,36 @@ public sealed class GameCubeBusTests
         bus.Write32(0xCC00_680C, 0x05);
         bus.Write32(0xCC00_680C, 0x01);
 
-        Assert.Equal(0x0100_0000u, bus.Read32(0xCC00_6810));
+        Assert.Equal(0x4100_0000u, bus.Read32(0xCC00_6810));
+    }
+
+    [Fact]
+    public void ExiMemoryCardStatusReportsUnlockedAndSupportsSleepWake()
+    {
+        GameCubeBus bus = new()
+        {
+            ExternalInterfaceMemoryCardSlotAInserted = true,
+        };
+
+        bus.Write32(0xCC00_6800, 0x80);
+        bus.Write32(0xCC00_6810, 0x8300_0000);
+        bus.Write32(0xCC00_680C, 0x05);
+        bus.Write32(0xCC00_680C, 0x01);
+        Assert.Equal(0x4100_0000u, bus.Read32(0xCC00_6810));
+
+        bus.Write32(0xCC00_6810, 0x8800_0000);
+        bus.Write32(0xCC00_680C, 0x05);
+        bus.Write32(0xCC00_6810, 0x8300_0000);
+        bus.Write32(0xCC00_680C, 0x05);
+        bus.Write32(0xCC00_680C, 0x01);
+        Assert.Equal(0x2000_0000u, bus.Read32(0xCC00_6810));
+
+        bus.Write32(0xCC00_6810, 0x8700_0000);
+        bus.Write32(0xCC00_680C, 0x05);
+        bus.Write32(0xCC00_6810, 0x8300_0000);
+        bus.Write32(0xCC00_680C, 0x05);
+        bus.Write32(0xCC00_680C, 0x01);
+        Assert.Equal(0x4100_0000u, bus.Read32(0xCC00_6810));
     }
 
     [Fact]
@@ -226,7 +255,7 @@ public sealed class GameCubeBusTests
         bus.Write32(0xCC00_680C, 0x15);
         bus.Write32(0xCC00_680C, 0x01);
 
-        Assert.Equal(0x0100_0000u, bus.Read32(0xCC00_6810));
+        Assert.Equal(0x4100_0000u, bus.Read32(0xCC00_6810));
     }
 
     [Fact]
@@ -1015,6 +1044,38 @@ public sealed class GameCubeBusTests
         {
             File.Delete(path);
         }
+    }
+
+    [Fact]
+    public void DiscInterfaceCoverRegisterReportsClosedCoverAndPreservesMask()
+    {
+        GameCubeBus bus = new();
+
+        Assert.Equal(0u, bus.Read32(0xCC00_6004) & GameCubeBus.DiscInterfaceCoverOpened);
+
+        bus.Write32(
+            0xCC00_6004,
+            GameCubeBus.DiscInterfaceCoverOpened |
+            GameCubeBus.DiscInterfaceCoverInterruptMask |
+            GameCubeBus.DiscInterfaceCoverInterruptStatus);
+
+        Assert.Equal(GameCubeBus.DiscInterfaceCoverInterruptMask, bus.Read32(0xCC00_6004));
+
+        bus.Write32(0xCC00_6004, 0);
+
+        Assert.Equal(0u, bus.Read32(0xCC00_6004));
+    }
+
+    [Fact]
+    public void DiscInterfaceConfigurationRegisterIsReadOnly()
+    {
+        GameCubeBus bus = new();
+
+        Assert.Equal(GameCubeBus.DiscInterfaceConfiguration, bus.Read32(0xCC00_6024));
+
+        bus.Write32(0xCC00_6024, 0xFFFF_FFFF);
+
+        Assert.Equal(GameCubeBus.DiscInterfaceConfiguration, bus.Read32(0xCC00_6024));
     }
 
     [Fact]
