@@ -563,6 +563,19 @@ public sealed class DolRunner
                                 directTextureFormats = gxFrameDump.FastPathStats.DirectTextureFormats,
                                 textureSamplerFallbacks = gxFrameDump.FastPathStats.TextureSamplerFallbacks,
                             },
+                            efbCopyStats = gxFrameDump.EfbCopyStats is null ? null : new
+                            {
+                                displayCopies = gxFrameDump.EfbCopyStats.DisplayCopies,
+                                directDisplayCopies = gxFrameDump.EfbCopyStats.DirectDisplayCopies,
+                                filteredDisplayCopies = gxFrameDump.EfbCopyStats.FilteredDisplayCopies,
+                                textureCopies = gxFrameDump.EfbCopyStats.TextureCopies,
+                                clears = gxFrameDump.EfbCopyStats.Clears,
+                                depthClears = gxFrameDump.EfbCopyStats.DepthClears,
+                                displayCopyMs = gxFrameDump.EfbCopyStats.DisplayCopyMs,
+                                textureCopyMs = gxFrameDump.EfbCopyStats.TextureCopyMs,
+                                colorClearMs = gxFrameDump.EfbCopyStats.ColorClearMs,
+                                depthClearMs = gxFrameDump.EfbCopyStats.DepthClearMs,
+                            },
                         },
                     },
                     fastForward = new
