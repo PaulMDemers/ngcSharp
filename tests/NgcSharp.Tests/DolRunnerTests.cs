@@ -562,6 +562,59 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void NullTerminatedByteScanLoopFastForwardReturnsTerminatorCount()
+    {
+        const uint pc = 0x8000_32A0;
+        const uint sourceBase = 0x8002_1000;
+        GameCubeBus bus = new();
+        WriteNullTerminatedByteScanLoop(bus.Memory, pc);
+        bus.Memory.Load(sourceBase + 1, [(byte)'T', (byte)'P', 0]);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8000_32C0,
+        };
+        state.Gpr[3] = 7;
+        state.Gpr[4] = sourceBase;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardNullTerminatedByteScanLoop(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(13, skippedInstructions);
+        Assert.Equal(0x8000_32C0u, state.Pc);
+        Assert.Equal(10u, state.Gpr[3]);
+        Assert.Equal(sourceBase + 3, state.Gpr[4]);
+        Assert.Equal(0u, state.Gpr[0]);
+        Assert.Equal(13ul, state.TimeBase);
+        Assert.Equal(0xFFFF_F000u - 13u, state.Spr[22]);
+        Assert.Equal(0x2000_0000u, state.Cr & 0xF000_0000);
+    }
+
+    [Fact]
+    public void NullTerminatedByteScanLoopFastForwardDoesNotCrossPositiveDecrementer()
+    {
+        const uint pc = 0x8000_32A0;
+        GameCubeBus bus = new();
+        WriteNullTerminatedByteScanLoop(bus.Memory, pc);
+        bus.Memory.Load(0x8002_1001, [(byte)'A', 0]);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8000_32C0,
+        };
+        state.Gpr[3] = 4;
+        state.Gpr[4] = 0x8002_1000;
+        state.Spr[22] = 8;
+
+        bool skipped = InvokeFastForwardNullTerminatedByteScanLoop(state, bus, out int skippedInstructions);
+
+        Assert.False(skipped);
+        Assert.Equal(0, skippedInstructions);
+        Assert.Equal(pc, state.Pc);
+    }
+
+    [Fact]
     public void StringCompareRoutineFastForwardReturnsZeroForEqualStrings()
     {
         const uint pc = 0x8000_32C0;
@@ -2533,6 +2586,16 @@ public sealed class DolRunnerTests
         return result;
     }
 
+    private static bool InvokeFastForwardNullTerminatedByteScanLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardNullTerminatedByteScanLoop", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find null-terminated byte-scan fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
     private static bool InvokeFastForwardStringCompareRoutine(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardStringCompareRoutine", BindingFlags.NonPublic | BindingFlags.Static)
@@ -2825,6 +2888,15 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x00, 0x8C04_0001);
         WriteInstruction(memory, pc + 0x04, 0x2800_0000);
         WriteInstruction(memory, pc + 0x08, 0x9C05_0001);
+        WriteInstruction(memory, pc + 0x0C, 0x4082_FFF4);
+        WriteInstruction(memory, pc + 0x10, 0x4E80_0020);
+    }
+
+    private static void WriteNullTerminatedByteScanLoop(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x8C04_0001);
+        WriteInstruction(memory, pc + 0x04, 0x3863_0001);
+        WriteInstruction(memory, pc + 0x08, 0x2800_0000);
         WriteInstruction(memory, pc + 0x0C, 0x4082_FFF4);
         WriteInstruction(memory, pc + 0x10, 0x4E80_0020);
     }

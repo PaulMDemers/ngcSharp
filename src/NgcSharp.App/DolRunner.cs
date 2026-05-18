@@ -825,6 +825,15 @@ public sealed class DolRunner
                 }
 
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch
+                    && currentInstruction == 0x8C04_0001
+                    && TryFastForwardNullTerminatedByteScanLoop(state, bus, out skippedInstructions))
+                {
+                    stringLengthFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch
                     && currentInstruction == 0x88C3_0000
                     && TryFastForwardStringCompareRoutine(state, bus, out skippedInstructions))
                 {
@@ -3493,6 +3502,74 @@ public sealed class DolRunner
         SetCr0(state, lastValue);
         state.Pc = state.Lr;
         uint skipped = checked(bytesToCopy * 4 + 1);
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+    private static bool TryFastForwardNullTerminatedByteScanLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        uint loadUpdate = bus.Read32(pc);
+        if (!TryDecodeDForm(loadUpdate, primaryOpcode: 35, out int valueRegister, out int sourceRegister, out int sourceOffset)
+            || sourceOffset != 1)
+        {
+            return false;
+        }
+
+        uint add = bus.Read32(pc + 4);
+        if (!TryDecodeDForm(add, primaryOpcode: 14, out int countRegister, out int countSourceRegister, out int addImmediate)
+            || countRegister != countSourceRegister
+            || countRegister == sourceRegister
+            || addImmediate != 1)
+        {
+            return false;
+        }
+
+        uint compare = bus.Read32(pc + 8);
+        if (compare != (0x2800_0000u | (uint)(valueRegister << 16))
+            || bus.Read32(pc + 12) != 0x4082_FFF4
+            || bus.Read32(pc + 16) != 0x4E80_0020)
+        {
+            return false;
+        }
+
+        uint sourceStart = unchecked(state.Gpr[sourceRegister] + 1);
+        if (!bus.Memory.IsMainRamAddress(sourceStart, 1))
+        {
+            return false;
+        }
+
+        uint bytesScanned = 0;
+        bool foundTerminator = false;
+        while (bytesScanned < MaxFastForwardStringLengthBytes)
+        {
+            uint address = unchecked(sourceStart + bytesScanned);
+            if (!bus.Memory.IsMainRamAddress(address, 1))
+            {
+                return false;
+            }
+
+            bytesScanned++;
+            if (bus.Memory.Read8(address) == 0)
+            {
+                foundTerminator = true;
+                break;
+            }
+        }
+
+        if (!foundTerminator || !CanFastForwardInstructionCount(state, bytesScanned, instructionsPerIteration: 4, extraInstructions: 1))
+        {
+            return false;
+        }
+
+        state.Gpr[valueRegister] = 0;
+        state.Gpr[sourceRegister] = unchecked(state.Gpr[sourceRegister] + bytesScanned);
+        state.Gpr[countRegister] = unchecked(state.Gpr[countRegister] + bytesScanned);
+        SetCr0(state, 0);
+        state.Pc = state.Lr;
+        uint skipped = checked(bytesScanned * 4 + 1);
         AdvanceFastForwardedInstructions(state, bus, skipped);
         skippedInstructions = checked((int)skipped);
         return true;
