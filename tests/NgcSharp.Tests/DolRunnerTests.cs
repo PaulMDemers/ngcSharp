@@ -297,6 +297,66 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void InterleavedWordFillLoopFastForwardWritesRepeatedWordAndFinishesLoop()
+    {
+        const uint pc = 0x8000_3434;
+        const uint baseAddress = 0x8001_0000;
+        GameCubeBus bus = new();
+        WriteInterleavedWordFillLoop(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[3] = 2;
+        state.Gpr[4] = baseAddress;
+        state.Gpr[7] = 0xAABB_CCDD;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardInterleavedWordFillLoop(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(20, skippedInstructions);
+        Assert.Equal(pc + 40, state.Pc);
+        Assert.Equal(0u, state.Gpr[3]);
+        Assert.Equal(baseAddress + 64, state.Gpr[4]);
+        Assert.Equal(0x2000_0000u, state.Cr & 0xF000_0000);
+        for (uint offset = 4; offset <= 64; offset += 4)
+        {
+            Assert.Equal(0xAABB_CCDDu, bus.Memory.Read32(baseAddress + offset));
+        }
+    }
+
+    [Fact]
+    public void InterleavedWordFillLoopFastForwardStopsAtPositiveDecrementerEdge()
+    {
+        const uint pc = 0x8000_3434;
+        const uint baseAddress = 0x8001_0000;
+        GameCubeBus bus = new();
+        WriteInterleavedWordFillLoop(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[3] = 3;
+        state.Gpr[4] = baseAddress;
+        state.Gpr[7] = 0x1122_3344;
+        state.Spr[22] = 15;
+
+        bool skipped = InvokeFastForwardInterleavedWordFillLoop(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(10, skippedInstructions);
+        Assert.Equal(pc, state.Pc);
+        Assert.Equal(2u, state.Gpr[3]);
+        Assert.Equal(baseAddress + 32, state.Gpr[4]);
+        Assert.Equal(5u, state.Spr[22]);
+        for (uint offset = 4; offset <= 32; offset += 4)
+        {
+            Assert.Equal(0x1122_3344u, bus.Memory.Read32(baseAddress + offset));
+        }
+    }
+
+    [Fact]
     public void ByteCopyLoopFastForwardCopiesMemoryAndFinishesLoop()
     {
         const uint pc = 0x8000_3200;
@@ -392,6 +452,69 @@ public sealed class DolRunnerTests
         Assert.Equal(0x2000_0000u, state.Xer & 0x2000_0000);
         Assert.Equal(0x12, bus.Memory.Read8(destinationBase + 1));
         Assert.Equal(0x34, bus.Memory.Read8(destinationBase + 2));
+        Assert.Equal(0x00, bus.Memory.Read8(destinationBase + 3));
+    }
+
+    [Fact]
+    public void ByteFillLoopFastForwardWritesRepeatedByteAndFinishesLoop()
+    {
+        const uint pc = 0x8000_3480;
+        const uint destinationBase = 0x8003_0000;
+        GameCubeBus bus = new();
+        WriteByteFillLoop(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[5] = 3;
+        state.Gpr[6] = destinationBase;
+        state.Gpr[7] = 0x1234_56A5;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardByteFillLoop(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(9, skippedInstructions);
+        Assert.Equal(pc + 12, state.Pc);
+        Assert.Equal(0u, state.Gpr[5]);
+        Assert.Equal(destinationBase + 3, state.Gpr[6]);
+        Assert.Equal(9ul, state.TimeBase);
+        Assert.Equal(0xFFFF_F000u - 9u, state.Spr[22]);
+        Assert.Equal(0x2000_0000u, state.Cr & 0xF000_0000);
+        Assert.Equal(0x2000_0000u, state.Xer & 0x2000_0000);
+        Assert.Equal(0xA5, bus.Memory.Read8(destinationBase + 1));
+        Assert.Equal(0xA5, bus.Memory.Read8(destinationBase + 2));
+        Assert.Equal(0xA5, bus.Memory.Read8(destinationBase + 3));
+    }
+
+    [Fact]
+    public void ByteFillLoopFastForwardStopsAtPositiveDecrementerEdge()
+    {
+        const uint pc = 0x8000_3480;
+        const uint destinationBase = 0x8003_0000;
+        GameCubeBus bus = new();
+        WriteByteFillLoop(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[5] = 4;
+        state.Gpr[6] = destinationBase;
+        state.Gpr[7] = 0xFF;
+        state.Spr[22] = 7;
+
+        bool skipped = InvokeFastForwardByteFillLoop(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(6, skippedInstructions);
+        Assert.Equal(pc, state.Pc);
+        Assert.Equal(2u, state.Gpr[5]);
+        Assert.Equal(destinationBase + 2, state.Gpr[6]);
+        Assert.Equal(1u, state.Spr[22]);
+        Assert.Equal(0x4000_0000u, state.Cr & 0xF000_0000);
+        Assert.Equal(0x2000_0000u, state.Xer & 0x2000_0000);
+        Assert.Equal(0xFF, bus.Memory.Read8(destinationBase + 1));
+        Assert.Equal(0xFF, bus.Memory.Read8(destinationBase + 2));
         Assert.Equal(0x00, bus.Memory.Read8(destinationBase + 3));
     }
 
@@ -895,6 +1018,87 @@ public sealed class DolRunnerTests
         Assert.Equal(objectAddress, bus.Memory.Read32(objectAddress));
         Assert.Equal(2u, bus.Memory.Read32(objectAddress + 4));
         Assert.Equal(1u, bus.Memory.Read32(objectAddress + 0x20));
+    }
+
+    [Fact]
+    public void ResourceNameTableScanFastForwardStoresMatchingObject()
+    {
+        const uint pc = 0x8002_28F4;
+        const uint table = 0x8005_0000;
+        const uint descriptor = 0x8006_0000;
+        const uint candidate = 0x8007_0000;
+        const uint vtable = 0x8007_1000;
+        const uint targetName = 0x8008_0000;
+        const uint candidateName = 0x8008_0100;
+        GameCubeBus bus = new();
+        WriteResourceNameTableScan(bus.Memory, pc);
+        bus.Memory.Write16(descriptor, 3);
+        bus.Memory.Write32(descriptor + 4, targetName);
+        bus.Memory.Load(targetName, [(byte)'f', (byte)'o', (byte)'o', 0]);
+        bus.Memory.Load(candidateName, [(byte)'f', (byte)'o', (byte)'o', 0]);
+        bus.Memory.Write32(table + 8, candidate);
+        bus.Memory.Write32(candidate + 0x0C, vtable);
+        bus.Memory.Write32(candidate + 0x1C, candidateName);
+        bus.Memory.Write32(vtable + 0x0C, 0x8024_12BC);
+
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[23] = 0;
+        state.Gpr[24] = table;
+        state.Gpr[25] = 0;
+        state.Gpr[27] = descriptor;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardResourceNameTableScan(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.True(skippedInstructions > 0);
+        Assert.Equal(pc + 0x5C, state.Pc);
+        Assert.Equal(2u, state.Gpr[23]);
+        Assert.Equal(8u, state.Gpr[25]);
+        Assert.Equal(candidate, state.Gpr[4]);
+        Assert.Equal(candidate, bus.Memory.Read32(table + 12));
+    }
+
+    [Fact]
+    public void ResourceNameTableScanFastForwardRequiresAccessorTarget()
+    {
+        const uint pc = 0x8002_28F4;
+        const uint table = 0x8005_0000;
+        const uint descriptor = 0x8006_0000;
+        const uint candidate = 0x8007_0000;
+        const uint vtable = 0x8007_1000;
+        const uint targetName = 0x8008_0000;
+        const uint candidateName = 0x8008_0100;
+        GameCubeBus bus = new();
+        WriteResourceNameTableScan(bus.Memory, pc);
+        bus.Memory.Write16(descriptor, 3);
+        bus.Memory.Write32(descriptor + 4, targetName);
+        bus.Memory.Load(targetName, [(byte)'f', (byte)'o', (byte)'o', 0]);
+        bus.Memory.Load(candidateName, [(byte)'f', (byte)'o', (byte)'o', 0]);
+        bus.Memory.Write32(table, candidate);
+        bus.Memory.Write32(candidate + 0x0C, vtable);
+        bus.Memory.Write32(candidate + 0x1C, candidateName);
+        bus.Memory.Write32(vtable + 0x0C, 0x8000_1234);
+
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[23] = 0;
+        state.Gpr[24] = table;
+        state.Gpr[25] = 0;
+        state.Gpr[27] = descriptor;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardResourceNameTableScan(state, bus, out int skippedInstructions);
+
+        Assert.False(skipped);
+        Assert.Equal(0, skippedInstructions);
+        Assert.Equal(pc, state.Pc);
+        Assert.Equal(0u, bus.Memory.Read32(table + 12));
     }
 
     [Fact]
@@ -2525,6 +2729,16 @@ public sealed class DolRunnerTests
         return result;
     }
 
+    private static bool InvokeFastForwardInterleavedWordFillLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardInterleavedWordFillLoop", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find interleaved word-fill fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
     private static bool InvokeFastForwardCtrDelayLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardCtrDelayLoop", BindingFlags.NonPublic | BindingFlags.Static)
@@ -2595,10 +2809,30 @@ public sealed class DolRunnerTests
         return result;
     }
 
+    private static bool InvokeFastForwardResourceNameTableScan(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardResourceNameTableScan", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find resource name table scan fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
     private static bool InvokeFastForwardByteCopyLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardByteCopyLoop", BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("Could not find byte-copy fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
+    private static bool InvokeFastForwardByteFillLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardByteFillLoop", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find byte-fill fast-forward helper.");
         object?[] args = [state, bus, 0];
         bool result = (bool)method.Invoke(null, args)!;
         skippedInstructions = (int)args[2]!;
@@ -2819,6 +3053,20 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x24, 0x4082_FFDC);
     }
 
+    private static void WriteInterleavedWordFillLoop(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x90E4_0004);
+        WriteInstruction(memory, pc + 0x04, 0x3463_FFFF);
+        WriteInstruction(memory, pc + 0x08, 0x90E4_0008);
+        WriteInstruction(memory, pc + 0x0C, 0x90E4_000C);
+        WriteInstruction(memory, pc + 0x10, 0x90E4_0010);
+        WriteInstruction(memory, pc + 0x14, 0x90E4_0014);
+        WriteInstruction(memory, pc + 0x18, 0x90E4_0018);
+        WriteInstruction(memory, pc + 0x1C, 0x90E4_001C);
+        WriteInstruction(memory, pc + 0x20, 0x94E4_0020);
+        WriteInstruction(memory, pc + 0x24, 0x4082_FFDC);
+    }
+
     private static void WriteCtrZeroStoreLoop(GameCubeMemory memory, uint pc)
     {
         WriteInstruction(memory, pc + 0x00, 0x9004_0000);
@@ -2840,6 +3088,13 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x04, 0x9C06_0001);
         WriteInstruction(memory, pc + 0x08, 0x34A5_FFFF);
         WriteInstruction(memory, pc + 0x0C, 0x4082_FFF4);
+    }
+
+    private static void WriteByteFillLoop(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x34A5_FFFF);
+        WriteInstruction(memory, pc + 0x04, 0x9CE6_0001);
+        WriteInstruction(memory, pc + 0x08, 0x4082_FFF8);
     }
 
     private static void WriteNullTerminatedByteCopyLoop(GameCubeMemory memory, uint pc)
@@ -3455,6 +3710,33 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x1C, 0x3800_0000);
         WriteInstruction(memory, pc + 0x20, 0x9003_0020);
         WriteInstruction(memory, pc + 0x24, 0x4E80_0020);
+    }
+
+    private static void WriteResourceNameTableScan(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x7C78_C82E);
+        WriteInstruction(memory, pc + 0x04, 0x2803_0000);
+        WriteInstruction(memory, pc + 0x08, 0x4182_0044);
+        WriteInstruction(memory, pc + 0x0C, 0x8183_000C);
+        WriteInstruction(memory, pc + 0x10, 0x818C_000C);
+        WriteInstruction(memory, pc + 0x14, 0x7D89_03A6);
+        WriteInstruction(memory, pc + 0x18, 0x4E80_0421);
+        WriteInstruction(memory, pc + 0x1C, 0x7C64_1B78);
+        WriteInstruction(memory, pc + 0x20, 0x807B_0004);
+        WriteInstruction(memory, pc + 0x24, 0x4830_B22D);
+        WriteInstruction(memory, pc + 0x28, 0x2C03_0000);
+        WriteInstruction(memory, pc + 0x2C, 0x4082_0020);
+        WriteInstruction(memory, pc + 0x30, 0x7C98_C82E);
+        WriteInstruction(memory, pc + 0x34, 0xA81B_0000);
+        WriteInstruction(memory, pc + 0x38, 0x5400_103A);
+        WriteInstruction(memory, pc + 0x3C, 0x3C60_803C);
+        WriteInstruction(memory, pc + 0x40, 0x3863_9218);
+        WriteInstruction(memory, pc + 0x44, 0x7C83_012E);
+        WriteInstruction(memory, pc + 0x48, 0x4800_0014);
+        WriteInstruction(memory, pc + 0x4C, 0x3AF7_0001);
+        WriteInstruction(memory, pc + 0x50, 0x2817_01F6);
+        WriteInstruction(memory, pc + 0x54, 0x3B39_0004);
+        WriteInstruction(memory, pc + 0x58, 0x4180_FFA8);
     }
 
     private static void WriteWordCopyLoop(GameCubeMemory memory, uint pc)
