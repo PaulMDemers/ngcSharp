@@ -684,6 +684,13 @@ public sealed class DolRunner
                     continue;
                 }
 
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardMetroTrkEventLoop(state, bus, out skippedInstructions))
+                {
+                    leafFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicTrigTableInit(state, bus, out skippedInstructions))
                 {
                     trigTableFastForwardInstructions += (uint)skippedInstructions;
@@ -2907,6 +2914,37 @@ public sealed class DolRunner
         AdvanceFastForwardedInstructions(state, bus, skipped);
         skippedInstructions = checked((int)skipped);
         trace?.Invoke($"fast-forwarded pc=0x{pc:X8} source=0x{source:X8} sourceEnd=0x{sourceEnd:X8} destination=0x{destination:X8} output=0x{output.Length:X} skipped=0x{skipped:X}");
+        return true;
+    }
+
+    private static bool TryFastForwardMetroTrkEventLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        if (bus.Read32(pc - 0x20) != 0x9421_FFE0
+            || bus.Read32(pc - 0x1C) != 0x7C08_02A6
+            || bus.Read32(pc - 0x08) != 0x3BC0_0000
+            || bus.Read32(pc + 0x00) != 0x3861_0008
+            || bus.Read32(pc + 0x04) != 0x4800_01F1
+            || bus.Read32(pc + 0xB8) != 0x2C1F_0000
+            || bus.Read32(pc + 0xBC) != 0x4182_FF44
+            || bus.Read32(pc + 0xC0) != 0x8001_0024
+            || bus.Read32(pc + 0xCC) != 0x7C08_03A6)
+        {
+            return false;
+        }
+
+        if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 48, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        state.Gpr[31] = 1;
+        state.Gpr[30] = 0;
+        state.Pc = pc + 0xC0;
+        SetCr0(state, 1);
+        AdvanceFastForwardedInstructions(state, bus, 48);
+        skippedInstructions = 48;
         return true;
     }
 

@@ -561,6 +561,30 @@ public sealed class GameCubeBusTests
     }
 
     [Fact]
+    public void AramDmaCompletesByteSetDspTaskCallbacks()
+    {
+        GameCubeBus bus = new()
+        {
+            SmallDataBaseRegister = 0x8000_3000,
+        };
+
+        uint taskAddress = 0x8000_1000;
+        uint callbackAddress = 0x8000_2000;
+        uint setterAddress = 0x8000_2800;
+        uint flagAddress = 0x8000_2FFC;
+
+        bus.Memory.Write32(callbackAddress + 0x20, 0x4800_07E1);
+        bus.Memory.Write32(setterAddress, 0x3800_0001);
+        bus.Memory.Write32(setterAddress + 4, 0x980D_FFFC);
+        bus.Memory.Write32(setterAddress + 8, 0x4E80_0020);
+        bus.Write32(taskAddress + 0x28, callbackAddress);
+
+        bus.Write32(0xCC00_5028, 0);
+
+        Assert.Equal(1, bus.Memory.Read8(flagAddress));
+    }
+
+    [Fact]
     public void ArqDescriptorCompletionCopiesToAramAndRunsCallbackAfterLatency()
     {
         GameCubeBus bus = new()

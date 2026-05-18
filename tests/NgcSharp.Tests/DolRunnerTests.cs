@@ -2226,6 +2226,37 @@ public sealed class DolRunnerTests
         Assert.Equal((ulong)GameCubeBus.VideoCyclesPerScanline, state.TimeBase);
     }
 
+    [Fact]
+    public void MetroTrkEventLoopFastForwardContinuesDebugBuildWithoutDebugger()
+    {
+        const uint pc = 0x8011_2F5C;
+        GameCubeBus bus = new();
+        bus.Memory.Write32(pc - 0x20, 0x9421_FFE0);
+        bus.Memory.Write32(pc - 0x1C, 0x7C08_02A6);
+        bus.Memory.Write32(pc - 0x08, 0x3BC0_0000);
+        bus.Memory.Write32(pc + 0x00, 0x3861_0008);
+        bus.Memory.Write32(pc + 0x04, 0x4800_01F1);
+        bus.Memory.Write32(pc + 0xB8, 0x2C1F_0000);
+        bus.Memory.Write32(pc + 0xBC, 0x4182_FF44);
+        bus.Memory.Write32(pc + 0xC0, 0x8001_0024);
+        bus.Memory.Write32(pc + 0xCC, 0x7C08_03A6);
+
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardMetroTrkEventLoop(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(48, skippedInstructions);
+        Assert.Equal(pc + 0xC0, state.Pc);
+        Assert.Equal(1u, state.Gpr[31]);
+        Assert.Equal(0u, state.Gpr[30]);
+        Assert.Equal(0x4000_0000u, state.Cr & 0xF000_0000);
+    }
+
     private static GameCubeBus CreateIdleFastForwardBus()
     {
         GameCubeBus bus = new()
@@ -2254,6 +2285,16 @@ public sealed class DolRunnerTests
         object?[] args = [state, bus, 0ul];
         bool result = (bool)method.Invoke(null, args)!;
         skippedCycles = (ulong)args[2]!;
+        return result;
+    }
+
+    private static bool InvokeFastForwardMetroTrkEventLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardMetroTrkEventLoop", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find MetroTRK event-loop fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
         return result;
     }
 

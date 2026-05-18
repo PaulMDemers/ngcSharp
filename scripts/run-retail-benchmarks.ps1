@@ -162,7 +162,8 @@ $targetDefinitions = @{
         gxFrameSource = "auto"
         gxFrameMaxDraws = 700
         gxFrameMaxRasterPixels = 12000000
-        dumpGxCopies = $true
+        dumpGxFrame = $false
+        dumpGxCopies = $false
         extraArgs = @("--memory-card-a", "--controller-button", "a")
     }
     "sonic-20m" = [pscustomobject]@{
@@ -210,7 +211,8 @@ $targetDefinitions = @{
         gxFrameSource = "auto"
         gxFrameMaxDraws = 700
         gxFrameMaxRasterPixels = 12000000
-        dumpGxCopies = $true
+        dumpGxFrame = $false
+        dumpGxCopies = $false
         extraArgs = @("--memory-card-a", "--controller-button", "a")
     }
     "mariokart-debug-20m" = [pscustomobject]@{
@@ -267,6 +269,7 @@ foreach ($targetName in $Targets) {
     $gxFrameMaxDraws = if ($DeepGx -and $target.slug -eq "sonic-20m") { 900 } else { $target.gxFrameMaxDraws }
     $gxFrameMaxRasterPixels = if ($DeepGx -and $target.slug -eq "sonic-20m") { 12000000 } else { $target.gxFrameMaxRasterPixels }
     $dumpGxCopies = $DeepGx -or [bool]$target.dumpGxCopies
+    $dumpGxFrame = -not ($target.PSObject.Properties.Name -contains "dumpGxFrame") -or [bool]$target.dumpGxFrame
 
     $runArgs = @(
         $appDll,
@@ -275,15 +278,19 @@ foreach ($targetName in $Targets) {
         "--max-instructions", "$($target.maxInstructions)",
         "--fast-forward-idle",
         "--fast-forward-write-watch",
-        "--dump-gx-frame", $framePath,
-        "--gx-frame-source", $target.gxFrameSource,
-        "--gx-frame-max-draws", "$gxFrameMaxDraws",
-        "--gx-frame-max-raster-pixels", "$gxFrameMaxRasterPixels",
         "--trace-exi", $exiTracePath,
         "--run-summary", $emulatorSummaryPath,
         "--no-registers",
         "--quiet"
     ) + $target.extraArgs
+    if ($dumpGxFrame) {
+        $runArgs += @(
+            "--dump-gx-frame", $framePath,
+            "--gx-frame-source", $target.gxFrameSource,
+            "--gx-frame-max-draws", "$gxFrameMaxDraws",
+            "--gx-frame-max-raster-pixels", "$gxFrameMaxRasterPixels"
+        )
+    }
     if ($dumpGxCopies) {
         $runArgs += @("--dump-gx-copies", $copyCsvPath)
     }
@@ -350,6 +357,7 @@ foreach ($targetName in $Targets) {
         elapsedSeconds = $result.elapsedSeconds
         timeoutSeconds = $target.timeoutSeconds
         deepGx = [bool]$DeepGx
+        gxFrameRequested = $dumpGxFrame
         gxFrameMaxDraws = $gxFrameMaxDraws
         gxFrameMaxRasterPixels = $gxFrameMaxRasterPixels
         gxCopiesRequested = $dumpGxCopies

@@ -127,6 +127,7 @@ public sealed class GameCubeBus : IMemoryBus
     private readonly HashSet<uint> _completedDspTaskCallbacks = [];
     private readonly Dictionary<uint, uint> _trivialDspTaskCallbackTargets = [];
     private readonly Dictionary<uint, uint> _decrementWordDspTaskCallbackTargets = [];
+    private readonly Dictionary<uint, uint> _byteSetDspTaskCallbackTargets = [];
     private readonly Dictionary<uint, GlobalWordSetDspTaskCallback> _globalWordSetDspTaskCallbacks = [];
     private readonly Dictionary<uint, SlotClearDspTaskCallback> _slotClearDspTaskCallbacks = [];
     private readonly byte[] _serialInterfaceIoBuffer = new byte[0x80];
@@ -845,6 +846,11 @@ public sealed class GameCubeBus : IMemoryBus
             TryExecuteDecrementWordDspTaskCallback(targetAddress);
         }
 
+        foreach ((uint callbackAddress, uint targetAddress) in _byteSetDspTaskCallbackTargets)
+        {
+            TryExecuteByteSetDspTaskCallback(callbackAddress, targetAddress);
+        }
+
         foreach (GlobalWordSetDspTaskCallback callback in _globalWordSetDspTaskCallbacks.Values)
         {
             TryExecuteGlobalWordSetDspTaskCallback(callback);
@@ -855,6 +861,7 @@ public sealed class GameCubeBus : IMemoryBus
     {
         RecordTrivialDspTaskCallback(callbackAddress);
         RecordDecrementWordDspTaskCallback(callbackAddress);
+        RecordByteSetDspTaskCallback(callbackAddress);
         RecordGlobalWordSetDspTaskCallback(callbackAddress);
         RecordSlotClearDspTaskCallback(callbackAddress);
     }
@@ -898,6 +905,19 @@ public sealed class GameCubeBus : IMemoryBus
         _globalWordSetDspTaskCallbacks[callbackAddress] = callback;
     }
 
+    private void RecordByteSetDspTaskCallback(uint callbackAddress)
+    {
+        if (SmallDataBaseRegister == 0
+            || callbackAddress == 0
+            || _byteSetDspTaskCallbackTargets.ContainsKey(callbackAddress)
+            || !TryGetByteSetDspTaskCallbackTarget(callbackAddress, out uint targetAddress))
+        {
+            return;
+        }
+
+        _byteSetDspTaskCallbackTargets[callbackAddress] = targetAddress;
+    }
+
     private void RecordSlotClearDspTaskCallback(uint callbackAddress)
     {
         if (SmallDataBaseRegister == 0
@@ -939,6 +959,20 @@ public sealed class GameCubeBus : IMemoryBus
         if (value != 0)
         {
             Memory.Write32(targetAddress, value - 1);
+        }
+    }
+
+    private void TryExecuteByteSetDspTaskCallback(uint callbackAddress, uint targetAddress)
+    {
+        if (callbackAddress == 0 || _completedDspTaskCallbacks.Contains(callbackAddress))
+        {
+            return;
+        }
+
+        if (GameCubeAddress.TryTranslateMainRam(targetAddress, out _))
+        {
+            Memory.Write8(targetAddress, 1);
+            _completedDspTaskCallbacks.Add(callbackAddress);
         }
     }
 
@@ -1163,6 +1197,41 @@ public sealed class GameCubeBus : IMemoryBus
 
         targetAddress = unchecked(SmallDataBaseRegister + (uint)(short)(load & 0xFFFF));
         return GameCubeAddress.TryTranslateMainRam(targetAddress, out _);
+    }
+
+    private bool TryGetByteSetDspTaskCallbackTarget(uint callbackAddress, out uint targetAddress)
+    {
+        targetAddress = 0;
+        if (!GameCubeAddress.TryTranslateMainRam(callbackAddress, out _))
+        {
+            return false;
+        }
+
+        for (uint offset = 0; offset <= 0x100; offset += sizeof(uint))
+        {
+            uint branch = Memory.Read32(callbackAddress + offset);
+            if (!TryGetRelativeBranchTarget(branch, callbackAddress + offset, out uint setterAddress)
+                || !GameCubeAddress.TryTranslateMainRam(setterAddress, out _))
+            {
+                continue;
+            }
+
+            uint loadOne = Memory.Read32(setterAddress);
+            uint storeByte = Memory.Read32(setterAddress + 4);
+            uint ret = Memory.Read32(setterAddress + 8);
+            if (!IsAddi(loadOne, rD: 0, rA: 0)
+                || (short)(loadOne & 0xFFFF) != 1
+                || !IsStb(storeByte, rS: 0, rA: 13)
+                || ret != 0x4E80_0020)
+            {
+                continue;
+            }
+
+            targetAddress = unchecked(SmallDataBaseRegister + (uint)(short)(storeByte & 0xFFFF));
+            return GameCubeAddress.TryTranslateMainRam(targetAddress, out _);
+        }
+
+        return false;
     }
 
     private bool TryGetGlobalWordSetDspTaskCallback(uint callbackAddress, out GlobalWordSetDspTaskCallback callback)
@@ -1471,6 +1540,7 @@ public sealed class GameCubeBus : IMemoryBus
     private bool IsRecordedDspTaskCallback(uint callbackAddress) =>
         _trivialDspTaskCallbackTargets.ContainsKey(callbackAddress)
         || _decrementWordDspTaskCallbackTargets.ContainsKey(callbackAddress)
+        || _byteSetDspTaskCallbackTargets.ContainsKey(callbackAddress)
         || _globalWordSetDspTaskCallbacks.ContainsKey(callbackAddress)
         || _slotClearDspTaskCallbacks.ContainsKey(callbackAddress);
 
@@ -1503,6 +1573,11 @@ public sealed class GameCubeBus : IMemoryBus
         if (_decrementWordDspTaskCallbackTargets.TryGetValue(request.CallbackAddress, out uint targetAddress))
         {
             TryExecuteDecrementWordDspTaskCallback(targetAddress);
+        }
+
+        if (_byteSetDspTaskCallbackTargets.TryGetValue(request.CallbackAddress, out uint byteSetTargetAddress))
+        {
+            TryExecuteByteSetDspTaskCallback(request.CallbackAddress, byteSetTargetAddress);
         }
 
         if (_globalWordSetDspTaskCallbacks.TryGetValue(request.CallbackAddress, out GlobalWordSetDspTaskCallback globalWordSetCallback))
@@ -3670,6 +3745,24 @@ public sealed class GameCubeBus : IMemoryBus
 
     private static bool IsStw(uint instruction, int rS, int rA) =>
         (instruction >> 26) == 36 && ((instruction >> 21) & 0x1F) == rS && ((instruction >> 16) & 0x1F) == rA;
+
+    private static bool TryGetRelativeBranchTarget(uint instruction, uint pc, out uint target)
+    {
+        target = 0;
+        if ((instruction >> 26) != 18 || (instruction & 0x2) != 0)
+        {
+            return false;
+        }
+
+        int displacement = (int)(instruction & 0x03FF_FFFCu);
+        if ((displacement & 0x0200_0000) != 0)
+        {
+            displacement |= unchecked((int)0xFC00_0000);
+        }
+
+        target = unchecked(pc + (uint)displacement);
+        return true;
+    }
 
     private static uint SerialInterfaceOutputBufferAddress(int channel) => 0xCC00_6400u + (uint)channel * 0xC;
 
