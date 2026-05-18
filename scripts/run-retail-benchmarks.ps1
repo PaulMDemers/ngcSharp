@@ -187,7 +187,7 @@ $targetDefinitions = @{
         gxFrameSource = "auto"
         gxFrameMaxDraws = 700
         gxFrameMaxRasterPixels = 12000000
-        dumpGxCopies = $true
+        dumpGxCopies = $false
         extraArgs = @()
     }
     "pikmin-20m" = [pscustomobject]@{
@@ -199,7 +199,7 @@ $targetDefinitions = @{
         gxFrameSource = "auto"
         gxFrameMaxDraws = 1100
         gxFrameMaxRasterPixels = 12000000
-        dumpGxCopies = $true
+        dumpGxCopies = $false
         extraArgs = @()
     }
     "mariokart-debug-5m" = [pscustomobject]@{

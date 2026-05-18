@@ -1092,17 +1092,41 @@ public static class GxFifoSoftwareRenderer
                 if (rgbNonBlack)
                 {
                     nonBlack++;
-                    minX = Math.Min(minX, px);
-                    minY = Math.Min(minY, py);
-                    maxX = Math.Max(maxX, px);
-                    maxY = Math.Max(maxY, py);
+                    if (px < minX)
+                    {
+                        minX = px;
+                    }
+                    if (py < minY)
+                    {
+                        minY = py;
+                    }
+                    if (px > maxX)
+                    {
+                        maxX = px;
+                    }
+                    if (py > maxY)
+                    {
+                        maxY = py;
+                    }
                     if (alpha[pixel] != 0)
                     {
                         alphaVisibleNonBlack++;
-                        alphaMinX = Math.Min(alphaMinX, px);
-                        alphaMinY = Math.Min(alphaMinY, py);
-                        alphaMaxX = Math.Max(alphaMaxX, px);
-                        alphaMaxY = Math.Max(alphaMaxY, py);
+                        if (px < alphaMinX)
+                        {
+                            alphaMinX = px;
+                        }
+                        if (py < alphaMinY)
+                        {
+                            alphaMinY = py;
+                        }
+                        if (px > alphaMaxX)
+                        {
+                            alphaMaxX = px;
+                        }
+                        if (py > alphaMaxY)
+                        {
+                            alphaMaxY = py;
+                        }
                     }
                 }
             }
@@ -3615,6 +3639,9 @@ public static class GxFifoSoftwareRenderer
             return sum > 0 && (filter[0] != 0 || filter[1] != 0 || filter[2] != 0 || filter[4] != 0 || filter[5] != 0 || filter[6] != 0 || filter[3] != 64);
         }
 
+        private static readonly byte[] CopyGamma17Table = BuildCopyGammaTable(1.0 / 1.7);
+        private static readonly byte[] CopyGamma22Table = BuildCopyGammaTable(1.0 / 2.2);
+
         private static int GetDisplayCopyDestinationHeight(int copyHeight, int yScale)
         {
             int height = (((copyHeight - 1) << 8) / yScale) + 1;
@@ -3698,8 +3725,11 @@ public static class GxFifoSoftwareRenderer
                 {
                     SampleDisplayCopyPixel(rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, options, x, y, out byte r0, out byte g0, out byte b0);
                     SampleDisplayCopyPixel(rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, options, Math.Min(x + 1, options.DestinationWidth - 1), y, out byte r1, out byte g1, out byte b1);
-                    ApplyCopyGamma(options.Gamma, ref r0, ref g0, ref b0);
-                    ApplyCopyGamma(options.Gamma, ref r1, ref g1, ref b1);
+                    if (options.Gamma != 0)
+                    {
+                        ApplyCopyGamma(options.Gamma, ref r0, ref g0, ref b0);
+                        ApplyCopyGamma(options.Gamma, ref r1, ref g1, ref b1);
+                    }
                     RgbToYcbcr(r0, g0, b0, out byte y0, out byte cb0, out byte cr0);
                     RgbToYcbcr(r1, g1, b1, out byte y1, out byte cb1, out byte cr1);
                     uint address = destinationAddress + (uint)((y * ((options.DestinationWidth + 1) / 2) + x / 2) * 4);
@@ -3778,25 +3808,32 @@ public static class GxFifoSoftwareRenderer
 
         private static void ApplyCopyGamma(int gamma, ref byte r, ref byte g, ref byte b)
         {
-            double exponent = gamma switch
+            byte[]? table = gamma switch
             {
-                1 => 1.0 / 1.7,
-                2 => 1.0 / 2.2,
-                _ => 1.0,
+                1 => CopyGamma17Table,
+                2 => CopyGamma22Table,
+                _ => null,
             };
-
-            if (Math.Abs(exponent - 1.0) < 0.000001)
+            if (table is null)
             {
                 return;
             }
 
-            r = ApplyGamma(r, exponent);
-            g = ApplyGamma(g, exponent);
-            b = ApplyGamma(b, exponent);
+            r = table[r];
+            g = table[g];
+            b = table[b];
         }
 
-        private static byte ApplyGamma(byte value, double exponent) =>
-            Clamp8((int)Math.Round(Math.Pow(value / 255.0, exponent) * 255.0));
+        private static byte[] BuildCopyGammaTable(double exponent)
+        {
+            byte[] table = new byte[256];
+            for (int value = 0; value < table.Length; value++)
+            {
+                table[value] = Clamp8((int)Math.Round(Math.Pow(value / 255.0, exponent) * 255.0));
+            }
+
+            return table;
+        }
 
         private static void ClearEfbRegion(byte[] rgb, byte[] alpha, int frameWidth, int frameHeight, int left, int top, int width, int height, byte clearR, byte clearG, byte clearB, byte clearA)
         {
