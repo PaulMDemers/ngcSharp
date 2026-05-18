@@ -575,6 +575,8 @@ public sealed class DolRunner
                                 textureCopyMs = gxFrameDump.EfbCopyStats.TextureCopyMs,
                                 colorClearMs = gxFrameDump.EfbCopyStats.ColorClearMs,
                                 depthClearMs = gxFrameDump.EfbCopyStats.DepthClearMs,
+                                displayCopyModes = gxFrameDump.EfbCopyStats.DisplayCopyModes,
+                                textureCopyFormats = gxFrameDump.EfbCopyStats.TextureCopyFormats,
                             },
                         },
                     },

@@ -7,7 +7,7 @@ namespace NgcSharp.App;
 
 public sealed record GxFifoSoftwareRenderTimings(double TotalMs, double FifoExpansionMs, double BufferInitMs, double ViResolveMs, double ReplayMs, double RegisterWriteMs, double VertexDecodeMs, double RasterizeMs, double RasterSetupMs, double RasterCoverageMs, double RasterDepthTestMs, double RasterTevTextureMs, double RasterAlphaTestMs, double RasterBlendWriteMs, double EfbCoverageMs, double EfbCopyMs, double SourceCaptureMs, double DisplayCaptureMs, double SourceSelectionMs, double PngWriteMs);
 public sealed record GxFifoSoftwareRenderFastPathStats(long SingleStageTevFastTriangles, long SingleStageTevFastPixels, long DirectTextureSamplerTriangles, long DirectTextureSamplerPixels, long GenericTevPixels, long LegacyTextureFallbackPixels, IReadOnlyDictionary<string, long> DirectTextureFormats, IReadOnlyDictionary<string, long> TextureSamplerFallbacks);
-public sealed record GxFifoSoftwareRenderEfbCopyStats(long DisplayCopies, long DirectDisplayCopies, long FilteredDisplayCopies, long TextureCopies, long Clears, long DepthClears, double DisplayCopyMs, double TextureCopyMs, double ColorClearMs, double DepthClearMs);
+public sealed record GxFifoSoftwareRenderEfbCopyStats(long DisplayCopies, long DirectDisplayCopies, long FilteredDisplayCopies, long TextureCopies, long Clears, long DepthClears, double DisplayCopyMs, double TextureCopyMs, double ColorClearMs, double DepthClearMs, IReadOnlyDictionary<string, long> DisplayCopyModes, IReadOnlyDictionary<string, long> TextureCopyFormats);
 public sealed record GxFifoSoftwareRenderResult(string Path, int Width, int Height, int Draws, int RenderedQuads, int DegenerateQuads, int RenderedTriangles = 0, int DegenerateTriangles = 0, GxFrameDumpSource Source = GxFrameDumpSource.Efb, uint? SourceAddress = null, FramebufferPixelFormat? SourceFormat = null, int? SourceCopyIndex = null, bool RasterBudgetExhausted = false, GxFifoSoftwareRenderTimings? Timings = null, GxFifoSoftwareRenderFastPathStats? FastPathStats = null, GxFifoSoftwareRenderEfbCopyStats? EfbCopyStats = null);
 public sealed record GxFifoDrawDiagnosticResult(string Path, int TotalDraws, int DrawsWritten);
 public sealed record GxFifoCopyDiagnosticResult(string Path, int CopiesWritten, int TotalDraws, bool RasterBudgetExhausted = false);
@@ -2565,6 +2565,9 @@ public static class GxFifoSoftwareRenderer
 
     private sealed class EfbCopyDiagnosticCounters
     {
+        private readonly Dictionary<string, long> _displayCopyModes = [];
+        private readonly Dictionary<string, long> _textureCopyFormats = [];
+
         public long DisplayCopies { get; private set; }
         public long DirectDisplayCopies { get; private set; }
         public long FilteredDisplayCopies { get; private set; }
@@ -2576,7 +2579,7 @@ public static class GxFifoSoftwareRenderer
         public long ColorClearTicks { get; private set; }
         public long DepthClearTicks { get; private set; }
 
-        public void RecordDisplayCopy(long ticks, bool direct)
+        public void RecordDisplayCopy(long ticks, bool direct, int sourceWidth, int sourceHeight, int destinationWidth, int destinationHeight, int yScale, int[] verticalFilter, int gamma)
         {
             DisplayCopies++;
             DisplayCopyTicks += ticks;
@@ -2588,12 +2591,17 @@ public static class GxFifoSoftwareRenderer
             {
                 FilteredDisplayCopies++;
             }
+
+            Add(
+                _displayCopyModes,
+                $"{sourceWidth}x{sourceHeight}->{destinationWidth}x{destinationHeight};ys={yScale};vf={FormatFilterSignature(verticalFilter)};gamma={gamma};direct={direct}");
         }
 
-        public void RecordTextureCopy(long ticks)
+        public void RecordTextureCopy(long ticks, int format)
         {
             TextureCopies++;
             TextureCopyTicks += ticks;
+            Add(_textureCopyFormats, CopyTextureFormatName(format));
         }
 
         public void RecordColorClear(long ticks)
@@ -2619,7 +2627,31 @@ public static class GxFifoSoftwareRenderer
                 RoundMilliseconds(StopwatchTicksToMilliseconds(DisplayCopyTicks)),
                 RoundMilliseconds(StopwatchTicksToMilliseconds(TextureCopyTicks)),
                 RoundMilliseconds(StopwatchTicksToMilliseconds(ColorClearTicks)),
-                RoundMilliseconds(StopwatchTicksToMilliseconds(DepthClearTicks)));
+                RoundMilliseconds(StopwatchTicksToMilliseconds(DepthClearTicks)),
+                new Dictionary<string, long>(_displayCopyModes),
+                new Dictionary<string, long>(_textureCopyFormats));
+
+        private static string FormatFilterSignature(int[] filter) =>
+            string.Join("/", filter);
+
+        private static string CopyTextureFormatName(int format) =>
+            format switch
+            {
+                0 => "I4",
+                1 => "I8",
+                2 => "IA4",
+                3 => "IA8",
+                4 => "RGB565",
+                5 => "RGB5A3",
+                6 => "RGBA8",
+                _ => $"fmt{format}",
+            };
+
+        private static void Add(Dictionary<string, long> counters, string key)
+        {
+            counters.TryGetValue(key, out long count);
+            counters[key] = count + 1;
+        }
     }
 
     private static void RenderPrimitiveBounds(
@@ -3872,7 +3904,7 @@ public static class GxFifoSoftwareRenderer
                     DisplayCopyOptions options = GetDisplayCopyOptions(copyWidth, copyHeight, control);
                     long copyStart = counters is null ? 0 : Stopwatch.GetTimestamp();
                     bool direct = WriteEfbDisplayCopy(memory, destinationAddress, rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, options);
-                    counters?.RecordDisplayCopy(Stopwatch.GetTimestamp() - copyStart, direct);
+                    counters?.RecordDisplayCopy(Stopwatch.GetTimestamp() - copyStart, direct, copyWidth, copyHeight, options.DestinationWidth, options.DestinationHeight, options.YScale, options.VerticalFilter, options.Gamma);
                     displayCopy = new DisplayCopyResult(destinationAddress, options.DestinationWidth, options.DestinationHeight, FramebufferPixelFormat.Yuyv);
                 }
                 else
@@ -3880,7 +3912,7 @@ public static class GxFifoSoftwareRenderer
                     int destinationWidth = GetTextureCopyDestinationWidth(format, copyWidth);
                     long copyStart = counters is null ? 0 : Stopwatch.GetTimestamp();
                     WriteEfbCopyTexture(memory, destinationAddress, rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, destinationWidth, format);
-                    counters?.RecordTextureCopy(Stopwatch.GetTimestamp() - copyStart);
+                    counters?.RecordTextureCopy(Stopwatch.GetTimestamp() - copyStart, format);
                 }
 
                 if (clearAfterCopy && (control & 0x0800) != 0)
@@ -4109,6 +4141,17 @@ public static class GxFifoSoftwareRenderer
             int destinationWidth,
             int format)
         {
+            if (format == 0
+                && sourceLeft >= 0
+                && sourceTop >= 0
+                && sourceLeft + copyWidth <= frameWidth
+                && sourceTop + copyHeight <= frameHeight
+                && (copyWidth & 1) == 0)
+            {
+                WriteEfbCopyTextureI4(memory, destinationAddress, rgb, frameWidth, sourceLeft, sourceTop, copyWidth, copyHeight, destinationWidth);
+                return;
+            }
+
             for (int y = 0; y < copyHeight; y++)
             {
                 for (int x = 0; x < copyWidth; x++)
@@ -4117,6 +4160,39 @@ public static class GxFifoSoftwareRenderer
                     WriteTexturePixel(memory, destinationAddress, destinationWidth, copyHeight, format, x, y, r, g, b, a);
                 }
             }
+        }
+
+        private static void WriteEfbCopyTextureI4(
+            GameCubeMemory memory,
+            uint destinationAddress,
+            byte[] rgb,
+            int frameWidth,
+            int sourceLeft,
+            int sourceTop,
+            int copyWidth,
+            int copyHeight,
+            int destinationWidth)
+        {
+            int blockColumns = (destinationWidth + 7) / 8;
+            int blockRows = (copyHeight + 7) / 8;
+            byte[] output = new byte[checked(blockColumns * blockRows * 32)];
+            for (int y = 0; y < copyHeight; y++)
+            {
+                int sourceRgb = ((sourceTop + y) * frameWidth + sourceLeft) * 3;
+                int rowBlock = (y / 8) * blockColumns;
+                int rowInBlock = (y & 7) * 4;
+                for (int x = 0; x < copyWidth; x += 2)
+                {
+                    int rgb0 = sourceRgb + x * 3;
+                    int rgb1 = rgb0 + 3;
+                    int nibble0 = Luma(rgb[rgb0], rgb[rgb0 + 1], rgb[rgb0 + 2]) >> 4;
+                    int nibble1 = Luma(rgb[rgb1], rgb[rgb1 + 1], rgb[rgb1 + 2]) >> 4;
+                    int offset = (rowBlock + x / 8) * 32 + rowInBlock + (x & 7) / 2;
+                    output[offset] = (byte)((nibble0 << 4) | nibble1);
+                }
+            }
+
+            memory.Load(destinationAddress, output);
         }
 
         private static bool WriteEfbDisplayCopy(
@@ -4142,6 +4218,20 @@ public static class GxFifoSoftwareRenderer
             {
                 WriteEfbDisplayCopyDirect(memory, destinationAddress, rgb, frameWidth, sourceLeft, sourceTop, copyWidth, copyHeight, options.Gamma);
                 return true;
+            }
+
+            if (options.VerticalFilterEnabled
+                && options.DestinationWidth == copyWidth
+                && options.DestinationHeight == copyHeight
+                && options.Gamma == 0
+                && IsSonicDisplayFilter(options.VerticalFilter)
+                && sourceLeft >= 0
+                && sourceTop >= 0
+                && sourceLeft + copyWidth <= frameWidth
+                && sourceTop + copyHeight <= frameHeight)
+            {
+                WriteEfbDisplayCopySonicFilter(memory, destinationAddress, rgb, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight);
+                return false;
             }
 
             if (options.VerticalFilterEnabled
@@ -4228,6 +4318,70 @@ public static class GxFifoSoftwareRenderer
 
                 memory.Load(destinationAddress + (uint)(y * row.Length), row);
             }
+        }
+
+        private static bool IsSonicDisplayFilter(int[] filter) =>
+            filter.Length == 7
+            && filter[0] == 8
+            && filter[1] == 8
+            && filter[2] == 10
+            && filter[3] == 12
+            && filter[4] == 10
+            && filter[5] == 8
+            && filter[6] == 8;
+
+        private static void WriteEfbDisplayCopySonicFilter(
+            GameCubeMemory memory,
+            uint destinationAddress,
+            byte[] rgb,
+            int frameWidth,
+            int frameHeight,
+            int sourceLeft,
+            int sourceTop,
+            int width,
+            int height)
+        {
+            int destinationStridePairs = (width + 1) / 2;
+            byte[] row = new byte[destinationStridePairs * 4];
+            Span<int> tapRows = stackalloc int[7];
+            for (int y = 0; y < height; y++)
+            {
+                for (int tap = 0; tap < 7; tap++)
+                {
+                    int tapY = Math.Clamp(sourceTop + y + tap - 3, 0, frameHeight - 1);
+                    tapRows[tap] = (tapY * frameWidth + sourceLeft) * 3;
+                }
+
+                for (int x = 0; x < width; x += 2)
+                {
+                    SampleSonicFilterPixel(rgb, tapRows, x, out byte r0, out byte g0, out byte b0);
+                    SampleSonicFilterPixel(rgb, tapRows, Math.Min(x + 1, width - 1), out byte r1, out byte g1, out byte b1);
+                    RgbToYcbcr(r0, g0, b0, out byte y0, out byte cb0, out byte cr0);
+                    RgbToYcbcr(r1, g1, b1, out byte y1, out byte cb1, out byte cr1);
+                    int rowOffset = (x / 2) * 4;
+                    row[rowOffset] = y0;
+                    row[rowOffset + 1] = (byte)((cb0 + cb1 + 1) / 2);
+                    row[rowOffset + 2] = y1;
+                    row[rowOffset + 3] = (byte)((cr0 + cr1 + 1) / 2);
+                }
+
+                memory.Load(destinationAddress + (uint)(y * row.Length), row);
+            }
+        }
+
+        private static void SampleSonicFilterPixel(byte[] rgb, ReadOnlySpan<int> tapRows, int x, out byte r, out byte g, out byte b)
+        {
+            int xOffset = x * 3;
+            int o0 = tapRows[0] + xOffset;
+            int o1 = tapRows[1] + xOffset;
+            int o2 = tapRows[2] + xOffset;
+            int o3 = tapRows[3] + xOffset;
+            int o4 = tapRows[4] + xOffset;
+            int o5 = tapRows[5] + xOffset;
+            int o6 = tapRows[6] + xOffset;
+            r = (byte)((rgb[o0] * 8 + rgb[o1] * 8 + rgb[o2] * 10 + rgb[o3] * 12 + rgb[o4] * 10 + rgb[o5] * 8 + rgb[o6] * 8 + 32) >> 6);
+            g = (byte)((rgb[o0 + 1] * 8 + rgb[o1 + 1] * 8 + rgb[o2 + 1] * 10 + rgb[o3 + 1] * 12 + rgb[o4 + 1] * 10 + rgb[o5 + 1] * 8 + rgb[o6 + 1] * 8 + 32) >> 6);
+            b = (byte)((rgb[o0 + 2] * 8 + rgb[o1 + 2] * 8 + rgb[o2 + 2] * 10 + rgb[o3 + 2] * 12 + rgb[o4 + 2] * 10 + rgb[o5 + 2] * 8 + rgb[o6 + 2] * 8 + 32) >> 6);
         }
 
         private static void WriteEfbDisplayCopyFilteredNoScale(
