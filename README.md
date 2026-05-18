@@ -18,6 +18,18 @@ Compatibility is not yet "play games." Retail benchmarks are used to drive subsy
 
 See [docs/compatibility.md](docs/compatibility.md) for the current compatibility picture.
 
+## Retail Compatibility Snapshots
+
+These snapshots come from bounded ngcSharp diagnostic runs against user-provided retail images. They document the emulator's current output state; black frames and diagnostic placeholders are expected while GX, VI, interrupt, and boot-flow work is still in progress. No Dolphin captures or commercial game artwork are checked in.
+
+| Wind Waker | Twilight Princess |
+| --- | --- |
+| ![Wind Waker ngcSharp compatibility frame](docs/screenshots/retail-compat/wind-waker.png) | ![Twilight Princess ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/twilight-princess.png) |
+
+| Super Mario Sunshine | ND Demo |
+| --- | --- |
+| ![Super Mario Sunshine ngcSharp compatibility frame](docs/screenshots/retail-compat/super-mario-sunshine.png) | ![ND Demo ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/nd-demo.png) |
+
 ## Repository Layout
 
 ```text

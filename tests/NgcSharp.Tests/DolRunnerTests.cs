@@ -615,6 +615,86 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SunshineByteRunCopyLoopFastForwardStopsWhenCountReachesZero()
+    {
+        const uint pc = 0x802E_B19C;
+        const uint source = 0x8002_1000;
+        const uint destination = 0x8003_1000;
+        const uint smallDataBase = 0x8041_41C0;
+        const uint counterAddress = smallDataBase - 0x5E58;
+        GameCubeBus bus = new();
+        WriteSunshineByteRunCopyLoop(bus.Memory, pc);
+        bus.Memory.Load(source, [0x12, 0x34, 0x56]);
+        bus.Memory.Write32(counterAddress, 0x20);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[5] = 3;
+        state.Gpr[9] = source;
+        state.Gpr[13] = smallDataBase;
+        state.Gpr[30] = destination;
+        state.Gpr[31] = destination + 0x100;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardSunshineByteRunCopyLoop(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(33, skippedInstructions);
+        Assert.Equal(pc + 0x2C, state.Pc);
+        Assert.Equal(0u, state.Gpr[5]);
+        Assert.Equal(source + 3, state.Gpr[9]);
+        Assert.Equal(destination + 3, state.Gpr[30]);
+        Assert.Equal(0x23u, state.Gpr[6]);
+        Assert.Equal(0x23u, bus.Memory.Read32(counterAddress));
+        Assert.Equal(0x12, bus.Memory.Read8(destination));
+        Assert.Equal(0x34, bus.Memory.Read8(destination + 1));
+        Assert.Equal(0x56, bus.Memory.Read8(destination + 2));
+        Assert.Equal(0x2000_0000u, state.Cr & 0xF000_0000);
+        Assert.Equal(0x2000_0000u, state.Xer & 0x2000_0000);
+    }
+
+    [Fact]
+    public void SunshineByteRunCopyLoopFastForwardStopsWhenDestinationReachesEnd()
+    {
+        const uint pc = 0x802E_B19C;
+        const uint source = 0x8002_1000;
+        const uint destination = 0x8003_1000;
+        const uint smallDataBase = 0x8041_41C0;
+        const uint counterAddress = smallDataBase - 0x5E58;
+        GameCubeBus bus = new();
+        WriteSunshineByteRunCopyLoop(bus.Memory, pc);
+        bus.Memory.Load(source, [0x12, 0x34, 0x56]);
+        bus.Memory.Write32(counterAddress, 0x20);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[5] = 5;
+        state.Gpr[9] = source;
+        state.Gpr[13] = smallDataBase;
+        state.Gpr[30] = destination;
+        state.Gpr[31] = destination + 3;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardSunshineByteRunCopyLoop(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(27, skippedInstructions);
+        Assert.Equal(pc + 0x2C, state.Pc);
+        Assert.Equal(3u, state.Gpr[5]);
+        Assert.Equal(source + 2, state.Gpr[9]);
+        Assert.Equal(destination + 3, state.Gpr[30]);
+        Assert.Equal(0x22u, state.Gpr[6]);
+        Assert.Equal(0x22u, bus.Memory.Read32(counterAddress));
+        Assert.Equal(0x12, bus.Memory.Read8(destination));
+        Assert.Equal(0x34, bus.Memory.Read8(destination + 1));
+        Assert.Equal(0x56, bus.Memory.Read8(destination + 2));
+        Assert.Equal(0x2000_0000u, state.Cr & 0xF000_0000);
+        Assert.Equal(0x2000_0000u, state.Xer & 0x2000_0000);
+    }
+
+    [Fact]
     public void StringCompareRoutineFastForwardReturnsZeroForEqualStrings()
     {
         const uint pc = 0x8000_32C0;
@@ -2434,6 +2514,10 @@ public sealed class DolRunnerTests
 
     [Fact] public void WindWakerSchedulerIdleFastForwardUsesDecodedReadyMaskOffset() { const uint pc = 0x8030_7EF4; const uint smallDataBase = 0x803F_E0E0; GameCubeBus bus = CreateIdleFastForwardBus(); bus.SmallDataBaseRegister = smallDataBase; bus.Memory.Write32(pc + 0x00, 0x800D_9950); bus.Memory.Write32(pc + 0x04, 0x2800_0000); bus.Memory.Write32(pc + 0x08, 0x4182_FFF8); bus.Memory.Write32(unchecked((uint)((int)smallDataBase - 26288)), 0); PowerPcState state = new() { Pc = pc, Msr = 0x0000_8000, }; state.Gpr[13] = smallDataBase; state.Spr[22] = 100; bool skipped = InvokeFastForwardIdle(state, bus, out ulong skippedCycles); Assert.True(skipped); Assert.True(skippedCycles > 0); Assert.Equal(pc, state.Pc); Assert.Equal(0u, bus.Memory.Read32(unchecked((uint)((int)smallDataBase - 26288)))); }
 
+    [Fact] public void SunshineFlagWaitFastForwardAdvancesHardwareTime() { const uint pc = 0x8033_759C; const uint predicatePc = 0x8033_7CA0; const uint smallDataBase = 0x8041_41C0; GameCubeBus bus = new(); WriteSunshineFlagWaitLoop(bus.Memory, pc, predicatePc); bus.Memory.Write8(smallDataBase - 0x5AB8, 0); bus.Write16(0xCC00_2030, GameCubeBus.VideoInterruptEnable); PowerPcState state = new() { Pc = pc, Msr = 0x0000_8000, }; state.Gpr[13] = smallDataBase; state.Spr[22] = 1000; bool skipped = InvokeFastForwardSunshineFlagWait(state, bus, out ulong skippedCycles); Assert.True(skipped); Assert.Equal((ulong)GameCubeBus.VideoCyclesPerScanline, skippedCycles); Assert.Equal(pc, state.Pc); Assert.Equal(1000u - (uint)GameCubeBus.VideoCyclesPerScanline, state.Spr[22]); Assert.Equal((ulong)GameCubeBus.VideoCyclesPerScanline, state.TimeBase); }
+
+    [Fact] public void SunshineFlagWaitFastForwardRequiresUnsetFlag() { const uint pc = 0x8033_759C; const uint predicatePc = 0x8033_7CA0; const uint smallDataBase = 0x8041_41C0; GameCubeBus bus = new(); WriteSunshineFlagWaitLoop(bus.Memory, pc, predicatePc); bus.Memory.Write8(smallDataBase - 0x5AB8, 1); bus.Write16(0xCC00_2030, GameCubeBus.VideoInterruptEnable); PowerPcState state = new() { Pc = pc, Msr = 0x0000_8000, }; state.Gpr[13] = smallDataBase; state.Spr[22] = 1000; bool skipped = InvokeFastForwardSunshineFlagWait(state, bus, out ulong skippedCycles); Assert.False(skipped); Assert.Equal(0ul, skippedCycles); Assert.Equal(1000u, state.Spr[22]); }
+
     [Fact] public void ResourceNameTableScanFastForwardStoresMatchingObject() { const uint pc = 0x8002_28F4; const uint table = 0x8005_0000; const uint descriptor = 0x8006_0000; const uint candidate = 0x8007_0000; const uint vtable = 0x8007_1000; const uint targetName = 0x8008_0000; const uint candidateName = 0x8008_0100; GameCubeBus bus = new(); WriteResourceNameTableScan(bus.Memory, pc); bus.Memory.Write16(descriptor, 3); bus.Memory.Write32(descriptor + 4, targetName); bus.Memory.Load(targetName, [(byte)'f', (byte)'o', (byte)'o', 0]); bus.Memory.Load(candidateName, [(byte)'f', (byte)'o', (byte)'o', 0]); bus.Memory.Write32(table + 8, candidate); bus.Memory.Write32(candidate + 0x0C, vtable); bus.Memory.Write32(candidate + 0x1C, candidateName); bus.Memory.Write32(vtable + 0x0C, 0x8024_12BC); PowerPcState state = new() { Pc = pc, }; state.Gpr[23] = 0; state.Gpr[24] = table; state.Gpr[25] = 0; state.Gpr[27] = descriptor; state.Spr[22] = 0xFFFF_F000; bool skipped = InvokeFastForwardResourceNameTableScan(state, bus, out int skippedInstructions); Assert.True(skipped); Assert.True(skippedInstructions > 0); Assert.Equal(pc + 0x5C, state.Pc); Assert.Equal(2u, state.Gpr[23]); Assert.Equal(8u, state.Gpr[25]); Assert.Equal(candidate, state.Gpr[4]); Assert.Equal(candidate, bus.Memory.Read32(table + 12)); }
 
     [Fact] public void ResourceNameTableScanFastForwardRequiresAccessorTarget() { const uint pc = 0x8002_28F4; const uint table = 0x8005_0000; const uint descriptor = 0x8006_0000; const uint candidate = 0x8007_0000; const uint vtable = 0x8007_1000; const uint targetName = 0x8008_0000; const uint candidateName = 0x8008_0100; GameCubeBus bus = new(); WriteResourceNameTableScan(bus.Memory, pc); bus.Memory.Write16(descriptor, 3); bus.Memory.Write32(descriptor + 4, targetName); bus.Memory.Load(targetName, [(byte)'f', (byte)'o', (byte)'o', 0]); bus.Memory.Load(candidateName, [(byte)'f', (byte)'o', (byte)'o', 0]); bus.Memory.Write32(table, candidate); bus.Memory.Write32(candidate + 0x0C, vtable); bus.Memory.Write32(candidate + 0x1C, candidateName); bus.Memory.Write32(vtable + 0x0C, 0x8000_1234); PowerPcState state = new() { Pc = pc, }; state.Gpr[23] = 0; state.Gpr[24] = table; state.Gpr[25] = 0; state.Gpr[27] = descriptor; state.Spr[22] = 0xFFFF_F000; bool skipped = InvokeFastForwardResourceNameTableScan(state, bus, out int skippedInstructions); Assert.False(skipped); Assert.Equal(0, skippedInstructions); Assert.Equal(pc, state.Pc); Assert.Equal(0u, bus.Memory.Read32(table + 12)); }
@@ -2463,6 +2547,16 @@ public sealed class DolRunnerTests
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardPikminHeapWaitLoop", BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("Could not find Pikmin heap wait fast-forward helper.");
+        object?[] args = [state, bus, 0ul];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedCycles = (ulong)args[2]!;
+        return result;
+    }
+
+    private static bool InvokeFastForwardSunshineFlagWait(PowerPcState state, GameCubeBus bus, out ulong skippedCycles)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSunshineFlagWaitLoop", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sunshine flag wait fast-forward helper.");
         object?[] args = [state, bus, 0ul];
         bool result = (bool)method.Invoke(null, args)!;
         skippedCycles = (ulong)args[2]!;
@@ -2590,6 +2684,16 @@ public sealed class DolRunnerTests
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardNullTerminatedByteScanLoop", BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("Could not find null-terminated byte-scan fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
+    private static bool InvokeFastForwardSunshineByteRunCopyLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSunshineByteRunCopyLoop", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sunshine byte-run copy fast-forward helper.");
         object?[] args = [state, bus, 0];
         bool result = (bool)method.Invoke(null, args)!;
         skippedInstructions = (int)args[2]!;
@@ -2899,6 +3003,35 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x08, 0x2800_0000);
         WriteInstruction(memory, pc + 0x0C, 0x4082_FFF4);
         WriteInstruction(memory, pc + 0x10, 0x4E80_0020);
+    }
+
+    private static void WriteSunshineByteRunCopyLoop(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x88C9_0000);
+        WriteInstruction(memory, pc + 0x04, 0x98DE_0000);
+        WriteInstruction(memory, pc + 0x08, 0x3BDE_0001);
+        WriteInstruction(memory, pc + 0x0C, 0x7C1E_F840);
+        WriteInstruction(memory, pc + 0x10, 0x4182_001C);
+        WriteInstruction(memory, pc + 0x14, 0x80CD_A1A8);
+        WriteInstruction(memory, pc + 0x18, 0x34A5_FFFF);
+        WriteInstruction(memory, pc + 0x1C, 0x3929_0001);
+        WriteInstruction(memory, pc + 0x20, 0x38C6_0001);
+        WriteInstruction(memory, pc + 0x24, 0x90CD_A1A8);
+        WriteInstruction(memory, pc + 0x28, 0x4082_FFD8);
+    }
+
+    private static void WriteSunshineFlagWaitLoop(GameCubeMemory memory, uint waitPc, uint predicatePc)
+    {
+        WriteInstruction(memory, waitPc + 0x00, 0x4800_0705);
+        WriteInstruction(memory, waitPc + 0x04, 0x2C03_0000);
+        WriteInstruction(memory, waitPc + 0x08, 0x4182_FFF8);
+        WriteInstruction(memory, predicatePc + 0x00, 0x880D_A548);
+        WriteInstruction(memory, predicatePc + 0x04, 0x2800_0001);
+        WriteInstruction(memory, predicatePc + 0x08, 0x4182_000C);
+        WriteInstruction(memory, predicatePc + 0x0C, 0x3860_0000);
+        WriteInstruction(memory, predicatePc + 0x10, 0x4E80_0020);
+        WriteInstruction(memory, predicatePc + 0x14, 0x3860_0001);
+        WriteInstruction(memory, predicatePc + 0x18, 0x4E80_0020);
     }
 
     private static void WriteStringCompareRoutine(GameCubeMemory memory, uint pc)
