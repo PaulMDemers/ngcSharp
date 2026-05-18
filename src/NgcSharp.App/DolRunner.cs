@@ -552,6 +552,17 @@ public sealed class DolRunner
                                 sourceSelectionMs = gxFrameDump.Timings.SourceSelectionMs,
                                 pngWriteMs = gxFrameDump.Timings.PngWriteMs,
                             },
+                            fastPathStats = gxFrameDump.FastPathStats is null ? null : new
+                            {
+                                singleStageTevFastTriangles = gxFrameDump.FastPathStats.SingleStageTevFastTriangles,
+                                singleStageTevFastPixels = gxFrameDump.FastPathStats.SingleStageTevFastPixels,
+                                directTextureSamplerTriangles = gxFrameDump.FastPathStats.DirectTextureSamplerTriangles,
+                                directTextureSamplerPixels = gxFrameDump.FastPathStats.DirectTextureSamplerPixels,
+                                genericTevPixels = gxFrameDump.FastPathStats.GenericTevPixels,
+                                legacyTextureFallbackPixels = gxFrameDump.FastPathStats.LegacyTextureFallbackPixels,
+                                directTextureFormats = gxFrameDump.FastPathStats.DirectTextureFormats,
+                                textureSamplerFallbacks = gxFrameDump.FastPathStats.TextureSamplerFallbacks,
+                            },
                         },
                     },
                     fastForward = new

@@ -68,6 +68,19 @@ public sealed class GxMemorySnapshotSet
         return false;
     }
 
+    public bool TryGetRange(int fifoOffset, uint address, int length, out byte[] bytes, out int offset)
+    {
+        if (length > 0 && TryFindSnapshot(fifoOffset, address, length, out GxMemorySnapshot? snapshot, out offset))
+        {
+            bytes = snapshot.Bytes;
+            return true;
+        }
+
+        bytes = [];
+        offset = 0;
+        return false;
+    }
+
     public string DescribeSource(int fifoOffset, uint address, int length)
     {
         return length > 0 && TryFindSnapshot(fifoOffset, address, length, out GxMemorySnapshot? snapshot, out _)
