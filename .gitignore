@@ -8,3 +8,10 @@ TestResults/
 /.dotnet
 /dolphin-2603a-x64
 *.rvz
+*.iso
+*.gcm
+*.gcz
+*.ciso
+*.nkit.iso
+*.wad
+*.raw
