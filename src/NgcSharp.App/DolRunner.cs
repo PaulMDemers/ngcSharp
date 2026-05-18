@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using NgcSharp.Core;
 using NgcSharp.Cpu;
@@ -56,6 +57,7 @@ public sealed class DolRunner
 
     private int Run(DolFile dol, RunDolOptions options, GameCubeBus bus, Action<DolRunStep>? stepObserver, bool prepareStandaloneBoot)
     {
+        Stopwatch totalStopwatch = Stopwatch.StartNew();
         dol.LoadInto(bus.Memory);
         bus.ExternalInterfaceMemoryCardSlotAInserted = options.MemoryCardSlotAInserted;
         bus.ExternalInterfaceMemoryCardSlotBInserted = options.MemoryCardSlotBInserted;
@@ -366,8 +368,38 @@ public sealed class DolRunner
             return executed >= options.MaxInstructions ? "max-instructions" : "completed";
         }
 
+        GxFifoSoftwareRenderResult? gxFrameDump = null;
+        Stopwatch emulationStopwatch = new();
+        double memoryFindMilliseconds = 0;
+        double pointerTableDumpMilliseconds = 0;
+        double gxMemorySnapshotMilliseconds = 0;
+        double gxFrameDumpMilliseconds = 0;
+        double gxFrameSweepMilliseconds = 0;
+        double frameDumpMilliseconds = 0;
+        double gxDrawDumpMilliseconds = 0;
+        double gxCopyDumpMilliseconds = 0;
+        double gxCoverageDumpMilliseconds = 0;
+        double gxTevSampleDumpMilliseconds = 0;
+        double gxTextureDumpMilliseconds = 0;
+        double registerDumpMilliseconds = 0;
+        double mmioDumpMilliseconds = 0;
+        double threadDumpMilliseconds = 0;
+        double messageQueueDumpMilliseconds = 0;
+        double pcProfileMilliseconds = 0;
+        double indirectCallProfileMilliseconds = 0;
+        double memoryDumpMilliseconds = 0;
+
+        void StopEmulationTimer()
+        {
+            if (emulationStopwatch.IsRunning)
+            {
+                emulationStopwatch.Stop();
+            }
+        }
+
         void WriteRunSummary(int exitCode, string? stopReasonOverride = null, string? diagnosticFailure = null, string? exceptionType = null, uint? exceptionAddress = null, uint? exceptionInstruction = null)
         {
+            StopEmulationTimer();
             if (options.RunSummaryPath is null)
             {
                 return;
@@ -383,6 +415,27 @@ public sealed class DolRunner
                 }
 
                 uint summaryInstruction = exceptionInstruction ?? currentInstruction;
+                double totalMilliseconds = totalStopwatch.Elapsed.TotalMilliseconds;
+                double emulationMilliseconds = emulationStopwatch.Elapsed.TotalMilliseconds;
+                double measuredDiagnosticMilliseconds =
+                    memoryFindMilliseconds
+                    + pointerTableDumpMilliseconds
+                    + gxMemorySnapshotMilliseconds
+                    + gxFrameDumpMilliseconds
+                    + gxFrameSweepMilliseconds
+                    + frameDumpMilliseconds
+                    + gxDrawDumpMilliseconds
+                    + gxCopyDumpMilliseconds
+                    + gxCoverageDumpMilliseconds
+                    + gxTevSampleDumpMilliseconds
+                    + gxTextureDumpMilliseconds
+                    + registerDumpMilliseconds
+                    + mmioDumpMilliseconds
+                    + threadDumpMilliseconds
+                    + messageQueueDumpMilliseconds
+                    + pcProfileMilliseconds
+                    + indirectCallProfileMilliseconds
+                    + memoryDumpMilliseconds;
                 object summary = new
                 {
                     schema = "ngcsharp.run-summary.v1",
@@ -403,6 +456,31 @@ public sealed class DolRunner
                     lastPc = $"0x{currentPc:X8}",
                     lastInstruction = $"0x{summaryInstruction:X8}",
                     lastDisassembly = summaryInstruction == 0 ? null : PowerPcDisassembler.Disassemble(summaryInstruction),
+                    timings = new
+                    {
+                        totalMs = RoundMilliseconds(totalMilliseconds),
+                        emulationMs = RoundMilliseconds(emulationMilliseconds),
+                        postEmulationMs = RoundMilliseconds(Math.Max(0, totalMilliseconds - emulationMilliseconds)),
+                        measuredDiagnosticsMs = RoundMilliseconds(measuredDiagnosticMilliseconds),
+                        memoryFindMs = RoundMilliseconds(memoryFindMilliseconds),
+                        pointerTableDumpMs = RoundMilliseconds(pointerTableDumpMilliseconds),
+                        gxMemorySnapshotMs = RoundMilliseconds(gxMemorySnapshotMilliseconds),
+                        gxFrameDumpMs = RoundMilliseconds(gxFrameDumpMilliseconds),
+                        gxFrameSweepMs = RoundMilliseconds(gxFrameSweepMilliseconds),
+                        frameDumpMs = RoundMilliseconds(frameDumpMilliseconds),
+                        gxDrawDumpMs = RoundMilliseconds(gxDrawDumpMilliseconds),
+                        gxCopyDumpMs = RoundMilliseconds(gxCopyDumpMilliseconds),
+                        gxCoverageDumpMs = RoundMilliseconds(gxCoverageDumpMilliseconds),
+                        gxTevSampleDumpMs = RoundMilliseconds(gxTevSampleDumpMilliseconds),
+                        gxTextureDumpMs = RoundMilliseconds(gxTextureDumpMilliseconds),
+                        registerDumpMs = RoundMilliseconds(registerDumpMilliseconds),
+                        mmioDumpMs = RoundMilliseconds(mmioDumpMilliseconds),
+                        threadDumpMs = RoundMilliseconds(threadDumpMilliseconds),
+                        messageQueueDumpMs = RoundMilliseconds(messageQueueDumpMilliseconds),
+                        pcProfileMs = RoundMilliseconds(pcProfileMilliseconds),
+                        indirectCallProfileMs = RoundMilliseconds(indirectCallProfileMilliseconds),
+                        memoryDumpMs = RoundMilliseconds(memoryDumpMilliseconds),
+                    },
                     registers = new
                     {
                         lr = $"0x{state.Lr:X8}",
@@ -436,6 +514,39 @@ public sealed class DolRunner
                         memoryCheckpointsWritten = gxMemoryCheckpointsWritten,
                         autoTextureSnapshots = gxTextureSnapshotCollector?.Snapshots.Count ?? 0,
                         autoTextureSnapshotDrawsSeen = gxTextureSnapshotCollector?.DrawsSeen ?? 0,
+                        frameDump = gxFrameDump is null ? null : new
+                        {
+                            path = gxFrameDump.Path,
+                            width = gxFrameDump.Width,
+                            height = gxFrameDump.Height,
+                            parsedDraws = gxFrameDump.Draws,
+                            renderedQuads = gxFrameDump.RenderedQuads,
+                            renderedTriangles = gxFrameDump.RenderedTriangles,
+                            degenerateQuads = gxFrameDump.DegenerateQuads,
+                            degenerateTriangles = gxFrameDump.DegenerateTriangles,
+                            source = FormatGxFrameSourceSlug(gxFrameDump.Source),
+                            sourceAddress = gxFrameDump.SourceAddress is uint frameAddress ? $"0x{frameAddress:X8}" : null,
+                            sourceFormat = gxFrameDump.SourceFormat?.ToString(),
+                            sourceCopyIndex = gxFrameDump.SourceCopyIndex,
+                            rasterBudgetExhausted = gxFrameDump.RasterBudgetExhausted,
+                            timings = gxFrameDump.Timings is null ? null : new
+                            {
+                                totalMs = gxFrameDump.Timings.TotalMs,
+                                fifoExpansionMs = gxFrameDump.Timings.FifoExpansionMs,
+                                bufferInitMs = gxFrameDump.Timings.BufferInitMs,
+                                viResolveMs = gxFrameDump.Timings.ViResolveMs,
+                                replayMs = gxFrameDump.Timings.ReplayMs,
+                                registerWriteMs = gxFrameDump.Timings.RegisterWriteMs,
+                                vertexDecodeMs = gxFrameDump.Timings.VertexDecodeMs,
+                                rasterizeMs = gxFrameDump.Timings.RasterizeMs,
+                                efbCoverageMs = gxFrameDump.Timings.EfbCoverageMs,
+                                efbCopyMs = gxFrameDump.Timings.EfbCopyMs,
+                                sourceCaptureMs = gxFrameDump.Timings.SourceCaptureMs,
+                                displayCaptureMs = gxFrameDump.Timings.DisplayCaptureMs,
+                                sourceSelectionMs = gxFrameDump.Timings.SourceSelectionMs,
+                                pngWriteMs = gxFrameDump.Timings.PngWriteMs,
+                            },
+                        },
                     },
                     fastForward = new
                     {
@@ -473,6 +584,7 @@ public sealed class DolRunner
         }
 
         stepObserver?.Invoke(new DolRunStep(0, state.Pc, 0, state, bus, IsInitial: true));
+        emulationStopwatch.Start();
 
         try
         {
@@ -979,6 +1091,7 @@ public sealed class DolRunner
         }
         catch (UnsupportedInstructionException ex)
         {
+            StopEmulationTimer();
             stepObserver?.Invoke(new DolRunStep(executed, state.Pc, ex.Instruction, state, bus, IsFinal: true));
             _error.WriteLine($"Stopped after {executed} instructions: unsupported instruction 0x{ex.Instruction:X8} at 0x{ex.Address:X8} ({PowerPcDisassembler.Disassemble(ex.Instruction)}).");
             bus.MainRamWrite32Observer = previousWriteObserver;
@@ -987,36 +1100,51 @@ public sealed class DolRunner
             bus.Memory.MainRamBulkWriteObserver = previousBulkWriteObserver;
             bus.MmioAccessObserver = previousMmioObserver;
             WriteTraceTail(traceTail, _error);
+            Stopwatch memoryFindStopwatch = Stopwatch.StartNew();
             WriteRequestedMemoryFinds(options, bus, _error);
+            memoryFindMilliseconds += StopAndGetMilliseconds(memoryFindStopwatch);
+            Stopwatch pointerTableDumpStopwatch = Stopwatch.StartNew();
             WriteRequestedPointerTableDumps(options, bus, _error);
+            pointerTableDumpMilliseconds += StopAndGetMilliseconds(pointerTableDumpStopwatch);
 
             if (options.DumpRegisters)
             {
+                Stopwatch registerDumpStopwatch = Stopwatch.StartNew();
                 ConsoleFormatting.WriteRegisters(_error, state);
+                registerDumpMilliseconds += StopAndGetMilliseconds(registerDumpStopwatch);
             }
 
             if (options.DumpMmio)
             {
+                Stopwatch mmioDumpStopwatch = Stopwatch.StartNew();
                 ConsoleFormatting.WriteMmioSummary(_error, bus.MmioAccesses);
+                mmioDumpMilliseconds += StopAndGetMilliseconds(mmioDumpStopwatch);
             }
 
             if (options.DumpThreads)
             {
+                Stopwatch threadDumpStopwatch = Stopwatch.StartNew();
                 ConsoleFormatting.WriteThreadSummary(_error, bus.Memory);
+                threadDumpMilliseconds += StopAndGetMilliseconds(threadDumpStopwatch);
             }
 
             if (options.DumpMessageQueues)
             {
+                Stopwatch messageQueueDumpStopwatch = Stopwatch.StartNew();
                 ConsoleFormatting.WriteMessageQueueSummary(_error, bus.Memory);
+                messageQueueDumpMilliseconds += StopAndGetMilliseconds(messageQueueDumpStopwatch);
             }
 
+            Stopwatch memoryDumpStopwatch = Stopwatch.StartNew();
             WriteRequestedMemoryDumps(options, bus, _error);
+            memoryDumpMilliseconds += StopAndGetMilliseconds(memoryDumpStopwatch);
 
             WriteRunSummary(2, stopReasonOverride: "unsupported-instruction", exceptionType: nameof(UnsupportedInstructionException), exceptionAddress: ex.Address, exceptionInstruction: ex.Instruction);
             return 2;
         }
         catch (AddressTranslationException ex)
         {
+            StopEmulationTimer();
             stepObserver?.Invoke(new DolRunStep(executed, state.Pc, 0, state, bus, IsFinal: true));
             _error.WriteLine($"Stopped after {executed} instructions: unmapped memory access at 0x{ex.Address:X8}.");
             bus.MainRamWrite32Observer = previousWriteObserver;
@@ -1025,35 +1153,50 @@ public sealed class DolRunner
             bus.Memory.MainRamBulkWriteObserver = previousBulkWriteObserver;
             bus.MmioAccessObserver = previousMmioObserver;
             WriteTraceTail(traceTail, _error);
+            Stopwatch memoryFindStopwatch = Stopwatch.StartNew();
             WriteRequestedMemoryFinds(options, bus, _error);
+            memoryFindMilliseconds += StopAndGetMilliseconds(memoryFindStopwatch);
+            Stopwatch pointerTableDumpStopwatch = Stopwatch.StartNew();
             WriteRequestedPointerTableDumps(options, bus, _error);
+            pointerTableDumpMilliseconds += StopAndGetMilliseconds(pointerTableDumpStopwatch);
 
             if (options.DumpRegisters)
             {
+                Stopwatch registerDumpStopwatch = Stopwatch.StartNew();
                 ConsoleFormatting.WriteRegisters(_error, state);
+                registerDumpMilliseconds += StopAndGetMilliseconds(registerDumpStopwatch);
             }
 
             if (options.DumpMmio)
             {
+                Stopwatch mmioDumpStopwatch = Stopwatch.StartNew();
                 ConsoleFormatting.WriteMmioSummary(_error, bus.MmioAccesses);
+                mmioDumpMilliseconds += StopAndGetMilliseconds(mmioDumpStopwatch);
             }
 
             if (options.DumpThreads)
             {
+                Stopwatch threadDumpStopwatch = Stopwatch.StartNew();
                 ConsoleFormatting.WriteThreadSummary(_error, bus.Memory);
+                threadDumpMilliseconds += StopAndGetMilliseconds(threadDumpStopwatch);
             }
 
             if (options.DumpMessageQueues)
             {
+                Stopwatch messageQueueDumpStopwatch = Stopwatch.StartNew();
                 ConsoleFormatting.WriteMessageQueueSummary(_error, bus.Memory);
+                messageQueueDumpMilliseconds += StopAndGetMilliseconds(messageQueueDumpStopwatch);
             }
 
+            Stopwatch memoryDumpStopwatch = Stopwatch.StartNew();
             WriteRequestedMemoryDumps(options, bus, _error);
+            memoryDumpMilliseconds += StopAndGetMilliseconds(memoryDumpStopwatch);
 
             WriteRunSummary(4, stopReasonOverride: "address-translation", exceptionType: nameof(AddressTranslationException), exceptionAddress: ex.Address);
             return 4;
         }
 
+        StopEmulationTimer();
         bus.MainRamWrite32Observer = previousWriteObserver;
         bus.MainRamWriteObserver = previousWriteAnyObserver;
         bus.Memory.MainRamStoreObserver = previousMemoryStoreObserver;
@@ -1062,8 +1205,12 @@ public sealed class DolRunner
         stepObserver?.Invoke(new DolRunStep(executed, state.Pc, 0, state, bus, IsFinal: true));
 
         WriteTraceTail(traceTail, _output);
+        Stopwatch normalMemoryFindStopwatch = Stopwatch.StartNew();
         WriteRequestedMemoryFinds(options, bus, _output);
+        memoryFindMilliseconds += StopAndGetMilliseconds(normalMemoryFindStopwatch);
+        Stopwatch normalPointerTableDumpStopwatch = Stopwatch.StartNew();
         WriteRequestedPointerTableDumps(options, bus, _output);
+        pointerTableDumpMilliseconds += StopAndGetMilliseconds(normalPointerTableDumpStopwatch);
 
         if (!options.Quiet)
         {
@@ -1214,20 +1361,25 @@ public sealed class DolRunner
             }
         }
 
+        Stopwatch gxMemorySnapshotStopwatch = Stopwatch.StartNew();
         GxMemorySnapshotSet? gxMemorySnapshots = BuildGxMemorySnapshotSet(gxMemoryCheckpoints, gxTextureSnapshotCollector?.Snapshots);
+        gxMemorySnapshotMilliseconds += StopAndGetMilliseconds(gxMemorySnapshotStopwatch);
 
         if (options.GxFrameDumpPath is not null)
         {
+            Stopwatch gxFrameDumpStopwatch = Stopwatch.StartNew();
             int gxWidth = options.FrameWidth ?? 640;
             int gxHeight = options.FrameHeight ?? 480;
             int gxFrameMaxDraws = options.GxFrameMaxDraws ?? RunDolOptions.DefaultGxFrameMaxDraws;
             int gxFrameMaxRasterPixels = options.GxFrameMaxRasterPixels ?? RunDolOptions.DefaultGxFrameMaxRasterPixels;
             if (!GxFifoSoftwareRenderer.TryRender(bus.MmioAccesses, bus.Memory, options.GxFrameDumpPath, gxWidth, gxHeight, gxFrameMaxDraws, options.GxFrameSkipDraws, stopAfterMaxDraws: true, maxRasterizedPixels: gxFrameMaxRasterPixels, ignoreEfbCopyClear: options.GxFrameIgnoreEfbCopyClear, source: options.GxFrameSource, displayCopyIndex: options.GxFrameCopyIndex, out GxFifoSoftwareRenderResult? gxFrame, out string? gxFrameError, memorySnapshots: gxMemorySnapshots))
             {
+                gxFrameDumpMilliseconds += StopAndGetMilliseconds(gxFrameDumpStopwatch);
                 _error.WriteLine($"GX frame dump failed: {gxFrameError}");
                 WriteRunSummary(3, diagnosticFailure: $"gx-frame-dump: {gxFrameError}");
                 return 3;
             }
+            gxFrameDump = gxFrame;
 
             if (!options.Quiet)
             {
@@ -1239,18 +1391,28 @@ public sealed class DolRunner
                 string rasterState = gxFrame.RasterBudgetExhausted ? "exhausted" : "retained";
                 _output.WriteLine($"Wrote {gxFrame.Width}x{gxFrame.Height} GX diagnostic frame from {source} to {gxFrame.Path} ({gxFrame.Draws} draw(s) parsed{skipped}, capped at {gxFrameMaxDraws}, raster budget {gxFrameMaxRasterPixels} {rasterState}, {gxFrame.RenderedQuads} rendered quad(s), {gxFrame.RenderedTriangles} rendered triangle(s), {gxFrame.DegenerateQuads} degenerate quad(s), {gxFrame.DegenerateTriangles} degenerate triangle(s)).");
             }
+
+            gxFrameDumpMilliseconds += StopAndGetMilliseconds(gxFrameDumpStopwatch);
         }
 
-        if (options.GxFrameSweep is not null && WriteGxFrameSweep(bus, options, gxMemorySnapshots) != 0)
+        if (options.GxFrameSweep is not null)
         {
-            WriteRunSummary(3, diagnosticFailure: "gx-frame-sweep");
-            return 3;
+            Stopwatch gxFrameSweepStopwatch = Stopwatch.StartNew();
+            int gxFrameSweepResult = WriteGxFrameSweep(bus, options, gxMemorySnapshots);
+            gxFrameSweepMilliseconds += StopAndGetMilliseconds(gxFrameSweepStopwatch);
+            if (gxFrameSweepResult != 0)
+            {
+                WriteRunSummary(3, diagnosticFailure: "gx-frame-sweep");
+                return 3;
+            }
         }
 
         if (options.FrameDumpPath is not null)
         {
+            Stopwatch frameDumpStopwatch = Stopwatch.StartNew();
             if (!FramebufferDumper.TryDump(bus, options, out FramebufferDumpResult? frameDump, out string? frameDumpError))
             {
+                frameDumpMilliseconds += StopAndGetMilliseconds(frameDumpStopwatch);
                 _error.WriteLine($"Frame dump failed: {frameDumpError}");
                 WriteRunSummary(3, diagnosticFailure: $"frame-dump: {frameDumpError}");
                 return 3;
@@ -1260,12 +1422,16 @@ public sealed class DolRunner
             {
                 _output.WriteLine($"Wrote {frameDump!.Width}x{frameDump.Height} {frameDump.Format} frame from 0x{frameDump.Address:X8} to {frameDump.Path}.");
             }
+
+            frameDumpMilliseconds += StopAndGetMilliseconds(frameDumpStopwatch);
         }
 
         if (options.GxDrawDumpPath is not null)
         {
+            Stopwatch gxDrawDumpStopwatch = Stopwatch.StartNew();
             if (!GxFifoSoftwareRenderer.TryWriteDrawDiagnostics(bus.MmioAccesses, bus.Memory, options.GxDrawDumpPath, options.GxDrawSkipDraws, options.GxDrawMaxDraws, out GxFifoDrawDiagnosticResult? gxDraws, out string? gxDrawError))
             {
+                gxDrawDumpMilliseconds += StopAndGetMilliseconds(gxDrawDumpStopwatch);
                 _error.WriteLine($"GX draw dump failed: {gxDrawError}");
                 WriteRunSummary(3, diagnosticFailure: $"gx-draw-dump: {gxDrawError}");
                 return 3;
@@ -1276,15 +1442,19 @@ public sealed class DolRunner
                 string skipped = options.GxDrawSkipDraws == 0 ? string.Empty : $" after skipping {options.GxDrawSkipDraws} draw(s)";
                 _output.WriteLine($"Wrote GX draw diagnostics for {gxDraws!.DrawsWritten} draw(s){skipped} to {gxDraws.Path}.");
             }
+
+            gxDrawDumpMilliseconds += StopAndGetMilliseconds(gxDrawDumpStopwatch);
         }
 
         if (options.GxCopyDumpPath is not null)
         {
+            Stopwatch gxCopyDumpStopwatch = Stopwatch.StartNew();
             int gxWidth = options.FrameWidth ?? 640;
             int gxHeight = options.FrameHeight ?? 480;
             int gxFrameMaxRasterPixels = options.GxFrameMaxRasterPixels ?? RunDolOptions.DefaultGxFrameMaxRasterPixels;
             if (!GxFifoSoftwareRenderer.TryWriteCopyDiagnostics(bus.MmioAccesses, bus.Memory, options.GxCopyDumpPath, gxWidth, gxHeight, gxFrameMaxRasterPixels, options.GxFrameIgnoreEfbCopyClear, out GxFifoCopyDiagnosticResult? gxCopies, out string? gxCopyError))
             {
+                gxCopyDumpMilliseconds += StopAndGetMilliseconds(gxCopyDumpStopwatch);
                 _error.WriteLine($"GX copy dump failed: {gxCopyError}");
                 WriteRunSummary(3, diagnosticFailure: $"gx-copy-dump: {gxCopyError}");
                 return 3;
@@ -1295,16 +1465,20 @@ public sealed class DolRunner
                 string rasterState = gxCopies!.RasterBudgetExhausted ? "raster budget exhausted" : "raster budget retained";
                 _output.WriteLine($"Wrote {gxCopies.CopiesWritten} GX copy diagnostic event(s) after {gxCopies.TotalDraws} draw(s) to {gxCopies.Path} ({rasterState}).");
             }
+
+            gxCopyDumpMilliseconds += StopAndGetMilliseconds(gxCopyDumpStopwatch);
         }
 
         if (options.GxCoverageDumpPath is not null)
         {
+            Stopwatch gxCoverageDumpStopwatch = Stopwatch.StartNew();
             int gxWidth = options.FrameWidth ?? 640;
             int gxHeight = options.FrameHeight ?? 480;
             int gxFrameMaxDraws = options.GxFrameMaxDraws ?? RunDolOptions.DefaultGxFrameMaxDraws;
             int gxFrameMaxRasterPixels = options.GxFrameMaxRasterPixels ?? RunDolOptions.DefaultGxFrameMaxRasterPixels;
             if (!GxFifoSoftwareRenderer.TryWriteDrawCoverageDiagnostics(bus.MmioAccesses, bus.Memory, options.GxCoverageDumpPath, gxWidth, gxHeight, gxFrameMaxRasterPixels, options.GxFrameIgnoreEfbCopyClear, options.GxFrameSkipDraws, gxFrameMaxDraws, out GxFifoCoverageDiagnosticResult? gxCoverage, out string? gxCoverageError))
             {
+                gxCoverageDumpMilliseconds += StopAndGetMilliseconds(gxCoverageDumpStopwatch);
                 _error.WriteLine($"GX coverage dump failed: {gxCoverageError}");
                 WriteRunSummary(3, diagnosticFailure: $"gx-coverage-dump: {gxCoverageError}");
                 return 3;
@@ -1316,12 +1490,16 @@ public sealed class DolRunner
                 string skipped = options.GxFrameSkipDraws == 0 ? string.Empty : $" after skipping {options.GxFrameSkipDraws} draw(s)";
                 _output.WriteLine($"Wrote GX coverage diagnostics for {gxCoverage.DrawsWritten} draw(s){skipped} and {gxCoverage.CopiesSeen} copy event(s) to {gxCoverage.Path} ({rasterState}).");
             }
+
+            gxCoverageDumpMilliseconds += StopAndGetMilliseconds(gxCoverageDumpStopwatch);
         }
 
         if (options.GxTevSampleDumpPath is not null)
         {
+            Stopwatch gxTevSampleDumpStopwatch = Stopwatch.StartNew();
             if (!GxFifoSoftwareRenderer.TryWriteTevSampleDiagnostics(bus.MmioAccesses, bus.Memory, options.GxTevSampleDumpPath, options.GxDrawSkipDraws, options.GxDrawMaxDraws, out GxFifoTevSampleDiagnosticResult? gxTevSamples, out string? gxTevSampleError))
             {
+                gxTevSampleDumpMilliseconds += StopAndGetMilliseconds(gxTevSampleDumpStopwatch);
                 _error.WriteLine($"GX TEV sample dump failed: {gxTevSampleError}");
                 WriteRunSummary(3, diagnosticFailure: $"gx-tev-sample-dump: {gxTevSampleError}");
                 return 3;
@@ -1332,12 +1510,16 @@ public sealed class DolRunner
                 string skipped = options.GxDrawSkipDraws == 0 ? string.Empty : $" after skipping {options.GxDrawSkipDraws} draw(s)";
                 _output.WriteLine($"Wrote {gxTevSamples!.SamplesWritten} GX TEV sample(s){skipped} after {gxTevSamples.TotalDraws} draw(s) and {gxTevSamples.CopiesSeen} copy event(s) to {gxTevSamples.Path}.");
             }
+
+            gxTevSampleDumpMilliseconds += StopAndGetMilliseconds(gxTevSampleDumpStopwatch);
         }
 
         if (options.GxTextureDumpPath is not null)
         {
+            Stopwatch gxTextureDumpStopwatch = Stopwatch.StartNew();
             if (!GxFifoSoftwareRenderer.TryWriteTextureDiagnostics(bus.MmioAccesses, bus.Memory, options.GxTextureDumpPath, options.GxDrawSkipDraws, options.GxDrawMaxDraws, out GxFifoTextureDiagnosticResult? gxTextures, out string? gxTextureError, memorySnapshots: gxMemorySnapshots))
             {
+                gxTextureDumpMilliseconds += StopAndGetMilliseconds(gxTextureDumpStopwatch);
                 _error.WriteLine($"GX texture dump failed: {gxTextureError}");
                 WriteRunSummary(3, diagnosticFailure: $"gx-texture-dump: {gxTextureError}");
                 return 3;
@@ -1348,41 +1530,57 @@ public sealed class DolRunner
                 string skipped = options.GxDrawSkipDraws == 0 ? string.Empty : $" after skipping {options.GxDrawSkipDraws} draw(s)";
                 _output.WriteLine($"Wrote {gxTextures!.TexturesWritten} GX texture dump(s){skipped} after {gxTextures.TotalDraws} draw(s) and {gxTextures.CopiesSeen} copy event(s) to {gxTextures.DirectoryPath} (index {gxTextures.IndexPath}).");
             }
+
+            gxTextureDumpMilliseconds += StopAndGetMilliseconds(gxTextureDumpStopwatch);
         }
 
         if (options.DumpRegisters)
         {
+            Stopwatch registerDumpStopwatch = Stopwatch.StartNew();
             ConsoleFormatting.WriteRegisters(_output, state);
+            registerDumpMilliseconds += StopAndGetMilliseconds(registerDumpStopwatch);
         }
 
         if (options.DumpMmio)
         {
+            Stopwatch mmioDumpStopwatch = Stopwatch.StartNew();
             ConsoleFormatting.WriteMmioSummary(_output, bus.MmioAccesses);
+            mmioDumpMilliseconds += StopAndGetMilliseconds(mmioDumpStopwatch);
         }
 
         if (options.DumpThreads)
         {
+            Stopwatch threadDumpStopwatch = Stopwatch.StartNew();
             ConsoleFormatting.WriteThreadSummary(_output, bus.Memory);
+            threadDumpMilliseconds += StopAndGetMilliseconds(threadDumpStopwatch);
         }
 
         if (options.DumpMessageQueues)
         {
+            Stopwatch messageQueueDumpStopwatch = Stopwatch.StartNew();
             ConsoleFormatting.WriteMessageQueueSummary(_output, bus.Memory);
+            messageQueueDumpMilliseconds += StopAndGetMilliseconds(messageQueueDumpStopwatch);
         }
 
         if (options.PcProfileTop is int pcProfileTop && pcProfile is not null)
         {
+            Stopwatch pcProfileStopwatch = Stopwatch.StartNew();
             ConsoleFormatting.WritePcProfile(_output, pcProfile, pcProfileTop, executed);
+            pcProfileMilliseconds += StopAndGetMilliseconds(pcProfileStopwatch);
         }
 
         if (options.IndirectCallSiteProfileAddress is uint profiledCallSite
             && options.IndirectCallSiteProfileTop is int indirectCallSiteProfileTop
             && indirectCallSiteProfile is not null)
         {
+            Stopwatch indirectCallProfileStopwatch = Stopwatch.StartNew();
             WriteIndirectCallSiteProfile(_output, profiledCallSite, indirectCallSiteProfile, indirectCallSiteProfileTop);
+            indirectCallProfileMilliseconds += StopAndGetMilliseconds(indirectCallProfileStopwatch);
         }
 
+        Stopwatch finalMemoryDumpStopwatch = Stopwatch.StartNew();
         WriteRequestedMemoryDumps(options, bus, _output);
+        memoryDumpMilliseconds += StopAndGetMilliseconds(finalMemoryDumpStopwatch);
 
         WriteRunSummary(0);
         return 0;
@@ -1403,6 +1601,17 @@ public sealed class DolRunner
         }
 
         return new StreamWriter(File.Create(fullPath));
+    }
+
+    private static double StopAndGetMilliseconds(Stopwatch stopwatch)
+    {
+        stopwatch.Stop();
+        return stopwatch.Elapsed.TotalMilliseconds;
+    }
+
+    private static double RoundMilliseconds(double milliseconds)
+    {
+        return Math.Round(milliseconds, 3);
     }
 
     private int WriteGxFrameSweep(GameCubeBus bus, RunDolOptions options, GxMemorySnapshotSet? gxMemorySnapshots)
@@ -5994,6 +6203,21 @@ public sealed class DolRunner
             GxFrameDumpSource.CopyIndex => "display copy",
             GxFrameDumpSource.CopySourceIndex => "EFB copy source",
             _ => "EFB",
+        };
+
+    private static string FormatGxFrameSourceSlug(GxFrameDumpSource source) =>
+        source switch
+        {
+            GxFrameDumpSource.Auto => "auto",
+            GxFrameDumpSource.LastDisplayCopy => "last-display-copy",
+            GxFrameDumpSource.LastNonBlackDisplayCopy => "last-nonblack-display-copy",
+            GxFrameDumpSource.LargestDisplayCopy => "largest-display-copy",
+            GxFrameDumpSource.LastNonBlackEfb => "last-nonblack-efb",
+            GxFrameDumpSource.ViFramebuffer => "vi-framebuffer",
+            GxFrameDumpSource.LastNonBlackViFramebuffer => "last-nonblack-vi-framebuffer",
+            GxFrameDumpSource.CopyIndex => "copy-index",
+            GxFrameDumpSource.CopySourceIndex => "copy-source-index",
+            _ => "efb",
         };
 
     private static string FormatTraceLine(int executed, uint pc, uint instruction)

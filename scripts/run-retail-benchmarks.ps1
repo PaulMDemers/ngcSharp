@@ -187,7 +187,7 @@ $targetDefinitions = @{
         gxFrameSource = "auto"
         gxFrameMaxDraws = 700
         gxFrameMaxRasterPixels = 12000000
-        dumpGxCopies = $true
+        dumpGxCopies = $false
         extraArgs = @()
     }
     "pikmin-20m" = [pscustomobject]@{
@@ -199,7 +199,7 @@ $targetDefinitions = @{
         gxFrameSource = "auto"
         gxFrameMaxDraws = 1100
         gxFrameMaxRasterPixels = 12000000
-        dumpGxCopies = $true
+        dumpGxCopies = $false
         extraArgs = @()
     }
     "mariokart-debug-5m" = [pscustomobject]@{
@@ -228,6 +228,13 @@ $targetDefinitions = @{
         extraArgs = @("--memory-card-a", "--controller-button", "a")
     }
 }
+
+$Targets = @(
+    $Targets |
+        ForEach-Object { $_ -split "," } |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+)
 
 $unknownTargets = @($Targets | Where-Object { -not $targetDefinitions.ContainsKey($_) })
 if ($unknownTargets.Count -gt 0) {
@@ -376,6 +383,22 @@ foreach ($targetName in $Targets) {
     $stopReason = if ($null -ne $emulatorSummary) { $emulatorSummary.stopReason } else { "" }
     $finalPc = if ($null -ne $emulatorSummary) { $emulatorSummary.pc } else { "" }
     $executedInstructions = if ($null -ne $emulatorSummary) { $emulatorSummary.executedInstructions } else { "" }
+    $timings = if ($null -ne $emulatorSummary) { $emulatorSummary.timings } else { $null }
+    $totalMs = if ($null -ne $timings) { $timings.totalMs } else { "" }
+    $emulationMs = if ($null -ne $timings) { $timings.emulationMs } else { "" }
+    $postEmulationMs = if ($null -ne $timings) { $timings.postEmulationMs } else { "" }
+    $measuredDiagnosticsMs = if ($null -ne $timings) { $timings.measuredDiagnosticsMs } else { "" }
+    $gxFrameDumpMs = if ($null -ne $timings) { $timings.gxFrameDumpMs } else { "" }
+    $gxCopyDumpMs = if ($null -ne $timings) { $timings.gxCopyDumpMs } else { "" }
+    $gxCoverageDumpMs = if ($null -ne $timings) { $timings.gxCoverageDumpMs } else { "" }
+    $gxTevSampleDumpMs = if ($null -ne $timings) { $timings.gxTevSampleDumpMs } else { "" }
+    $gxTextureDumpMs = if ($null -ne $timings) { $timings.gxTextureDumpMs } else { "" }
+    $gxFrameTimings = if ($null -ne $emulatorSummary -and $null -ne $emulatorSummary.gx.frameDump) { $emulatorSummary.gx.frameDump.timings } else { $null }
+    $gxFrameReplayMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.replayMs } else { "" }
+    $gxFrameVertexDecodeMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.vertexDecodeMs } else { "" }
+    $gxFrameRasterizeMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.rasterizeMs } else { "" }
+    $gxFrameEfbCopyMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.efbCopyMs } else { "" }
+    $gxFramePngWriteMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.pngWriteMs } else { "" }
     $summaryRows.Add([pscustomobject]@{
         target = $target.slug
         status = $status
@@ -384,6 +407,20 @@ foreach ($targetName in $Targets) {
         executedInstructions = $executedInstructions
         stopReason = $stopReason
         finalPc = $finalPc
+        totalMs = $totalMs
+        emulationMs = $emulationMs
+        postEmulationMs = $postEmulationMs
+        measuredDiagnosticsMs = $measuredDiagnosticsMs
+        gxFrameDumpMs = $gxFrameDumpMs
+        gxCopyDumpMs = $gxCopyDumpMs
+        gxCoverageDumpMs = $gxCoverageDumpMs
+        gxTevSampleDumpMs = $gxTevSampleDumpMs
+        gxTextureDumpMs = $gxTextureDumpMs
+        gxFrameReplayMs = $gxFrameReplayMs
+        gxFrameVertexDecodeMs = $gxFrameVertexDecodeMs
+        gxFrameRasterizeMs = $gxFrameRasterizeMs
+        gxFrameEfbCopyMs = $gxFrameEfbCopyMs
+        gxFramePngWriteMs = $gxFramePngWriteMs
         frameBytes = $frameBytes
         exiReadArrayCommands = $readArrayCount
         nonblackDisplayCopies = $nonblackCopies

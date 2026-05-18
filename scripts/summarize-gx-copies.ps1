@@ -44,7 +44,7 @@ function Copy-ToSummary {
         return $null
     }
 
-    return [ordered]@{
+    return [pscustomobject][ordered]@{
         copyIndex = Convert-OptionalInt $Row.copy_index
         fifoOffset = $Row.fifo_offset
         drawsSeen = Convert-OptionalInt $Row.draws_seen
@@ -63,6 +63,77 @@ function Copy-ToSummary {
     }
 }
 
+function New-DisplayDestinationSummary {
+    param([string]$Address)
+
+    return [pscustomobject][ordered]@{
+        address = $Address
+        copyCount = 0
+        nonblackCopies = 0
+        blackCopies = 0
+        blackCopiesAfterNonblack = 0
+        maxDisplayNonblack = 0
+        maxDisplayNonblackPercent = 0.0
+        firstCopy = $null
+        lastCopy = $null
+        firstNonblackCopy = $null
+        lastNonblackCopy = $null
+        largestCopy = $null
+    }
+}
+
+function Update-DisplayDestinationSummary {
+    param(
+        $Summary,
+        $Row
+    )
+
+    $displayNonblack = Convert-OptionalInt $Row.display_nonblack
+    $displayNonblackPercent = Convert-OptionalDouble $Row.display_nonblack_percent
+
+    $Summary.copyCount = [int64]$Summary.copyCount + 1
+    if ($null -eq $Summary.firstCopy) {
+        $Summary.firstCopy = Copy-ToSummary $Row
+    }
+    $Summary.lastCopy = Copy-ToSummary $Row
+
+    if ($displayNonblack -gt 0) {
+        $Summary.nonblackCopies = [int64]$Summary.nonblackCopies + 1
+        if ($null -eq $Summary.firstNonblackCopy) {
+            $Summary.firstNonblackCopy = Copy-ToSummary $Row
+        }
+        $Summary.lastNonblackCopy = Copy-ToSummary $Row
+    } else {
+        $Summary.blackCopies = [int64]$Summary.blackCopies + 1
+        if ($Summary.nonblackCopies -gt 0) {
+            $Summary.blackCopiesAfterNonblack = [int64]$Summary.blackCopiesAfterNonblack + 1
+        }
+    }
+
+    if ($displayNonblack -gt $Summary.maxDisplayNonblack) {
+        $Summary.maxDisplayNonblack = $displayNonblack
+        $Summary.maxDisplayNonblackPercent = $displayNonblackPercent
+        $Summary.largestCopy = Copy-ToSummary $Row
+    }
+}
+
+function Copy-DisplayTimelineEvent {
+    param(
+        $Row,
+        [string]$State
+    )
+
+    return [pscustomobject][ordered]@{
+        copyIndex = Convert-OptionalInt $Row.copy_index
+        drawsSeen = Convert-OptionalInt $Row.draws_seen
+        address = $Row.display_address
+        state = $State
+        displayNonblack = Convert-OptionalInt $Row.display_nonblack
+        displayNonblackPercent = Convert-OptionalDouble $Row.display_nonblack_percent
+        displayNonblackBounds = $Row.display_nonblack_bounds
+    }
+}
+
 $copyFullPath = Resolve-FullPath $CopyCsvPath
 if (-not (Test-Path -LiteralPath $copyFullPath)) {
     throw "GX copy CSV not found: $copyFullPath"
@@ -78,6 +149,10 @@ $lastNonblackDisplay = $null
 $largestDisplay = $null
 $maxDisplayNonblack = 0
 $maxBeforeNonblack = 0
+$displayDestinationsByAddress = [ordered]@{}
+$displayTimeline = New-Object System.Collections.Generic.List[object]
+$lastTimelineAddress = $null
+$lastTimelineState = $null
 
 Import-Csv -LiteralPath $copyFullPath | ForEach-Object {
     $rows++
@@ -101,10 +176,36 @@ Import-Csv -LiteralPath $copyFullPath | ForEach-Object {
         if ($beforeNonblack -gt $maxBeforeNonblack) {
             $maxBeforeNonblack = $beforeNonblack
         }
+
+        $address = if ([string]::IsNullOrWhiteSpace($_.display_address)) { $_.destination_address } else { $_.display_address }
+        if ([string]::IsNullOrWhiteSpace($address)) {
+            $address = "(unknown)"
+        }
+
+        if (-not $displayDestinationsByAddress.Contains($address)) {
+            $displayDestinationsByAddress[$address] = New-DisplayDestinationSummary $address
+        }
+        $null = Update-DisplayDestinationSummary $displayDestinationsByAddress[$address] $_
+
+        $timelineState = if ($displayNonblack -gt 0) { "nonblack" } else { "black" }
+        if ($address -ne $lastTimelineAddress -or $timelineState -ne $lastTimelineState) {
+            $displayTimeline.Add((Copy-DisplayTimelineEvent $_ $timelineState)) | Out-Null
+            $lastTimelineAddress = $address
+            $lastTimelineState = $timelineState
+        }
     } elseif ($_.kind -eq "texture") {
         $textureCopies++
     }
-}
+} | Out-Null
+
+$displayDestinations = @(
+    $displayDestinationsByAddress.Values |
+        Sort-Object `
+            @{ Expression = { [int64]$_["blackCopiesAfterNonblack"] }; Descending = $true },
+            @{ Expression = { [int64]$_["maxDisplayNonblack"] }; Descending = $true },
+            @{ Expression = { [int64]$_["copyCount"] }; Descending = $true },
+            @{ Expression = { [string]$_["address"] }; Descending = $false }
+)
 
 $summary = [ordered]@{
     copyCsvPath = $copyFullPath
@@ -118,17 +219,20 @@ $summary = [ordered]@{
     firstNonblackDisplayCopy = Copy-ToSummary $firstNonblackDisplay
     lastNonblackDisplayCopy = Copy-ToSummary $lastNonblackDisplay
     largestDisplayCopy = Copy-ToSummary $largestDisplay
+    displayDestinations = $displayDestinations
+    displayTimeline = @($displayTimeline.ToArray())
     lastCopy = Copy-ToSummary $lastCopy
 }
+$summaryObject = [pscustomobject]$summary
 
 if (-not [string]::IsNullOrWhiteSpace($JsonPath)) {
     $jsonFullPath = Resolve-FullPath $JsonPath
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $jsonFullPath) | Out-Null
-    $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonFullPath
+    $summaryObject | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonFullPath
 }
 
 if ($PassThru) {
-    $summary
+    $summaryObject
 } else {
-    $summary | ConvertTo-Json -Depth 8
+    $summaryObject | ConvertTo-Json -Depth 8
 }
