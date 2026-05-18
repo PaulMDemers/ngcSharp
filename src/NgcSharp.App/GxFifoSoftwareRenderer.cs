@@ -5689,6 +5689,9 @@ public static class GxFifoSoftwareRenderer
             TevOrder order = GetTevOrder(0);
             TryCreateFastTextureSampler(memory, order.TexMap, out FastTextureSampler textureSampler, out string? textureSamplerFallbackReason);
             int textureFormat = order.TexMap is >= 0 and < 8 ? _textures[order.TexMap].Format : -1;
+            bool textureFallbackIsOne = !order.TextureEnabled
+                || order.TexMap is < 0 or >= 8
+                || textureSamplerFallbackReason == "incomplete-texture";
             evaluator = new SingleTevStageFastEvaluator(
                 order,
                 hasColorEnv,
@@ -5701,6 +5704,7 @@ public static class GxFifoSoftwareRenderer
                 GetKonstAlpha(0),
                 textureSampler,
                 textureFormat,
+                textureFallbackIsOne,
                 textureSamplerFallbackReason);
             return true;
         }
@@ -5814,6 +5818,7 @@ public static class GxFifoSoftwareRenderer
             int KonstAlpha,
             FastTextureSampler TextureSampler,
             int TextureFormat,
+            bool TextureFallbackIsOne,
             string? TextureSamplerFallbackReason)
         {
             public void Evaluate(
@@ -5847,6 +5852,8 @@ public static class GxFifoSoftwareRenderer
                 IndirectOffsetState indirectOffset = default;
                 GxTevColor texture = usedDirectTextureSampler
                     ? TextureSampler.Sample(memory, s, t)
+                    : TextureFallbackIsOne
+                        ? GxTevColor.One
                     : state.SampleTevTexture(memory, 0, Order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset);
                 GxTevColor raster = SelectTevRasterColor(0, Order, previous, indirectOffset);
                 raster = state.ApplyTevSwap(raster, RasterSwapTable);
