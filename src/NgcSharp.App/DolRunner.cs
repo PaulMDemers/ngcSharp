@@ -366,6 +366,8 @@ public sealed class DolRunner
             return executed >= options.MaxInstructions ? "max-instructions" : "completed";
         }
 
+        GxFifoSoftwareRenderResult? gxFrameDump = null;
+
         void WriteRunSummary(int exitCode, string? stopReasonOverride = null, string? diagnosticFailure = null, string? exceptionType = null, uint? exceptionAddress = null, uint? exceptionInstruction = null)
         {
             if (options.RunSummaryPath is null)
@@ -436,6 +438,22 @@ public sealed class DolRunner
                         memoryCheckpointsWritten = gxMemoryCheckpointsWritten,
                         autoTextureSnapshots = gxTextureSnapshotCollector?.Snapshots.Count ?? 0,
                         autoTextureSnapshotDrawsSeen = gxTextureSnapshotCollector?.DrawsSeen ?? 0,
+                        frameDump = gxFrameDump is null ? null : new
+                        {
+                            path = gxFrameDump.Path,
+                            width = gxFrameDump.Width,
+                            height = gxFrameDump.Height,
+                            parsedDraws = gxFrameDump.Draws,
+                            renderedQuads = gxFrameDump.RenderedQuads,
+                            renderedTriangles = gxFrameDump.RenderedTriangles,
+                            degenerateQuads = gxFrameDump.DegenerateQuads,
+                            degenerateTriangles = gxFrameDump.DegenerateTriangles,
+                            source = FormatGxFrameSourceSlug(gxFrameDump.Source),
+                            sourceAddress = gxFrameDump.SourceAddress is uint frameAddress ? $"0x{frameAddress:X8}" : null,
+                            sourceFormat = gxFrameDump.SourceFormat?.ToString(),
+                            sourceCopyIndex = gxFrameDump.SourceCopyIndex,
+                            rasterBudgetExhausted = gxFrameDump.RasterBudgetExhausted,
+                        },
                     },
                     fastForward = new
                     {
@@ -1135,6 +1153,7 @@ public sealed class DolRunner
                 WriteRunSummary(3, diagnosticFailure: $"gx-frame-dump: {gxFrameError}");
                 return 3;
             }
+            gxFrameDump = gxFrame;
 
             if (!options.Quiet)
             {
@@ -5231,6 +5250,21 @@ public sealed class DolRunner
             GxFrameDumpSource.CopyIndex => "display copy",
             GxFrameDumpSource.CopySourceIndex => "EFB copy source",
             _ => "EFB",
+        };
+
+    private static string FormatGxFrameSourceSlug(GxFrameDumpSource source) =>
+        source switch
+        {
+            GxFrameDumpSource.Auto => "auto",
+            GxFrameDumpSource.LastDisplayCopy => "last-display-copy",
+            GxFrameDumpSource.LastNonBlackDisplayCopy => "last-nonblack-display-copy",
+            GxFrameDumpSource.LargestDisplayCopy => "largest-display-copy",
+            GxFrameDumpSource.LastNonBlackEfb => "last-nonblack-efb",
+            GxFrameDumpSource.ViFramebuffer => "vi-framebuffer",
+            GxFrameDumpSource.LastNonBlackViFramebuffer => "last-nonblack-vi-framebuffer",
+            GxFrameDumpSource.CopyIndex => "copy-index",
+            GxFrameDumpSource.CopySourceIndex => "copy-source-index",
+            _ => "efb",
         };
 
     private static string FormatTraceLine(int executed, uint pc, uint instruction)

@@ -85,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-retail-benchmarks.ps1 -Targ
 powershell -ExecutionPolicy Bypass -File scripts/run-sonic-check.ps1 -NoBuild
 ```
 
-These write timestamped runs under `artifacts/compat-runs` with per-target `run.json`, auto-selected GX frames, EXI summaries, GX copy summaries, and suite-level `summary.csv` / `summary.json`.
+These write timestamped runs under `artifacts/compat-runs` with per-target `run.json`, auto-selected GX frames, selected frame-source metadata, EXI summaries, GX copy summaries, and suite-level `summary.csv` / `summary.json`.
 The GX copy summaries include `displayDestinations` and `displayTimeline` sections, which are the quickest way to spot XFB addresses that receive a nonblack frame and are later overwritten by black.
 The default `sonic-20m` target uses a lighter GX frame budget and skips the copy CSV so the routine suite remains bounded; add `-DeepGx` when chasing copy/presentation details.
 

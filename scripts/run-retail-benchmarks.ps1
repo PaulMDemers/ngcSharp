@@ -229,6 +229,13 @@ $targetDefinitions = @{
     }
 }
 
+$Targets = @(
+    $Targets |
+        ForEach-Object { $_ -split "," } |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+)
+
 $unknownTargets = @($Targets | Where-Object { -not $targetDefinitions.ContainsKey($_) })
 if ($unknownTargets.Count -gt 0) {
     throw "Unknown target(s): $($unknownTargets -join ', '). Known targets: $($targetDefinitions.Keys -join ', ')"

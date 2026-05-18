@@ -161,7 +161,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-retail-benchmarks.ps1 -Targ
 Both scripts write timestamped directories under `artifacts/compat-runs` with:
 
 - `run.json`: machine-readable compatibility ledger for that target.
-- `emulator-summary.json`: per-run emulator stop reason, final PC, GX FIFO byte count, and fast-forward counters.
+- `emulator-summary.json`: per-run emulator stop reason, final PC, GX FIFO byte count, fast-forward counters, and selected GX frame source metadata when a frame is dumped.
 - `summary.csv` / `summary.json`: suite-level rollup.
 - `auto.png`: auto-selected GX frame.
 - `exi.summary.json`: EXI/card milestone counts.
