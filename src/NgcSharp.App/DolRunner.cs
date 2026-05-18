@@ -4861,6 +4861,7 @@ public sealed class DolRunner
     private static string FormatGxFrameSource(GxFrameDumpSource source) =>
         source switch
         {
+            GxFrameDumpSource.Auto => "automatic best frame",
             GxFrameDumpSource.LastDisplayCopy => "last display copy",
             GxFrameDumpSource.LastNonBlackDisplayCopy => "last nonblack display copy",
             GxFrameDumpSource.LargestDisplayCopy => "largest display copy",

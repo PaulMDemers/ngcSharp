@@ -95,6 +95,8 @@ public sealed class RunDolOptionsTests
     }
 
     [Theory]
+    [InlineData("auto", GxFrameDumpSource.Auto)]
+    [InlineData("best", GxFrameDumpSource.Auto)]
     [InlineData("last-nonblack-display-copy", GxFrameDumpSource.LastNonBlackDisplayCopy)]
     [InlineData("largest-display-copy", GxFrameDumpSource.LargestDisplayCopy)]
     [InlineData("last-nonblack-efb", GxFrameDumpSource.LastNonBlackEfb)]

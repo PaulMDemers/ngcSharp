@@ -383,7 +383,52 @@ public static class GxFifoSoftwareRenderer
         uint? sourceAddress = null;
         FramebufferPixelFormat? sourceFormat = null;
         int? sourceCopyIndex = null;
-        if (source != GxFrameDumpSource.Efb)
+        GxFrameDumpSource resultSource = source;
+        if (source == GxFrameDumpSource.Auto)
+        {
+            if (RgbHasNonBlackPixels(rgb))
+            {
+                resultSource = GxFrameDumpSource.Efb;
+            }
+            else if (lastNonBlackDisplayCopy is SelectedDisplayCopy selectedNonBlackDisplay)
+            {
+                DisplayCopyResult copy = selectedNonBlackDisplay.Copy;
+                rgb = selectedNonBlackDisplay.Rgb;
+                outputWidth = copy.Width;
+                outputHeight = copy.Height;
+                sourceAddress = copy.DestinationAddress;
+                sourceFormat = copy.Format;
+                sourceCopyIndex = selectedNonBlackDisplay.CopyIndex;
+                resultSource = GxFrameDumpSource.LastNonBlackDisplayCopy;
+            }
+            else if (largestDisplayCopy is SelectedDisplayCopy selectedLargestDisplay)
+            {
+                DisplayCopyResult copy = selectedLargestDisplay.Copy;
+                rgb = selectedLargestDisplay.Rgb;
+                outputWidth = copy.Width;
+                outputHeight = copy.Height;
+                sourceAddress = copy.DestinationAddress;
+                sourceFormat = copy.Format;
+                sourceCopyIndex = selectedLargestDisplay.CopyIndex;
+                resultSource = GxFrameDumpSource.LargestDisplayCopy;
+            }
+            else if (lastDisplayCopy is SelectedDisplayCopy selectedLastDisplay)
+            {
+                DisplayCopyResult copy = selectedLastDisplay.Copy;
+                rgb = selectedLastDisplay.Rgb;
+                outputWidth = copy.Width;
+                outputHeight = copy.Height;
+                sourceAddress = copy.DestinationAddress;
+                sourceFormat = copy.Format;
+                sourceCopyIndex = selectedLastDisplay.CopyIndex;
+                resultSource = GxFrameDumpSource.LastDisplayCopy;
+            }
+            else
+            {
+                resultSource = GxFrameDumpSource.Efb;
+            }
+        }
+        else if (source != GxFrameDumpSource.Efb)
         {
             if (memory is null)
             {
@@ -511,13 +556,14 @@ public static class GxFifoSoftwareRenderer
         }
 
         FramebufferDumper.WriteRgbPng(fullPath, outputWidth, outputHeight, rgb);
-        result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, source, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0);
+        result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, resultSource, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0);
         return true;
     }
 
     private static string FormatFrameSource(GxFrameDumpSource source) =>
         source switch
         {
+            GxFrameDumpSource.Auto => "auto",
             GxFrameDumpSource.LastDisplayCopy => "last-display-copy",
             GxFrameDumpSource.LastNonBlackDisplayCopy => "last-nonblack-display-copy",
             GxFrameDumpSource.LargestDisplayCopy => "largest-display-copy",

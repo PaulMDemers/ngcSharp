@@ -3,6 +3,7 @@ namespace NgcSharp.App;
 public enum GxFrameDumpSource
 {
     Efb,
+    Auto,
     LastDisplayCopy,
     LastNonBlackDisplayCopy,
     LargestDisplayCopy,
@@ -276,7 +277,7 @@ public sealed record RunDolOptions(
                 case "--gx-frame-source":
                     if (index + 1 >= args.Length || !TryParseGxFrameSource(args[++index], out gxFrameSource))
                     {
-                        error.WriteLine("--gx-frame-source must be one of: efb, last-display-copy, last-nonblack-display-copy, largest-display-copy, last-nonblack-efb, vi-framebuffer, last-nonblack-vi-framebuffer, copy-index, copy-source-index.");
+                        error.WriteLine("--gx-frame-source must be one of: efb, auto, last-display-copy, last-nonblack-display-copy, largest-display-copy, last-nonblack-efb, vi-framebuffer, last-nonblack-vi-framebuffer, copy-index, copy-source-index.");
                         return false;
                     }
 
@@ -794,6 +795,11 @@ public sealed record RunDolOptions(
         {
             case "efb":
                 source = GxFrameDumpSource.Efb;
+                return true;
+            case "auto":
+            case "best":
+            case "best-frame":
+                source = GxFrameDumpSource.Auto;
                 return true;
             case "last-display-copy":
             case "display-copy":
