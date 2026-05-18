@@ -2690,6 +2690,7 @@ public static class GxFifoSoftwareRenderer
             && b.TryGetTexCoord(texCoord, out bTexS, out bTexT)
             && c.TryGetTexCoord(texCoord, out cTexS, out cTexT);
         GxTevStage0Mode stage0Mode = state.Stage0Mode;
+        bool canEvaluateSingleTevStageFast = state.TryCreateSingleTevStageFastEvaluator(out GxVertexState.SingleTevStageFastEvaluator singleTevStageFast);
         if (timings is not null)
         {
             timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
@@ -2768,7 +2769,15 @@ public static class GxFifoSoftwareRenderer
                 byte rasterG = g;
                 byte rasterB = bValue;
                 byte rasterA = sourceAlpha;
-                if (!state.TryEvaluateTevStages(memory, a, b, c, aWeight, bWeight, cWeight, rasterR, rasterG, rasterB, rasterA, out r, out g, out bValue, out sourceAlpha)
+                bool tevEvaluated = false;
+                if (canEvaluateSingleTevStageFast)
+                {
+                    singleTevStageFast.Evaluate(state, memory, a, b, c, aWeight, bWeight, cWeight, rasterR, rasterG, rasterB, rasterA, out r, out g, out bValue, out sourceAlpha);
+                    tevEvaluated = true;
+                }
+
+                if (!tevEvaluated
+                    && !state.TryEvaluateTevStages(memory, a, b, c, aWeight, bWeight, cWeight, rasterR, rasterG, rasterB, rasterA, out r, out g, out bValue, out sourceAlpha)
                     && canSampleTexture)
                 {
                     float perspectiveWeight = a.InvW * aWeight + b.InvW * bWeight + c.InvW * cWeight;
@@ -5138,6 +5147,93 @@ public static class GxFifoSoftwareRenderer
             };
         }
 
+        public bool TryCreateSingleTevStageFastEvaluator(out SingleTevStageFastEvaluator evaluator)
+        {
+            evaluator = default;
+            if (TevStageCount != 1
+                || TryGetIndirectTevStage(0, out _))
+            {
+                return false;
+            }
+
+            bool hasColorEnv = TryGetTevColorEnv(0, out uint colorEnv);
+            bool hasAlphaEnv = TryGetTevAlphaEnv(0, out uint alphaEnv);
+            if ((!hasColorEnv && !hasAlphaEnv)
+                || (hasColorEnv && (TevDestination(colorEnv) != 0 || !CanFastEvaluateTevColorEnv(colorEnv)))
+                || (hasAlphaEnv && (TevDestination(alphaEnv) != 0 || !CanFastEvaluateTevAlphaEnv(alphaEnv))))
+            {
+                return false;
+            }
+
+            TevOrder order = GetTevOrder(0);
+            evaluator = new SingleTevStageFastEvaluator(
+                order,
+                hasColorEnv,
+                colorEnv,
+                hasAlphaEnv,
+                alphaEnv,
+                TevRasterSwapTable(alphaEnv),
+                TevTextureSwapTable(alphaEnv),
+                GetKonstColor(0),
+                GetKonstAlpha(0));
+            return true;
+        }
+
+        public readonly record struct SingleTevStageFastEvaluator(
+            TevOrder Order,
+            bool HasColorEnv,
+            uint ColorEnv,
+            bool HasAlphaEnv,
+            uint AlphaEnv,
+            int RasterSwapTable,
+            int TextureSwapTable,
+            GxTevColor KonstColor,
+            int KonstAlpha)
+        {
+            public void Evaluate(
+                GxVertexState state,
+                GameCubeMemory? memory,
+                GxVertex a,
+                GxVertex b,
+                GxVertex c,
+                float aWeight,
+                float bWeight,
+                float cWeight,
+                byte rasterR,
+                byte rasterG,
+                byte rasterB,
+                byte rasterA,
+                out byte r,
+                out byte g,
+                out byte bValue,
+                out byte alpha)
+            {
+                r = rasterR;
+                g = rasterG;
+                bValue = rasterB;
+                alpha = rasterA;
+
+                GxTevColor previous = new(rasterR, rasterG, rasterB, rasterA);
+                IndirectOffsetState indirectOffset = default;
+                GxTevColor texture = state.SampleTevTexture(memory, 0, Order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset);
+                GxTevColor raster = SelectTevRasterColor(0, Order, previous, indirectOffset);
+                raster = state.ApplyTevSwap(raster, RasterSwapTable);
+                texture = state.ApplyTevSwap(texture, TextureSwapTable);
+
+                if (HasColorEnv)
+                {
+                    r = EvaluateTevColorChannelFast(ColorEnv, channel: 0, previous, texture, raster, KonstColor);
+                    g = EvaluateTevColorChannelFast(ColorEnv, channel: 1, previous, texture, raster, KonstColor);
+                    bValue = EvaluateTevColorChannelFast(ColorEnv, channel: 2, previous, texture, raster, KonstColor);
+                }
+
+                if (HasAlphaEnv)
+                {
+                    alpha = EvaluateTevAlphaFast(AlphaEnv, previous, texture, raster, KonstAlpha);
+                }
+            }
+        }
+
         public bool TryEvaluateTevStages(
             GameCubeMemory? memory,
             GxVertex a,
@@ -5989,6 +6085,54 @@ public static class GxFifoSoftwareRenderer
                 : ApplyTevArithmetic(env, a, b, c, d);
         }
 
+        private static byte EvaluateTevColorChannelFast(uint env, int channel, GxTevColor previous, GxTevColor texture, GxTevColor raster, GxTevColor konst)
+        {
+            GxTevColor a = ColorInputFast((int)((env >> 12) & 0xF), previous, texture, raster, konst);
+            GxTevColor b = ColorInputFast((int)((env >> 8) & 0xF), previous, texture, raster, konst);
+            GxTevColor c = ColorInputFast((int)((env >> 4) & 0xF), previous, texture, raster, konst);
+            GxTevColor d = ColorInputFast((int)(env & 0xF), previous, texture, raster, konst);
+            if (IsTevCompareOperation(env))
+            {
+                return ApplyTevColorCompare(env, channel, a, b, c, d);
+            }
+
+            return ApplyTevArithmetic(
+                env,
+                ColorComponent(a, channel),
+                ColorComponent(b, channel),
+                ColorComponent(c, channel),
+                ColorComponent(d, channel));
+        }
+
+        private static byte EvaluateTevAlphaFast(uint env, GxTevColor previous, GxTevColor texture, GxTevColor raster, int konst)
+        {
+            int a = AlphaInputFast((int)((env >> 13) & 7), previous, texture, raster, konst);
+            int b = AlphaInputFast((int)((env >> 10) & 7), previous, texture, raster, konst);
+            int c = AlphaInputFast((int)((env >> 7) & 7), previous, texture, raster, konst);
+            int d = AlphaInputFast((int)((env >> 4) & 7), previous, texture, raster, konst);
+            return IsTevCompareOperation(env)
+                ? ApplyTevScalarCompare(env, a, b, c, d)
+                : ApplyTevArithmetic(env, a, b, c, d);
+        }
+
+        private static bool CanFastEvaluateTevColorEnv(uint env) =>
+            IsFastColorInput((int)((env >> 12) & 0xF))
+            && IsFastColorInput((int)((env >> 8) & 0xF))
+            && IsFastColorInput((int)((env >> 4) & 0xF))
+            && IsFastColorInput((int)(env & 0xF));
+
+        private static bool CanFastEvaluateTevAlphaEnv(uint env) =>
+            IsFastAlphaInput((int)((env >> 13) & 7))
+            && IsFastAlphaInput((int)((env >> 10) & 7))
+            && IsFastAlphaInput((int)((env >> 7) & 7))
+            && IsFastAlphaInput((int)((env >> 4) & 7));
+
+        private static bool IsFastColorInput(int selector) =>
+            selector is 0 or 1 or 8 or 9 or 10 or 11 or 12 or 13 or 14 or 15;
+
+        private static bool IsFastAlphaInput(int selector) =>
+            selector is 0 or 4 or 5 or 6 or 7;
+
         private static GxTevColor ColorInput(int selector, GxTevColor previous, GxTevColor[] registers, GxTevColor texture, GxTevColor raster, GxTevColor konst) =>
             selector switch
             {
@@ -6011,6 +6155,22 @@ public static class GxFifoSoftwareRenderer
                 _ => GxTevColor.Zero,
             };
 
+        private static GxTevColor ColorInputFast(int selector, GxTevColor previous, GxTevColor texture, GxTevColor raster, GxTevColor konst) =>
+            selector switch
+            {
+                0 => previous,
+                1 => ReplicateAlpha(previous.A),
+                8 => texture,
+                9 => ReplicateAlpha(texture.A),
+                10 => raster,
+                11 => ReplicateAlpha(raster.A),
+                12 => GxTevColor.One,
+                13 => GxTevColor.Half,
+                14 => konst,
+                15 => GxTevColor.Zero,
+                _ => GxTevColor.Zero,
+            };
+
         private static int AlphaInput(int selector, GxTevColor previous, GxTevColor[] registers, GxTevColor texture, GxTevColor raster, int konst) =>
             selector switch
             {
@@ -6018,6 +6178,17 @@ public static class GxFifoSoftwareRenderer
                 1 => registers[1].A,
                 2 => registers[2].A,
                 3 => registers[3].A,
+                4 => texture.A,
+                5 => raster.A,
+                6 => konst,
+                7 => 0,
+                _ => 0,
+            };
+
+        private static int AlphaInputFast(int selector, GxTevColor previous, GxTevColor texture, GxTevColor raster, int konst) =>
+            selector switch
+            {
+                0 => previous.A,
                 4 => texture.A,
                 5 => raster.A,
                 6 => konst,
@@ -6106,7 +6277,7 @@ public static class GxFifoSoftwareRenderer
         private static byte ClampTevResult(uint env, int value) =>
             (byte)Math.Clamp(((env >> 19) & 1) != 0 ? Math.Clamp(value, 0, 255) : value, 0, 255);
 
-        private readonly record struct TevOrder(int TexMap, int TexCoord, bool TextureEnabled, int ColorChannel);
+        public readonly record struct TevOrder(int TexMap, int TexCoord, bool TextureEnabled, int ColorChannel);
 
         private readonly record struct TevSwapTable(int R, int G, int B, int A);
 
