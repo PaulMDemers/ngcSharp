@@ -3865,6 +3865,18 @@ public static class GxFifoSoftwareRenderer
             int copyHeight,
             DisplayCopyOptions options)
         {
+            if (!options.VerticalFilterEnabled
+                && options.DestinationWidth == copyWidth
+                && options.DestinationHeight == copyHeight
+                && sourceLeft >= 0
+                && sourceTop >= 0
+                && sourceLeft + copyWidth <= frameWidth
+                && sourceTop + copyHeight <= frameHeight)
+            {
+                WriteEfbDisplayCopyDirect(memory, destinationAddress, rgb, frameWidth, sourceLeft, sourceTop, copyWidth, copyHeight, options.Gamma);
+                return;
+            }
+
             for (int y = 0; y < options.DestinationHeight; y++)
             {
                 for (int x = 0; x < options.DestinationWidth; x += 2)
@@ -3879,6 +3891,51 @@ public static class GxFifoSoftwareRenderer
                     RgbToYcbcr(r0, g0, b0, out byte y0, out byte cb0, out byte cr0);
                     RgbToYcbcr(r1, g1, b1, out byte y1, out byte cb1, out byte cr1);
                     uint address = destinationAddress + (uint)((y * ((options.DestinationWidth + 1) / 2) + x / 2) * 4);
+                    memory.Write8(address, y0);
+                    memory.Write8(address + 1, (byte)((cb0 + cb1 + 1) / 2));
+                    memory.Write8(address + 2, y1);
+                    memory.Write8(address + 3, (byte)((cr0 + cr1 + 1) / 2));
+                }
+            }
+        }
+
+        private static void WriteEfbDisplayCopyDirect(
+            GameCubeMemory memory,
+            uint destinationAddress,
+            byte[] rgb,
+            int frameWidth,
+            int sourceLeft,
+            int sourceTop,
+            int width,
+            int height,
+            int gamma)
+        {
+            int destinationStridePairs = (width + 1) / 2;
+            for (int y = 0; y < height; y++)
+            {
+                int sourcePixel = (sourceTop + y) * frameWidth + sourceLeft;
+                int destinationPair = y * destinationStridePairs;
+                for (int x = 0; x < width; x += 2)
+                {
+                    int pixel0 = sourcePixel + x;
+                    int pixel1 = sourcePixel + Math.Min(x + 1, width - 1);
+                    int rgb0 = pixel0 * 3;
+                    int rgb1 = pixel1 * 3;
+                    byte r0 = rgb[rgb0];
+                    byte g0 = rgb[rgb0 + 1];
+                    byte b0 = rgb[rgb0 + 2];
+                    byte r1 = rgb[rgb1];
+                    byte g1 = rgb[rgb1 + 1];
+                    byte b1 = rgb[rgb1 + 2];
+                    if (gamma != 0)
+                    {
+                        ApplyCopyGamma(gamma, ref r0, ref g0, ref b0);
+                        ApplyCopyGamma(gamma, ref r1, ref g1, ref b1);
+                    }
+
+                    RgbToYcbcr(r0, g0, b0, out byte y0, out byte cb0, out byte cr0);
+                    RgbToYcbcr(r1, g1, b1, out byte y1, out byte cb1, out byte cr1);
+                    uint address = destinationAddress + (uint)((destinationPair + x / 2) * 4);
                     memory.Write8(address, y0);
                     memory.Write8(address + 1, (byte)((cb0 + cb1 + 1) / 2));
                     memory.Write8(address + 2, y1);
