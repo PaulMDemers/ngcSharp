@@ -529,6 +529,23 @@ public sealed class DolRunner
                             sourceFormat = gxFrameDump.SourceFormat?.ToString(),
                             sourceCopyIndex = gxFrameDump.SourceCopyIndex,
                             rasterBudgetExhausted = gxFrameDump.RasterBudgetExhausted,
+                            timings = gxFrameDump.Timings is null ? null : new
+                            {
+                                totalMs = gxFrameDump.Timings.TotalMs,
+                                fifoExpansionMs = gxFrameDump.Timings.FifoExpansionMs,
+                                bufferInitMs = gxFrameDump.Timings.BufferInitMs,
+                                viResolveMs = gxFrameDump.Timings.ViResolveMs,
+                                replayMs = gxFrameDump.Timings.ReplayMs,
+                                registerWriteMs = gxFrameDump.Timings.RegisterWriteMs,
+                                vertexDecodeMs = gxFrameDump.Timings.VertexDecodeMs,
+                                rasterizeMs = gxFrameDump.Timings.RasterizeMs,
+                                efbCoverageMs = gxFrameDump.Timings.EfbCoverageMs,
+                                efbCopyMs = gxFrameDump.Timings.EfbCopyMs,
+                                sourceCaptureMs = gxFrameDump.Timings.SourceCaptureMs,
+                                displayCaptureMs = gxFrameDump.Timings.DisplayCaptureMs,
+                                sourceSelectionMs = gxFrameDump.Timings.SourceSelectionMs,
+                                pngWriteMs = gxFrameDump.Timings.PngWriteMs,
+                            },
                         },
                     },
                     fastForward = new

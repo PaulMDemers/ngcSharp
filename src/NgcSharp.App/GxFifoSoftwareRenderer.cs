@@ -1,10 +1,12 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using NgcSharp.Core;
 
 namespace NgcSharp.App;
 
-public sealed record GxFifoSoftwareRenderResult(string Path, int Width, int Height, int Draws, int RenderedQuads, int DegenerateQuads, int RenderedTriangles = 0, int DegenerateTriangles = 0, GxFrameDumpSource Source = GxFrameDumpSource.Efb, uint? SourceAddress = null, FramebufferPixelFormat? SourceFormat = null, int? SourceCopyIndex = null, bool RasterBudgetExhausted = false);
+public sealed record GxFifoSoftwareRenderTimings(double TotalMs, double FifoExpansionMs, double BufferInitMs, double ViResolveMs, double ReplayMs, double RegisterWriteMs, double VertexDecodeMs, double RasterizeMs, double EfbCoverageMs, double EfbCopyMs, double SourceCaptureMs, double DisplayCaptureMs, double SourceSelectionMs, double PngWriteMs);
+public sealed record GxFifoSoftwareRenderResult(string Path, int Width, int Height, int Draws, int RenderedQuads, int DegenerateQuads, int RenderedTriangles = 0, int DegenerateTriangles = 0, GxFrameDumpSource Source = GxFrameDumpSource.Efb, uint? SourceAddress = null, FramebufferPixelFormat? SourceFormat = null, int? SourceCopyIndex = null, bool RasterBudgetExhausted = false, GxFifoSoftwareRenderTimings? Timings = null);
 public sealed record GxFifoDrawDiagnosticResult(string Path, int TotalDraws, int DrawsWritten);
 public sealed record GxFifoCopyDiagnosticResult(string Path, int CopiesWritten, int TotalDraws, bool RasterBudgetExhausted = false);
 public sealed record GxFifoCoverageDiagnosticResult(string Path, int DrawsWritten, int CopiesSeen, bool RasterBudgetExhausted);
@@ -103,6 +105,40 @@ public static class GxFifoSoftwareRenderer
 
     public static bool TryRender(IReadOnlyList<MmioAccess> accesses, GameCubeMemory? memory, string path, int width, int height, int? maxDraws, int skipDraws, bool stopAfterMaxDraws, int? maxRasterizedPixels, bool ignoreEfbCopyClear, GxFrameDumpSource source, int? displayCopyIndex, out GxFifoSoftwareRenderResult? result, out string? error, GxMemorySnapshotSet? memorySnapshots = null)
     {
+        long totalStartTimestamp = Stopwatch.GetTimestamp();
+        long fifoExpansionTicks = 0;
+        long bufferInitTicks = 0;
+        long viResolveTicks = 0;
+        long replayTicks = 0;
+        long registerWriteTicks = 0;
+        long vertexDecodeTicks = 0;
+        long rasterizeTicks = 0;
+        long efbCoverageTicks = 0;
+        long efbCopyTicks = 0;
+        long sourceCaptureTicks = 0;
+        long displayCaptureTicks = 0;
+        long sourceSelectionTicks = 0;
+        long pngWriteTicks = 0;
+
+        GxFifoSoftwareRenderTimings BuildTimings()
+        {
+            return new GxFifoSoftwareRenderTimings(
+                TotalMs: RoundMilliseconds(StopwatchTicksToMilliseconds(Stopwatch.GetTimestamp() - totalStartTimestamp)),
+                FifoExpansionMs: RoundMilliseconds(StopwatchTicksToMilliseconds(fifoExpansionTicks)),
+                BufferInitMs: RoundMilliseconds(StopwatchTicksToMilliseconds(bufferInitTicks)),
+                ViResolveMs: RoundMilliseconds(StopwatchTicksToMilliseconds(viResolveTicks)),
+                ReplayMs: RoundMilliseconds(StopwatchTicksToMilliseconds(replayTicks)),
+                RegisterWriteMs: RoundMilliseconds(StopwatchTicksToMilliseconds(registerWriteTicks)),
+                VertexDecodeMs: RoundMilliseconds(StopwatchTicksToMilliseconds(vertexDecodeTicks)),
+                RasterizeMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterizeTicks)),
+                EfbCoverageMs: RoundMilliseconds(StopwatchTicksToMilliseconds(efbCoverageTicks)),
+                EfbCopyMs: RoundMilliseconds(StopwatchTicksToMilliseconds(efbCopyTicks)),
+                SourceCaptureMs: RoundMilliseconds(StopwatchTicksToMilliseconds(sourceCaptureTicks)),
+                DisplayCaptureMs: RoundMilliseconds(StopwatchTicksToMilliseconds(displayCaptureTicks)),
+                SourceSelectionMs: RoundMilliseconds(StopwatchTicksToMilliseconds(sourceSelectionTicks)),
+                PngWriteMs: RoundMilliseconds(StopwatchTicksToMilliseconds(pngWriteTicks)));
+        }
+
         ArgumentNullException.ThrowIfNull(accesses);
 
         result = null;
@@ -136,16 +172,19 @@ public static class GxFifoSoftwareRenderer
             return false;
         }
 
+        long phaseStart = Stopwatch.GetTimestamp();
         byte[] fifo = accesses
             .Where(access => access.DeviceName == "GX FIFO" && access.Kind == MmioAccessKind.Write)
             .SelectMany(ExpandMmioWriteBytes)
             .ToArray();
+        fifoExpansionTicks += Stopwatch.GetTimestamp() - phaseStart;
         if (fifo.Length == 0)
         {
             error = "no GX FIFO writes were captured.";
             return false;
         }
 
+        phaseStart = Stopwatch.GetTimestamp();
         byte[] rgb = new byte[checked(width * height * 3)];
         byte[] alpha = Enumerable.Repeat((byte)255, checked(width * height)).ToArray();
         float[] depth = Enumerable.Repeat(FarDepthValue, checked(width * height)).ToArray();
@@ -153,15 +192,19 @@ public static class GxFifoSoftwareRenderer
         {
             MemorySnapshots = memorySnapshots is { IsEmpty: false } ? memorySnapshots : null,
         };
+        bufferInitTicks += Stopwatch.GetTimestamp() - phaseStart;
         uint? requestedViAddress = null;
         if (source is GxFrameDumpSource.ViFramebuffer or GxFrameDumpSource.LastNonBlackViFramebuffer)
         {
+            phaseStart = Stopwatch.GetTimestamp();
             if (!TryResolveViFramebufferAddress(accesses, out uint resolvedViAddress))
             {
+                viResolveTicks += Stopwatch.GetTimestamp() - phaseStart;
                 error = "no VI framebuffer register candidate resolved to main RAM.";
                 return false;
             }
 
+            viResolveTicks += Stopwatch.GetTimestamp() - phaseStart;
             requestedViAddress = resolvedViAddress;
         }
 
@@ -182,6 +225,7 @@ public static class GxFifoSoftwareRenderer
         SelectedDisplayCopy? lastNonBlackViDisplayCopy = null;
         bool stopReplayAfterCommand = false;
 
+        long replayStart = Stopwatch.GetTimestamp();
         while (offset < fifo.Length && !stopReplayAfterCommand)
         {
             int commandOffset = offset;
@@ -193,7 +237,9 @@ public static class GxFifoSoftwareRenderer
 
             if (command == 0x08 && TryReadBigEndian(fifo, offset, 1, out uint cpRegister) && TryReadBigEndian(fifo, offset + 1, 4, out uint cpValue))
             {
+                long registerWriteStart = Stopwatch.GetTimestamp();
                 state.WriteCpRegister((byte)cpRegister, cpValue);
+                registerWriteTicks += Stopwatch.GetTimestamp() - registerWriteStart;
                 offset += 5;
                 continue;
             }
@@ -203,7 +249,9 @@ public static class GxFifoSoftwareRenderer
                 ushort xfRegister = (ushort)(xfHeader & 0xFFFF);
                 uint wordCount = ((xfHeader >> 16) & 0xFFFF) + 1;
                 int xfPayloadBytes = AvailablePayloadBytes(fifo, offset + 4, wordCount);
+                long registerWriteStart = Stopwatch.GetTimestamp();
                 state.WriteXfRegisters(fifo, offset + 4, xfRegister, xfPayloadBytes / sizeof(uint));
+                registerWriteTicks += Stopwatch.GetTimestamp() - registerWriteStart;
                 offset += 4 + xfPayloadBytes;
                 continue;
             }
@@ -224,7 +272,9 @@ public static class GxFifoSoftwareRenderer
             {
                 if (TryReadBigEndian(fifo, offset, 4, out uint bpValue))
                 {
+                    long registerWriteStart = Stopwatch.GetTimestamp();
                     state.WriteBpRegister(bpValue);
+                    registerWriteTicks += Stopwatch.GetTimestamp() - registerWriteStart;
                     if ((bpValue >> 24) == 0x52)
                     {
                         if (!state.TryGetEfbCopyInfo(out EfbCopyInfo copyInfo))
@@ -242,31 +292,63 @@ public static class GxFifoSoftwareRenderer
                                 or GxFrameDumpSource.LastNonBlackViFramebuffer;
                         if (needsDisplayCoverage)
                         {
+                            long coverageStart = Stopwatch.GetTimestamp();
                             displayCoverage = CountNonBlackRegion(rgb, alpha, width, height, copyInfo.SourceLeft, copyInfo.SourceTop, copyInfo.SourceWidth, copyInfo.SourceHeight);
+                            efbCoverageTicks += Stopwatch.GetTimestamp() - coverageStart;
                         }
 
                         EfbCoverage? sourceCoverage = null;
                         if (source is GxFrameDumpSource.CopySourceIndex or GxFrameDumpSource.LastNonBlackEfb)
                         {
-                            sourceCoverage = displayCoverage ?? CountNonBlackRegion(rgb, alpha, width, height, copyInfo.SourceLeft, copyInfo.SourceTop, copyInfo.SourceWidth, copyInfo.SourceHeight);
+                            if (displayCoverage is EfbCoverage existingCoverage)
+                            {
+                                sourceCoverage = existingCoverage;
+                            }
+                            else
+                            {
+                                long coverageStart = Stopwatch.GetTimestamp();
+                                sourceCoverage = CountNonBlackRegion(rgb, alpha, width, height, copyInfo.SourceLeft, copyInfo.SourceTop, copyInfo.SourceWidth, copyInfo.SourceHeight);
+                                efbCoverageTicks += Stopwatch.GetTimestamp() - coverageStart;
+                            }
                         }
 
                         if (source == GxFrameDumpSource.LastNonBlackEfb && sourceCoverage is EfbCoverage efbCoverage && efbCoverage.NonBlackPixels > 0)
                         {
+                            long captureStart = Stopwatch.GetTimestamp();
                             byte[] sourceRgb = CaptureEfbSourceRgb(rgb, width, height, copyInfo.SourceLeft, copyInfo.SourceTop, copyInfo.SourceWidth, copyInfo.SourceHeight);
+                            sourceCaptureTicks += Stopwatch.GetTimestamp() - captureStart;
                             lastNonBlackEfb = new SelectedDisplayCopy(copiesSeen, new DisplayCopyResult(copyInfo.DestinationAddress, copyInfo.SourceWidth, copyInfo.SourceHeight, FramebufferPixelFormat.Xrgb8888), efbCoverage, sourceRgb);
                         }
 
                         if (source == GxFrameDumpSource.CopySourceIndex && copiesSeen == displayCopyIndex)
                         {
-                            EfbCoverage coverage = sourceCoverage ?? displayCoverage ?? CountNonBlackRegion(rgb, alpha, width, height, copyInfo.SourceLeft, copyInfo.SourceTop, copyInfo.SourceWidth, copyInfo.SourceHeight);
+                            EfbCoverage coverage;
+                            if (sourceCoverage is EfbCoverage existingCoverage)
+                            {
+                                coverage = existingCoverage;
+                            }
+                            else if (displayCoverage is EfbCoverage existingDisplayCoverage)
+                            {
+                                coverage = existingDisplayCoverage;
+                            }
+                            else
+                            {
+                                long coverageStart = Stopwatch.GetTimestamp();
+                                coverage = CountNonBlackRegion(rgb, alpha, width, height, copyInfo.SourceLeft, copyInfo.SourceTop, copyInfo.SourceWidth, copyInfo.SourceHeight);
+                                efbCoverageTicks += Stopwatch.GetTimestamp() - coverageStart;
+                            }
+
+                            long captureStart = Stopwatch.GetTimestamp();
                             byte[] sourceRgb = CaptureEfbSourceRgb(rgb, width, height, copyInfo.SourceLeft, copyInfo.SourceTop, copyInfo.SourceWidth, copyInfo.SourceHeight);
+                            sourceCaptureTicks += Stopwatch.GetTimestamp() - captureStart;
                             indexedDisplayCopy = new SelectedDisplayCopy(copiesSeen, new DisplayCopyResult(copyInfo.DestinationAddress, copyInfo.SourceWidth, copyInfo.SourceHeight, FramebufferPixelFormat.Xrgb8888), coverage, sourceRgb);
                             stopReplayAfterCommand = true;
                         }
 
+                        long efbCopyStart = Stopwatch.GetTimestamp();
                         if (state.TryCopyEfb(memory, rgb, alpha, depth, width, height, clearAfterCopy: !ignoreEfbCopyClear, out DisplayCopyResult? displayCopy))
                         {
+                            efbCopyTicks += Stopwatch.GetTimestamp() - efbCopyStart;
                             if (displayCopy is DisplayCopyResult capturedCopy)
                             {
                                 EfbCoverage coverage = displayCoverage ?? default;
@@ -284,7 +366,7 @@ public static class GxFifoSoftwareRenderer
                                     _ => true,
                                 };
                                 if (shouldCaptureDisplayCopy
-                                    && TryCaptureDisplayCopyRgb(memory, capturedCopy, out byte[]? displayRgb)
+                                    && TryTimedCaptureDisplayCopyRgb(memory, capturedCopy, ref displayCaptureTicks, out byte[]? displayRgb)
                                     && displayRgb is not null)
                                 {
                                     SelectedDisplayCopy selected = new(copiesSeen, capturedCopy, coverage, displayRgb);
@@ -314,6 +396,10 @@ public static class GxFifoSoftwareRenderer
                                     }
                                 }
                             }
+                        }
+                        else
+                        {
+                            efbCopyTicks += Stopwatch.GetTimestamp() - efbCopyStart;
                         }
                     }
                 }
@@ -367,6 +453,7 @@ public static class GxFifoSoftwareRenderer
                 int vertexTotal = (int)vertexCount;
                 GxVertex[] vertices = new GxVertex[vertexTotal];
                 bool decodedVertices = true;
+                long vertexDecodeStart = Stopwatch.GetTimestamp();
                 for (int vertex = 0; vertex < vertexTotal; vertex++)
                 {
                     if (!state.TryReadVertex(fifo, ref vertexOffset, format, memory, out vertices[vertex]))
@@ -375,15 +462,19 @@ public static class GxFifoSoftwareRenderer
                         break;
                     }
                 }
+                vertexDecodeTicks += Stopwatch.GetTimestamp() - vertexDecodeStart;
 
                 if (decodedVertices)
                 {
+                    long rasterizeStart = Stopwatch.GetTimestamp();
                     RenderPrimitiveBounds(rgb, alpha, depth, width, height, command, vertices, state, memory, ref renderedQuads, ref degenerateQuads, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters: null);
+                    rasterizeTicks += Stopwatch.GetTimestamp() - rasterizeStart;
                 }
             }
 
             offset += (int)payloadBytes;
         }
+        replayTicks += Stopwatch.GetTimestamp() - replayStart;
 
         string fullPath = Path.GetFullPath(path);
         string? directory = Path.GetDirectoryName(fullPath);
@@ -392,6 +483,7 @@ public static class GxFifoSoftwareRenderer
             Directory.CreateDirectory(directory);
         }
 
+        long sourceSelectionStart = Stopwatch.GetTimestamp();
         int outputWidth = width;
         int outputHeight = height;
         uint? sourceAddress = null;
@@ -472,8 +564,11 @@ public static class GxFifoSoftwareRenderer
                     sourceAddress = selectedNonBlackVi.Copy.DestinationAddress;
                     sourceFormat = selectedNonBlackVi.Copy.Format;
                     sourceCopyIndex = selectedNonBlackVi.CopyIndex;
+                    sourceSelectionTicks += Stopwatch.GetTimestamp() - sourceSelectionStart;
+                    long pngWriteStart = Stopwatch.GetTimestamp();
                     FramebufferDumper.WriteRgbPng(fullPath, outputWidth, outputHeight, rgb);
-                    result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, source, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0);
+                    pngWriteTicks += Stopwatch.GetTimestamp() - pngWriteStart;
+                    result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, source, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0, BuildTimings());
                     return true;
                 }
 
@@ -488,7 +583,7 @@ public static class GxFifoSoftwareRenderer
                 }
 
                 DisplayCopyResult copy = selectedViCopy ?? new DisplayCopyResult(viAddress, width, height, FramebufferPixelFormat.Yuyv);
-                if (!TryCaptureDisplayCopyRgb(memory, copy, out byte[]? displayRgb) || displayRgb is null)
+                if (!TryTimedCaptureDisplayCopyRgb(memory, copy, ref displayCaptureTicks, out byte[]? displayRgb) || displayRgb is null)
                 {
                     error = $"VI framebuffer 0x{viAddress:X8} could not be captured as {copy.Format}.";
                     return false;
@@ -569,8 +664,11 @@ public static class GxFifoSoftwareRenderer
             }
         }
 
+        sourceSelectionTicks += Stopwatch.GetTimestamp() - sourceSelectionStart;
+        long finalPngWriteStart = Stopwatch.GetTimestamp();
         FramebufferDumper.WriteRgbPng(fullPath, outputWidth, outputHeight, rgb);
-        result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, resultSource, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0);
+        pngWriteTicks += Stopwatch.GetTimestamp() - finalPngWriteStart;
+        result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, resultSource, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0, BuildTimings());
         return true;
     }
 
@@ -619,6 +717,24 @@ public static class GxFifoSoftwareRenderer
         {
             return false;
         }
+    }
+
+    private static bool TryTimedCaptureDisplayCopyRgb(GameCubeMemory? memory, DisplayCopyResult copy, ref long elapsedTicks, out byte[]? rgb)
+    {
+        long startTimestamp = Stopwatch.GetTimestamp();
+        bool captured = TryCaptureDisplayCopyRgb(memory, copy, out rgb);
+        elapsedTicks += Stopwatch.GetTimestamp() - startTimestamp;
+        return captured;
+    }
+
+    private static double StopwatchTicksToMilliseconds(long ticks)
+    {
+        return ticks * 1000.0 / Stopwatch.Frequency;
+    }
+
+    private static double RoundMilliseconds(double milliseconds)
+    {
+        return Math.Round(milliseconds, 3);
     }
 
     private static byte[] CaptureEfbSourceRgb(byte[] rgb, int frameWidth, int frameHeight, int left, int top, int width, int height)
@@ -2507,6 +2623,10 @@ public static class GxFifoSoftwareRenderer
             return false;
         }
 
+        float inverseArea = 1f / area;
+        float w0StepX = cy - by;
+        float w1StepX = ay - cy;
+        float w2StepX = by - ay;
         int textureMap = state.Stage0TextureMap;
         int texCoord = state.Stage0TexCoord;
         float aTexS = 0;
@@ -2526,6 +2646,11 @@ public static class GxFifoSoftwareRenderer
         {
             int row = y * width * 3;
             int depthRow = y * width;
+            float pxStart = left + 0.5f;
+            float py = y + 0.5f;
+            float w0 = Edge(bx, by, cx, cy, pxStart, py);
+            float w1 = Edge(cx, cy, ax, ay, pxStart, py);
+            float w2 = Edge(ax, ay, bx, by, pxStart, py);
             for (int x = left; x <= right; x++)
             {
                 if (rasterPixelsRemaining <= 0)
@@ -2534,26 +2659,27 @@ public static class GxFifoSoftwareRenderer
                 }
 
                 rasterPixelsRemaining--;
-                float px = x + 0.5f;
-                float py = y + 0.5f;
-                float w0 = Edge(bx, by, cx, cy, px, py);
-                float w1 = Edge(cx, cy, ax, ay, px, py);
-                float w2 = Edge(ax, ay, bx, by, px, py);
                 if (!InsideTriangle(w0, w1, w2, area))
                 {
+                    w0 += w0StepX;
+                    w1 += w1StepX;
+                    w2 += w2StepX;
                     continue;
                 }
 
                 counters?.RecordCoveredPixel();
                 int index = row + x * 3;
-                float aWeight = w0 / area;
-                float bWeight = w1 / area;
-                float cWeight = w2 / area;
+                float aWeight = w0 * inverseArea;
+                float bWeight = w1 * inverseArea;
+                float cWeight = w2 * inverseArea;
                 float z = a.Z * aWeight + b.Z * bWeight + c.Z * cWeight;
                 int depthIndex = depthRow + x;
                 if (!state.DepthTestPasses(z, depth[depthIndex]))
                 {
                     counters?.RecordDepthRejected();
+                    w0 += w0StepX;
+                    w1 += w1StepX;
+                    w2 += w2StepX;
                     continue;
                 }
 
@@ -2586,6 +2712,9 @@ public static class GxFifoSoftwareRenderer
                 if (!state.AlphaTestPasses(sourceAlpha))
                 {
                     counters?.RecordAlphaRejected();
+                    w0 += w0StepX;
+                    w1 += w1StepX;
+                    w2 += w2StepX;
                     continue;
                 }
 
@@ -2615,6 +2744,9 @@ public static class GxFifoSoftwareRenderer
                 }
 
                 wrotePixel = true;
+                w0 += w0StepX;
+                w1 += w1StepX;
+                w2 += w2StepX;
             }
         }
 

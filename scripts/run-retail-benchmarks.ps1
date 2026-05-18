@@ -393,6 +393,12 @@ foreach ($targetName in $Targets) {
     $gxCoverageDumpMs = if ($null -ne $timings) { $timings.gxCoverageDumpMs } else { "" }
     $gxTevSampleDumpMs = if ($null -ne $timings) { $timings.gxTevSampleDumpMs } else { "" }
     $gxTextureDumpMs = if ($null -ne $timings) { $timings.gxTextureDumpMs } else { "" }
+    $gxFrameTimings = if ($null -ne $emulatorSummary -and $null -ne $emulatorSummary.gx.frameDump) { $emulatorSummary.gx.frameDump.timings } else { $null }
+    $gxFrameReplayMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.replayMs } else { "" }
+    $gxFrameVertexDecodeMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.vertexDecodeMs } else { "" }
+    $gxFrameRasterizeMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.rasterizeMs } else { "" }
+    $gxFrameEfbCopyMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.efbCopyMs } else { "" }
+    $gxFramePngWriteMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.pngWriteMs } else { "" }
     $summaryRows.Add([pscustomobject]@{
         target = $target.slug
         status = $status
@@ -410,6 +416,11 @@ foreach ($targetName in $Targets) {
         gxCoverageDumpMs = $gxCoverageDumpMs
         gxTevSampleDumpMs = $gxTevSampleDumpMs
         gxTextureDumpMs = $gxTextureDumpMs
+        gxFrameReplayMs = $gxFrameReplayMs
+        gxFrameVertexDecodeMs = $gxFrameVertexDecodeMs
+        gxFrameRasterizeMs = $gxFrameRasterizeMs
+        gxFrameEfbCopyMs = $gxFrameEfbCopyMs
+        gxFramePngWriteMs = $gxFramePngWriteMs
         frameBytes = $frameBytes
         exiReadArrayCommands = $readArrayCount
         nonblackDisplayCopies = $nonblackCopies
