@@ -86,7 +86,8 @@ public sealed record RunDolOptions(
     bool GxFrameIgnoreEfbCopyClear = false,
     int GxDrawSkipDraws = 0,
     int GxDrawMaxDraws = 10,
-    bool TracePrsDecompress = false)
+    bool TracePrsDecompress = false,
+    string? SchedulerTracePath = null)
 {
     public const int DefaultGxFrameMaxDraws = 500;
     public const int DefaultGxFrameMaxRasterPixels = 8_000_000;
@@ -122,6 +123,7 @@ public sealed record RunDolOptions(
         string? exiTracePath = null;
         string? siTracePath = null;
         string? mmioTracePath = null;
+        string? schedulerTracePath = null;
         bool memoryCardSlotAInserted = false;
         bool memoryCardSlotBInserted = false;
         uint? frameAddress = null;
@@ -401,6 +403,15 @@ public sealed record RunDolOptions(
                     }
 
                     mmioTracePath = args[++index];
+                    break;
+                case "--trace-scheduler":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-scheduler requires a path.");
+                        return false;
+                    }
+
+                    schedulerTracePath = args[++index];
                     break;
                 case "--memory-card-a":
                     memoryCardSlotAInserted = true;
@@ -773,7 +784,7 @@ public sealed record RunDolOptions(
             return false;
         }
 
-        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, pcProfileTop, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress);
+        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, pcProfileTop, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath);
         return true;
     }
 

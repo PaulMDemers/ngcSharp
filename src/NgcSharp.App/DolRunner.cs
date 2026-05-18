@@ -310,6 +310,24 @@ public sealed class DolRunner
             };
         }
 
+        using TextWriter? schedulerTrace = OpenTraceFile(options.SchedulerTracePath);
+        if (schedulerTrace is not null)
+        {
+            SchedulerTraceRecorder schedulerTraceRecorder = new(schedulerTrace, bus);
+            Action<uint, int, uint>? chainedStoreObserver = bus.Memory.MainRamStoreObserver;
+            Action<uint, int>? chainedBulkWriteObserver = bus.Memory.MainRamBulkWriteObserver;
+            bus.Memory.MainRamStoreObserver = (address, width, value) =>
+            {
+                chainedStoreObserver?.Invoke(address, width, value);
+                schedulerTraceRecorder.RecordStore(executed + 1, currentPc, currentInstruction, state, address, width, value);
+            };
+            bus.Memory.MainRamBulkWriteObserver = (address, length) =>
+            {
+                chainedBulkWriteObserver?.Invoke(address, length);
+                schedulerTraceRecorder.RecordBulkWrite(executed + 1, currentPc, currentInstruction, address, length);
+            };
+        }
+
         stepObserver?.Invoke(new DolRunStep(0, state.Pc, 0, state, bus, IsInitial: true));
 
         try
