@@ -78,6 +78,22 @@ Compare emulator output to the latest reference run:
 powershell -ExecutionPolicy Bypass -File scripts/run-retail-reference-compare.ps1 -NoBuild
 ```
 
+Run bounded compatibility checks with watchdogs and machine-readable summaries:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-retail-benchmarks.ps1 -Targets sonic-5m,pikmin-5m -NoBuild
+powershell -ExecutionPolicy Bypass -File scripts/run-sonic-check.ps1 -NoBuild
+```
+
+These write timestamped runs under `artifacts/compat-runs` with per-target `run.json`, auto-selected GX frames, EXI summaries, GX copy summaries, and suite-level `summary.csv` / `summary.json`.
+
+Regenerate summaries from existing trace artifacts:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/summarize-exi-trace.ps1 -TracePath artifacts/compat-runs/<run>/<target>/exi.csv
+powershell -ExecutionPolicy Bypass -File scripts/summarize-gx-copies.ps1 -CopyCsvPath artifacts/compat-runs/<run>/<target>/gx-copies.csv
+```
+
 See [retail-benchmarks.md](retail-benchmarks.md).
 
 ## Debugging Style
@@ -105,4 +121,3 @@ dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "game.rvz"
 - Keep fast-forwards exact and conservative. Document the observed code pattern and why it is safe.
 - Do not hide missing hardware behavior behind broad game-specific hacks.
 - Keep public docs free of copyrighted game data, extracted assets, or proprietary SDK material.
-

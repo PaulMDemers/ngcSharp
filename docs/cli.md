@@ -130,3 +130,31 @@ Compare two PNGs:
 dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- compare-images artifacts/baseline.png artifacts/candidate.png --diff artifacts/diff.png
 ```
 
+## Retail Workflow Scripts
+
+Run the default short compatibility checks for Sonic and Pikmin:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-retail-benchmarks.ps1
+```
+
+Run only the Sonic checks:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-sonic-check.ps1
+```
+
+Both scripts write timestamped directories under `artifacts/compat-runs` with:
+
+- `run.json`: machine-readable compatibility ledger for that target.
+- `summary.csv` / `summary.json`: suite-level rollup.
+- `auto.png`: auto-selected GX frame.
+- `exi.summary.json`: EXI/card milestone counts.
+- `gx-copies.summary.json`: display/texture copy counts and nonblack frame milestones.
+
+Summarize existing traces without rerunning a game:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/summarize-exi-trace.ps1 -TracePath artifacts/run/exi.csv
+powershell -ExecutionPolicy Bypass -File scripts/summarize-gx-copies.ps1 -CopyCsvPath artifacts/run/gx-copies.csv
+```
