@@ -454,6 +454,13 @@ public sealed class DolRunner
                     continue;
                 }
 
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardLongDivisionLeaf(state, bus, out skippedInstructions))
+                {
+                    leafFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardMemmoveRoutine(state, bus, out skippedInstructions))
                 {
                     memoryCopyFastForwardInstructions += (uint)skippedInstructions;
@@ -1950,6 +1957,11 @@ public sealed class DolRunner
             return TryFastForwardFourShortStoreLeaf(state, bus, pc, out skippedInstructions);
         }
 
+        if (first == 0x9421_FFF0)
+        {
+            return TryFastForwardLongDivisionLeaf(state, bus, out skippedInstructions);
+        }
+
         if (first == 0x3800_0000)
         {
             if (TryFastForwardZeroThreeWordsLeaf(state, bus, pc, out skippedInstructions))
@@ -1988,6 +2000,182 @@ public sealed class DolRunner
 
         return false;
     }
+
+    private static bool TryFastForwardLongDivisionLeaf(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+
+        if (MatchesSignedLongDivisionLoop(bus, pc))
+        {
+            uint iterations = state.Ctr;
+            if (iterations == 0 || !CanFastForwardInstructionCount(state, iterations, instructionsPerIteration: 10, extraInstructions: 8))
+            {
+                return false;
+            }
+
+            for (uint index = 0; index < iterations; index++)
+            {
+                state.Gpr[4] = AddExtended(state, state.Gpr[4], state.Gpr[4]);
+                state.Gpr[3] = AddExtended(state, state.Gpr[3], state.Gpr[3]);
+                state.Gpr[8] = AddExtended(state, state.Gpr[8], state.Gpr[8]);
+                state.Gpr[7] = AddExtended(state, state.Gpr[7], state.Gpr[7]);
+                state.Gpr[0] = SubtractFromCarrying(state, state.Gpr[6], state.Gpr[8]);
+                state.Gpr[9] = SubtractFromExtended(state, state.Gpr[5], state.Gpr[7]);
+                SetCr0(state, state.Gpr[9]);
+                if ((state.Gpr[9] & 0x8000_0000) == 0)
+                {
+                    state.Gpr[8] = state.Gpr[0];
+                    state.Gpr[7] = state.Gpr[9];
+                }
+
+                state.Gpr[0] = AddCarrying(state, state.Gpr[10], 1);
+            }
+
+            state.Ctr = 0;
+            state.Gpr[4] = AddExtended(state, state.Gpr[4], state.Gpr[4]);
+            state.Gpr[3] = AddExtended(state, state.Gpr[3], state.Gpr[3]);
+            uint dividendSign = bus.Read32(state.Gpr[1] + 8);
+            uint divisorSign = bus.Read32(state.Gpr[1] + 12);
+            state.Gpr[7] = dividendSign ^ divisorSign;
+            SetCr0(state, state.Gpr[7]);
+            if (state.Gpr[7] != 0)
+            {
+                state.Gpr[4] = SubtractFromCarrying(state, state.Gpr[4], 0);
+                state.Gpr[3] = SubtractFromZeroExtended(state, state.Gpr[3]);
+            }
+
+            state.Gpr[1] = unchecked(state.Gpr[1] + 16);
+            state.Pc = state.Lr;
+            uint skipped = checked(iterations * 10 + 8);
+            AdvanceFastForwardedInstructions(state, bus, skipped);
+            skippedInstructions = checked((int)skipped);
+            return true;
+        }
+
+        if (MatchesSignedLongDivisionLeaf(bus, pc))
+        {
+            ulong divisor = CombineU64(state.Gpr[5], state.Gpr[6]);
+            if (divisor == 0 || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 160, extraInstructions: 0))
+            {
+                return false;
+            }
+
+            ulong dividend = CombineU64(state.Gpr[3], state.Gpr[4]);
+            long dividendSigned = unchecked((long)dividend);
+            long divisorSigned = unchecked((long)divisor);
+            ulong dividendMagnitude = dividendSigned < 0 ? unchecked(0ul - dividend) : dividend;
+            ulong divisorMagnitude = divisorSigned < 0 ? unchecked(0ul - divisor) : divisor;
+            ulong quotient = dividendMagnitude / divisorMagnitude;
+            if ((dividendSigned < 0) != (divisorSigned < 0))
+            {
+                quotient = unchecked(0ul - quotient);
+            }
+
+            state.Gpr[1] = unchecked(state.Gpr[1] + 16);
+            SetLongResult(state, quotient);
+            state.Pc = state.Lr;
+            SetCr0(state, state.Gpr[3]);
+            AdvanceFastForwardedInstructions(state, bus, 160);
+            skippedInstructions = 160;
+            return true;
+        }
+
+        if (MatchesUnsignedLongDivisionLeaf(bus, pc))
+        {
+            ulong divisor = CombineU64(state.Gpr[5], state.Gpr[6]);
+            if (divisor == 0 || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 120, extraInstructions: 0))
+            {
+                return false;
+            }
+
+            ulong quotient = CombineU64(state.Gpr[3], state.Gpr[4]) / divisor;
+            SetLongResult(state, quotient);
+            state.Pc = state.Lr;
+            SetCr0(state, state.Gpr[3]);
+            AdvanceFastForwardedInstructions(state, bus, 120);
+            skippedInstructions = 120;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool MatchesSignedLongDivisionLoop(GameCubeBus bus, uint pc) =>
+        bus.Read32(pc + 0x00) == 0x7C84_2114
+        && bus.Read32(pc + 0x04) == 0x7C63_1914
+        && bus.Read32(pc + 0x08) == 0x7D08_4114
+        && bus.Read32(pc + 0x0C) == 0x7CE7_3914
+        && bus.Read32(pc + 0x10) == 0x7C06_4010
+        && bus.Read32(pc + 0x14) == 0x7D25_3911
+        && bus.Read32(pc + 0x28) == 0x4200_FFD8
+        && bus.Read32(pc + 0x2C) == 0x7C84_2114
+        && bus.Read32(pc + 0x30) == 0x7C63_1914
+        && bus.Read32(pc + 0x4C) == 0x7C63_0190
+        && bus.Read32(pc + 0x50) == 0x4800_000C;
+
+    private static bool MatchesSignedLongDivisionLeaf(GameCubeBus bus, uint pc) =>
+        bus.Read32(pc + 0x000) == 0x9421_FFF0
+        && bus.Read32(pc + 0x004) == 0x5469_0001
+        && bus.Read32(pc + 0x014) == 0x54A9_0001
+        && bus.Read32(pc + 0x02C) == 0x7C60_0034
+        && bus.Read32(pc + 0x034) == 0x7C89_0034
+        && bus.Read32(pc + 0x0D4) == 0x7C84_2114
+        && bus.Read32(pc + 0x0FC) == 0x4200_FFD8
+        && bus.Read32(pc + 0x120) == 0x7C63_0190
+        && bus.Read32(pc + 0x130) == 0x3821_0010
+        && bus.Read32(pc + 0x134) == 0x4E80_0020;
+
+    private static bool MatchesUnsignedLongDivisionLeaf(GameCubeBus bus, uint pc) =>
+        bus.Read32(pc + 0x000) == 0x2C03_0000
+        && bus.Read32(pc + 0x004) == 0x7C60_0034
+        && bus.Read32(pc + 0x014) == 0x7CCA_0034
+        && bus.Read32(pc + 0x0A8) == 0x7C84_2114
+        && bus.Read32(pc + 0x0D4) == 0x7D04_4378
+        && bus.Read32(pc + 0x0D8) == 0x7CE3_3B78
+        && bus.Read32(pc + 0x0DC) == 0x4E80_0020
+        && bus.Read32(pc + 0x0E0) == 0x4E80_0020;
+
+    private static ulong CombineU64(uint high, uint low) => ((ulong)high << 32) | low;
+
+    private static void SetLongResult(PowerPcState state, ulong value)
+    {
+        state.Gpr[3] = (uint)(value >> 32);
+        state.Gpr[4] = (uint)value;
+    }
+
+    private static uint AddExtended(PowerPcState state, uint left, uint right)
+    {
+        ulong carry = (state.Xer & 0x2000_0000) != 0 ? 1u : 0u;
+        ulong result = (ulong)left + right + carry;
+        SetCarry(state, result > uint.MaxValue);
+        return (uint)result;
+    }
+
+    private static uint AddCarrying(PowerPcState state, uint left, uint right)
+    {
+        uint result = unchecked(left + right);
+        SetCarry(state, result < left);
+        return result;
+    }
+
+    private static uint SubtractFromCarrying(PowerPcState state, uint subtrahend, uint minuend)
+    {
+        uint result = unchecked(minuend - subtrahend);
+        SetCarry(state, minuend >= subtrahend);
+        return result;
+    }
+
+    private static uint SubtractFromExtended(PowerPcState state, uint subtrahend, uint minuend)
+    {
+        ulong carry = (state.Xer & 0x2000_0000) != 0 ? 1u : 0u;
+        ulong result = (ulong)minuend + (~subtrahend & 0xFFFF_FFFFu) + carry;
+        SetCarry(state, result > uint.MaxValue);
+        return (uint)result;
+    }
+
+    private static uint SubtractFromZeroExtended(PowerPcState state, uint subtrahend) =>
+        SubtractFromExtended(state, subtrahend, 0);
 
     private static bool TryFastForwardFourShortStoreLeaf(PowerPcState state, GameCubeBus bus, uint pc, out int skippedInstructions)
     {

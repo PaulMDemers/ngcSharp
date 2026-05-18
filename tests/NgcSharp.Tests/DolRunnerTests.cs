@@ -297,6 +297,113 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SignedLongDivisionLeafFastForwardReturnsQuotient()
+    {
+        const uint pc = 0x8000_3300;
+        GameCubeBus bus = new();
+        WriteSignedLongDivisionLeafSignature(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8000_4400,
+        };
+        state.Gpr[1] = 0x8030_0000;
+        SetLongOperand(state, 3, unchecked((ulong)-90L));
+        SetLongOperand(state, 5, 7);
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardLongDivisionLeaf(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(160, skippedInstructions);
+        Assert.Equal(0x8000_4400u, state.Pc);
+        Assert.Equal(0x8030_0010u, state.Gpr[1]);
+        Assert.Equal(unchecked((ulong)-12L), GetLongOperand(state, 3));
+    }
+
+    [Fact]
+    public void UnsignedLongDivisionLeafFastForwardReturnsQuotient()
+    {
+        const uint pc = 0x8000_3500;
+        GameCubeBus bus = new();
+        WriteUnsignedLongDivisionLeafSignature(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8000_4600,
+        };
+        state.Gpr[1] = 0x8030_0000;
+        SetLongOperand(state, 3, 0x0000_0002_0000_0000ul);
+        SetLongOperand(state, 5, 4);
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardLongDivisionLeaf(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(120, skippedInstructions);
+        Assert.Equal(0x8000_4600u, state.Pc);
+        Assert.Equal(0x8030_0000u, state.Gpr[1]);
+        Assert.Equal(0x0000_0000_8000_0000ul, GetLongOperand(state, 3));
+    }
+
+    [Fact]
+    public void SignedLongDivisionLoopFastForwardFinishesCurrentDivision()
+    {
+        const uint pc = 0x8000_3600;
+        const uint stack = 0x8030_0000;
+        GameCubeBus bus = new();
+        WriteSignedLongDivisionLoopSignature(bus.Memory, pc);
+        bus.Memory.Write32(stack + 8, 0);
+        bus.Memory.Write32(stack + 12, 0);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8000_4700,
+            Ctr = 10,
+        };
+        state.Gpr[1] = stack;
+        state.Gpr[3] = 0x7240_0000;
+        state.Gpr[4] = 0;
+        state.Gpr[5] = 0;
+        state.Gpr[6] = 0x0000_9E34;
+        state.Gpr[7] = 0;
+        state.Gpr[8] = 0x0000_752A;
+        state.Gpr[9] = 0x16;
+        state.Gpr[10] = 0xFFFF_FFFF;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardLongDivisionLeaf(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(108, skippedInstructions);
+        Assert.Equal(0x8000_4700u, state.Pc);
+        Assert.Equal(0x8030_0010u, state.Gpr[1]);
+        Assert.Equal(0x0000_0000_0000_03FFul, GetLongOperand(state, 3));
+    }
+
+    [Fact]
+    public void LongDivisionLeafFastForwardDoesNotCrossPositiveDecrementer()
+    {
+        const uint pc = 0x8000_3700;
+        GameCubeBus bus = new();
+        WriteSignedLongDivisionLeafSignature(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8000_4800,
+        };
+        SetLongOperand(state, 3, 90);
+        SetLongOperand(state, 5, 7);
+        state.Spr[22] = 32;
+
+        bool skipped = InvokeFastForwardLongDivisionLeaf(state, bus, out int skippedInstructions);
+
+        Assert.False(skipped);
+        Assert.Equal(0, skippedInstructions);
+        Assert.Equal(pc, state.Pc);
+    }
+
+    [Fact]
     public void ByteCopyLoopFastForwardCopiesMemoryAndFinishesLoop()
     {
         const uint pc = 0x8000_3200;
@@ -2238,6 +2345,16 @@ public sealed class DolRunnerTests
         return result;
     }
 
+    private static bool InvokeFastForwardLongDivisionLeaf(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardLongDivisionLeaf", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find long division leaf fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
     private static bool InvokeFastForwardMemmoveRoutine(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardMemmoveRoutine", BindingFlags.NonPublic | BindingFlags.Static)
@@ -2391,6 +2508,56 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x20, 0x94E3_0020);
         WriteInstruction(memory, pc + 0x24, 0x4082_FFDC);
     }
+
+    private static void WriteSignedLongDivisionLeafSignature(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x000, 0x9421_FFF0);
+        WriteInstruction(memory, pc + 0x004, 0x5469_0001);
+        WriteInstruction(memory, pc + 0x014, 0x54A9_0001);
+        WriteInstruction(memory, pc + 0x02C, 0x7C60_0034);
+        WriteInstruction(memory, pc + 0x034, 0x7C89_0034);
+        WriteInstruction(memory, pc + 0x0D4, 0x7C84_2114);
+        WriteInstruction(memory, pc + 0x0FC, 0x4200_FFD8);
+        WriteInstruction(memory, pc + 0x120, 0x7C63_0190);
+        WriteInstruction(memory, pc + 0x130, 0x3821_0010);
+        WriteInstruction(memory, pc + 0x134, 0x4E80_0020);
+    }
+
+    private static void WriteUnsignedLongDivisionLeafSignature(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x000, 0x2C03_0000);
+        WriteInstruction(memory, pc + 0x004, 0x7C60_0034);
+        WriteInstruction(memory, pc + 0x014, 0x7CCA_0034);
+        WriteInstruction(memory, pc + 0x0A8, 0x7C84_2114);
+        WriteInstruction(memory, pc + 0x0D4, 0x7D04_4378);
+        WriteInstruction(memory, pc + 0x0D8, 0x7CE3_3B78);
+        WriteInstruction(memory, pc + 0x0DC, 0x4E80_0020);
+        WriteInstruction(memory, pc + 0x0E0, 0x4E80_0020);
+    }
+
+    private static void WriteSignedLongDivisionLoopSignature(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x7C84_2114);
+        WriteInstruction(memory, pc + 0x04, 0x7C63_1914);
+        WriteInstruction(memory, pc + 0x08, 0x7D08_4114);
+        WriteInstruction(memory, pc + 0x0C, 0x7CE7_3914);
+        WriteInstruction(memory, pc + 0x10, 0x7C06_4010);
+        WriteInstruction(memory, pc + 0x14, 0x7D25_3911);
+        WriteInstruction(memory, pc + 0x28, 0x4200_FFD8);
+        WriteInstruction(memory, pc + 0x2C, 0x7C84_2114);
+        WriteInstruction(memory, pc + 0x30, 0x7C63_1914);
+        WriteInstruction(memory, pc + 0x4C, 0x7C63_0190);
+        WriteInstruction(memory, pc + 0x50, 0x4800_000C);
+    }
+
+    private static void SetLongOperand(PowerPcState state, int highRegister, ulong value)
+    {
+        state.Gpr[highRegister] = (uint)(value >> 32);
+        state.Gpr[highRegister + 1] = (uint)value;
+    }
+
+    private static ulong GetLongOperand(PowerPcState state, int highRegister) =>
+        ((ulong)state.Gpr[highRegister] << 32) | state.Gpr[highRegister + 1];
 
     private static void WriteCtrZeroStoreLoop(GameCubeMemory memory, uint pc)
     {
