@@ -9,6 +9,7 @@ public sealed class DolRunner
     private const uint MaxFastForwardMemmoveBytes = 16 * 1024 * 1024;
     private const uint MaxFastForwardStringCopyBytes = 1 * 1024 * 1024;
     private const uint MaxFastForwardStringCompareBytes = 1 * 1024 * 1024;
+    private const uint MaxFastForwardStringLengthBytes = 1 * 1024 * 1024;
     private const uint MaxFastForwardPrsOutputBytes = 16 * 1024 * 1024;
     private const uint MaxFastForwardTrigTableEntries = 0x0001_0000;
     private const uint SonicTrigTableInstructionsPerEntry = 180;
@@ -123,6 +124,7 @@ public sealed class DolRunner
         ulong textureSampleFastForwardInstructions = 0;
         ulong stringCopyFastForwardInstructions = 0;
         ulong stringCompareFastForwardInstructions = 0;
+        ulong stringLengthFastForwardInstructions = 0;
         ulong prsDecompressFastForwardInstructions = 0;
         ulong trigTableFastForwardInstructions = 0;
         ulong bitUnpackFastForwardInstructions = 0;
@@ -446,6 +448,7 @@ public sealed class DolRunner
                         textureSampleInstructions = textureSampleFastForwardInstructions,
                         stringCopyInstructions = stringCopyFastForwardInstructions,
                         stringCompareInstructions = stringCompareFastForwardInstructions,
+                        stringLengthInstructions = stringLengthFastForwardInstructions,
                         prsDecompressInstructions = prsDecompressFastForwardInstructions,
                         trigTableInstructions = trigTableFastForwardInstructions,
                         bitUnpackInstructions = bitUnpackFastForwardInstructions,
@@ -643,6 +646,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardStringCompareRoutine(state, bus, out skippedInstructions))
                 {
                     stringCompareFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardStringLengthRoutine(state, bus, out skippedInstructions))
+                {
+                    stringLengthFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1033,6 +1043,11 @@ public sealed class DolRunner
             if (stringCompareFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {stringCompareFastForwardInstructions} string compare instruction(s).");
+            }
+
+            if (stringLengthFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {stringLengthFastForwardInstructions} string length instruction(s).");
             }
 
             if (prsDecompressFastForwardInstructions != 0)
@@ -2185,6 +2200,11 @@ public sealed class DolRunner
             return TryFastForwardLongDivisionLeaf(state, bus, out skippedInstructions);
         }
 
+        if (first == 0x9421_FF90)
+        {
+            return TryFastForwardVariadicRegisterSaveStub(state, bus, pc, out skippedInstructions);
+        }
+
         if (first == 0x3800_0000)
         {
             if (TryFastForwardZeroThreeWordsLeaf(state, bus, pc, out skippedInstructions))
@@ -2196,6 +2216,11 @@ public sealed class DolRunner
             {
                 return true;
             }
+        }
+
+        if (first == 0x3860_0000)
+        {
+            return TryFastForwardReturnZeroLeaf(state, bus, pc, out skippedInstructions);
         }
 
         if (first == 0x8003_0000)
@@ -2222,6 +2247,43 @@ public sealed class DolRunner
         }
 
         return false;
+    }
+
+    private static bool TryFastForwardReturnZeroLeaf(PowerPcState state, GameCubeBus bus, uint pc, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (bus.Read32(pc + 4) != 0x4E80_0020 || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 2, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        state.Gpr[3] = 0;
+        state.Pc = state.Lr;
+        AdvanceFastForwardedInstructions(state, bus, 2);
+        skippedInstructions = 2;
+        return true;
+    }
+
+    private static bool TryFastForwardVariadicRegisterSaveStub(PowerPcState state, GameCubeBus bus, uint pc, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (bus.Read32(pc + 0x00) != 0x9421_FF90
+            || bus.Read32(pc + 0x04) != 0x4086_0024
+            || bus.Read32(pc + 0x08) != 0xD821_0028
+            || bus.Read32(pc + 0x24) != 0xD901_0060
+            || bus.Read32(pc + 0x28) != 0x9061_0008
+            || bus.Read32(pc + 0x44) != 0x9141_0024
+            || bus.Read32(pc + 0x48) != 0x3821_0070
+            || bus.Read32(pc + 0x4C) != 0x4E80_0020
+            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 20, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        state.Pc = state.Lr;
+        AdvanceFastForwardedInstructions(state, bus, 20);
+        skippedInstructions = 20;
+        return true;
     }
 
     private static bool TryFastForwardLongDivisionLeaf(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
@@ -2757,6 +2819,68 @@ public sealed class DolRunner
         SetCr0(state, result);
         state.Pc = state.Lr;
         uint skipped = checked(comparedBytes * 12 + 24);
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+    private static bool TryFastForwardStringLengthRoutine(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        if (bus.Read32(pc + 0x00) != 0x9421_FFF0
+            || bus.Read32(pc + 0x04) != 0x93E1_000C
+            || bus.Read32(pc + 0x08) != 0x3BE0_FFFF
+            || bus.Read32(pc + 0x0C) != 0x93C1_0008
+            || bus.Read32(pc + 0x10) != 0x3BC3_FFFF
+            || bus.Read32(pc + 0x14) != 0x8C1E_0001
+            || bus.Read32(pc + 0x18) != 0x3BFF_0001
+            || bus.Read32(pc + 0x1C) != 0x2800_0000
+            || bus.Read32(pc + 0x20) != 0x4082_FFF4
+            || bus.Read32(pc + 0x24) != 0x7FE3_FB78
+            || bus.Read32(pc + 0x28) != 0x83E1_000C
+            || bus.Read32(pc + 0x2C) != 0x83C1_0008
+            || bus.Read32(pc + 0x30) != 0x3821_0010
+            || bus.Read32(pc + 0x34) != 0x4E80_0020)
+        {
+            return false;
+        }
+
+        uint stringAddress = state.Gpr[3];
+        uint length = 0;
+        bool foundTerminator = false;
+        while (length < MaxFastForwardStringLengthBytes)
+        {
+            uint address = unchecked(stringAddress + length);
+            if (!bus.Memory.IsMainRamAddress(address, 1))
+            {
+                return false;
+            }
+
+            if (bus.Memory.Read8(address) == 0)
+            {
+                foundTerminator = true;
+                break;
+            }
+
+            length++;
+        }
+
+        if (!foundTerminator)
+        {
+            return false;
+        }
+
+        uint skipped = checked(10 + (length + 1) * 4);
+        if (!CanFastForwardInstructionCount(state, iterations: skipped, instructionsPerIteration: 1, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        state.Gpr[0] = 0;
+        state.Gpr[3] = length;
+        SetCr0(state, 0);
+        state.Pc = state.Lr;
         AdvanceFastForwardedInstructions(state, bus, skipped);
         skippedInstructions = checked((int)skipped);
         return true;
