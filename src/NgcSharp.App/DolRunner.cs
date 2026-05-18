@@ -228,6 +228,18 @@ public sealed class DolRunner
             };
         }
 
+        using TextWriter? mmioTrace = OpenTraceFile(options.MmioTracePath);
+        if (mmioTrace is not null)
+        {
+            mmioTrace.WriteLine("instruction,pc,opcode,disassembly,device,kind,width,address,value");
+            Action<MmioAccess>? chainedMmioObserver = bus.MmioAccessObserver;
+            bus.MmioAccessObserver = access =>
+            {
+                chainedMmioObserver?.Invoke(access);
+                mmioTrace.WriteLine($"{executed + 1},0x{currentPc:X8},0x{currentInstruction:X8},\"{PowerPcDisassembler.Disassemble(currentInstruction).Replace("\"", "\"\"", StringComparison.Ordinal)}\",{access.DeviceName},{access.Kind},{access.Width},0x{access.Address:X8},0x{access.Value:X8}");
+            };
+        }
+
         if (HasWriteWatch(options))
         {
             int emittedWriteWatchChanges = 0;
