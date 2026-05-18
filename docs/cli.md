@@ -165,7 +165,7 @@ Both scripts write timestamped directories under `artifacts/compat-runs` with:
 - `summary.csv` / `summary.json`: suite-level rollup.
 - `auto.png`: auto-selected GX frame.
 - `exi.summary.json`: EXI/card milestone counts.
-- `gx-copies.summary.json`: display/texture copy counts and nonblack frame milestones.
+- `gx-copies.summary.json`: display/texture copy counts, nonblack frame milestones, and per-XFB destination lifecycles showing black overwrites after nonblack copies.
 
 Summarize existing traces without rerunning a game:
 
@@ -173,3 +173,5 @@ Summarize existing traces without rerunning a game:
 powershell -ExecutionPolicy Bypass -File scripts/summarize-exi-trace.ps1 -TracePath artifacts/run/exi.csv
 powershell -ExecutionPolicy Bypass -File scripts/summarize-gx-copies.ps1 -CopyCsvPath artifacts/run/gx-copies.csv
 ```
+
+For presentation bugs, inspect `displayDestinations` and `displayTimeline` in the GX copy summary. They call out cases where a useful display copy exists briefly and is then overwritten by black at the same framebuffer address.
