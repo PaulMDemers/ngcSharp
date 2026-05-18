@@ -3388,7 +3388,7 @@ public sealed class GameCubeBus : IMemoryBus
         foreach (uint address in VideoInterruptRegisters())
         {
             _mmioValues.TryGetValue(address, out uint value);
-            if ((value & VideoInterruptEnable) != 0 && (value & VideoInterruptLineMask) == line)
+            if ((value & VideoInterruptLineMask) == line)
             {
                 RaiseVideoInterrupt(address);
             }
@@ -3399,19 +3399,25 @@ public sealed class GameCubeBus : IMemoryBus
     {
         _mmioValues.TryGetValue(address, out uint value);
         _mmioValues[address] = value | VideoInterruptStatus;
-        RaiseProcessorInterrupt(ProcessorInterfaceVideoInterrupt);
+        UpdateVideoProcessorInterrupt();
     }
 
     private void ClearVideoInterruptIfAcknowledged(uint acknowledgedAddress, uint acknowledgedValue)
     {
+        UpdateVideoProcessorInterrupt(acknowledgedAddress, acknowledgedValue);
+    }
+
+    private void UpdateVideoProcessorInterrupt(uint? overrideAddress = null, uint overrideValue = 0)
+    {
         foreach (uint address in VideoInterruptRegisters())
         {
-            uint value = address == acknowledgedAddress
-                ? acknowledgedValue
+            uint value = address == overrideAddress
+                ? overrideValue
                 : _mmioValues.TryGetValue(address, out uint storedValue) ? storedValue : 0;
 
-            if ((value & VideoInterruptStatus) != 0)
+            if ((value & (VideoInterruptStatus | VideoInterruptEnable)) == (VideoInterruptStatus | VideoInterruptEnable))
             {
+                RaiseProcessorInterrupt(ProcessorInterfaceVideoInterrupt);
                 return;
             }
         }

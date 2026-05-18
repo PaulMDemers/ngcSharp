@@ -1183,6 +1183,42 @@ public sealed class GameCubeBusTests
     }
 
     [Fact]
+    public void VideoDisplayInterruptStatusLatchesWhenInterruptIsDisabled()
+    {
+        GameCubeBus bus = new();
+
+        bus.Write32(0xCC00_3004, GameCubeBus.ProcessorInterfaceVideoInterrupt);
+        bus.Write16(0xCC00_2038, 42);
+
+        bus.Advance((ulong)GameCubeBus.VideoCyclesPerScanline * 42);
+
+        Assert.Equal(GameCubeBus.VideoInterruptStatus, bus.Read16(0xCC00_2038) & GameCubeBus.VideoInterruptStatus);
+        Assert.False(bus.HasPendingExternalInterrupt);
+        Assert.Equal(0u, bus.Read32(0xCC00_3000) & GameCubeBus.ProcessorInterfaceVideoInterrupt);
+    }
+
+    [Fact]
+    public void VideoProcessorInterruptClearsWhenOnlyDisabledStatusRemains()
+    {
+        GameCubeBus bus = new();
+
+        bus.Write32(0xCC00_3004, GameCubeBus.ProcessorInterfaceVideoInterrupt);
+        bus.Write16(0xCC00_2030, (ushort)(GameCubeBus.VideoInterruptEnable | 42));
+        bus.Write16(0xCC00_2038, 42);
+
+        bus.Advance((ulong)GameCubeBus.VideoCyclesPerScanline * 42);
+
+        Assert.True(bus.HasPendingExternalInterrupt);
+        Assert.Equal(GameCubeBus.VideoInterruptStatus, bus.Read16(0xCC00_2038) & GameCubeBus.VideoInterruptStatus);
+
+        bus.Write16(0xCC00_2030, (ushort)(GameCubeBus.VideoInterruptEnable | 42));
+
+        Assert.Equal(GameCubeBus.VideoInterruptStatus, bus.Read16(0xCC00_2038) & GameCubeBus.VideoInterruptStatus);
+        Assert.False(bus.HasPendingExternalInterrupt);
+        Assert.Equal(0u, bus.Read32(0xCC00_3000) & GameCubeBus.ProcessorInterfaceVideoInterrupt);
+    }
+
+    [Fact]
     public void ProcessorInterfaceReportsResetSwitchReleasedWithoutPendingInterrupt()
     {
         GameCubeBus bus = new();
