@@ -5,7 +5,7 @@ using NgcSharp.Core;
 
 namespace NgcSharp.App;
 
-public sealed record GxFifoSoftwareRenderTimings(double TotalMs, double FifoExpansionMs, double BufferInitMs, double ViResolveMs, double ReplayMs, double RegisterWriteMs, double VertexDecodeMs, double RasterizeMs, double EfbCoverageMs, double EfbCopyMs, double SourceCaptureMs, double DisplayCaptureMs, double SourceSelectionMs, double PngWriteMs);
+public sealed record GxFifoSoftwareRenderTimings(double TotalMs, double FifoExpansionMs, double BufferInitMs, double ViResolveMs, double ReplayMs, double RegisterWriteMs, double VertexDecodeMs, double RasterizeMs, double RasterSetupMs, double RasterCoverageMs, double RasterDepthTestMs, double RasterTevTextureMs, double RasterAlphaTestMs, double RasterBlendWriteMs, double EfbCoverageMs, double EfbCopyMs, double SourceCaptureMs, double DisplayCaptureMs, double SourceSelectionMs, double PngWriteMs);
 public sealed record GxFifoSoftwareRenderResult(string Path, int Width, int Height, int Draws, int RenderedQuads, int DegenerateQuads, int RenderedTriangles = 0, int DegenerateTriangles = 0, GxFrameDumpSource Source = GxFrameDumpSource.Efb, uint? SourceAddress = null, FramebufferPixelFormat? SourceFormat = null, int? SourceCopyIndex = null, bool RasterBudgetExhausted = false, GxFifoSoftwareRenderTimings? Timings = null);
 public sealed record GxFifoDrawDiagnosticResult(string Path, int TotalDraws, int DrawsWritten);
 public sealed record GxFifoCopyDiagnosticResult(string Path, int CopiesWritten, int TotalDraws, bool RasterBudgetExhausted = false);
@@ -113,6 +113,7 @@ public static class GxFifoSoftwareRenderer
         long registerWriteTicks = 0;
         long vertexDecodeTicks = 0;
         long rasterizeTicks = 0;
+        RasterTimingAccumulator rasterTimings = new();
         long efbCoverageTicks = 0;
         long efbCopyTicks = 0;
         long sourceCaptureTicks = 0;
@@ -131,6 +132,12 @@ public static class GxFifoSoftwareRenderer
                 RegisterWriteMs: RoundMilliseconds(StopwatchTicksToMilliseconds(registerWriteTicks)),
                 VertexDecodeMs: RoundMilliseconds(StopwatchTicksToMilliseconds(vertexDecodeTicks)),
                 RasterizeMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterizeTicks)),
+                RasterSetupMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterTimings.SetupTicks)),
+                RasterCoverageMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterTimings.CoverageTicks)),
+                RasterDepthTestMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterTimings.DepthTestTicks)),
+                RasterTevTextureMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterTimings.TevTextureTicks)),
+                RasterAlphaTestMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterTimings.AlphaTestTicks)),
+                RasterBlendWriteMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterTimings.BlendWriteTicks)),
                 EfbCoverageMs: RoundMilliseconds(StopwatchTicksToMilliseconds(efbCoverageTicks)),
                 EfbCopyMs: RoundMilliseconds(StopwatchTicksToMilliseconds(efbCopyTicks)),
                 SourceCaptureMs: RoundMilliseconds(StopwatchTicksToMilliseconds(sourceCaptureTicks)),
@@ -467,7 +474,7 @@ public static class GxFifoSoftwareRenderer
                 if (decodedVertices)
                 {
                     long rasterizeStart = Stopwatch.GetTimestamp();
-                    RenderPrimitiveBounds(rgb, alpha, depth, width, height, command, vertices, state, memory, ref renderedQuads, ref degenerateQuads, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters: null);
+                    RenderPrimitiveBounds(rgb, alpha, depth, width, height, command, vertices, state, memory, ref renderedQuads, ref degenerateQuads, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters: null, rasterTimings);
                     rasterizeTicks += Stopwatch.GetTimestamp() - rasterizeStart;
                 }
             }
@@ -2469,6 +2476,16 @@ public static class GxFifoSoftwareRenderer
         public void RecordDepthUpdate() => DepthUpdates++;
     }
 
+    private sealed class RasterTimingAccumulator
+    {
+        public long SetupTicks;
+        public long CoverageTicks;
+        public long DepthTestTicks;
+        public long TevTextureTicks;
+        public long AlphaTestTicks;
+        public long BlendWriteTicks;
+    }
+
     private static void RenderPrimitiveBounds(
         byte[] rgb,
         byte[] alpha,
@@ -2484,14 +2501,15 @@ public static class GxFifoSoftwareRenderer
         ref int renderedTriangles,
         ref int degenerateTriangles,
         ref int rasterPixelsRemaining,
-        RasterDiagnosticCounters? counters)
+        RasterDiagnosticCounters? counters,
+        RasterTimingAccumulator? timings = null)
     {
         switch (command & 0xF8)
         {
             case 0x80:
                 for (int vertex = 0; vertex + 3 < vertices.Length; vertex += 4)
                 {
-                    if (FillQuadBounds(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], vertices[vertex + 3], state, memory, ref rasterPixelsRemaining, counters))
+                    if (FillQuadBounds(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], vertices[vertex + 3], state, memory, ref rasterPixelsRemaining, counters, timings))
                     {
                         renderedQuads++;
                     }
@@ -2505,7 +2523,7 @@ public static class GxFifoSoftwareRenderer
             case 0x90:
                 for (int vertex = 0; vertex + 2 < vertices.Length; vertex += 3)
                 {
-                    FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters);
+                    FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings);
                 }
 
                 break;
@@ -2514,11 +2532,11 @@ public static class GxFifoSoftwareRenderer
                 {
                     if ((vertex & 1) == 0)
                     {
-                        FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters);
+                        FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings);
                     }
                     else
                     {
-                        FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex + 1], vertices[vertex], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters);
+                        FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex + 1], vertices[vertex], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings);
                     }
                 }
 
@@ -2526,16 +2544,16 @@ public static class GxFifoSoftwareRenderer
             case 0xA0:
                 for (int vertex = 1; vertex + 1 < vertices.Length; vertex++)
                 {
-                    FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[0], vertices[vertex], vertices[vertex + 1], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters);
+                    FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[0], vertices[vertex], vertices[vertex + 1], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings);
                 }
 
                 break;
         }
     }
 
-    private static void FillTriangleOrCount(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int renderedTriangles, ref int degenerateTriangles, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters)
+    private static void FillTriangleOrCount(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int renderedTriangles, ref int degenerateTriangles, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings)
     {
-        if (FillTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters))
+        if (FillTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters, timings))
         {
             renderedTriangles++;
         }
@@ -2545,23 +2563,34 @@ public static class GxFifoSoftwareRenderer
         }
     }
 
-    private static bool FillQuadBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertex d, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters)
+    private static bool FillQuadBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertex d, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings)
     {
-        bool first = FillTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters);
-        bool second = FillTriangleBounds(rgb, alpha, depth, width, height, a, c, d, state, memory, ref rasterPixelsRemaining, counters);
+        bool first = FillTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters, timings);
+        bool second = FillTriangleBounds(rgb, alpha, depth, width, height, a, c, d, state, memory, ref rasterPixelsRemaining, counters, timings);
         return first || second;
     }
 
-    private static bool FillTriangleBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters)
+    private static bool FillTriangleBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings)
     {
+        long setupStart = timings is null ? 0 : Stopwatch.GetTimestamp();
         if (rasterPixelsRemaining <= 0)
         {
+            if (timings is not null)
+            {
+                timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+            }
+
             return false;
         }
 
         if (a.ClipRejected || b.ClipRejected || c.ClipRejected)
         {
-            return FillNearClippedTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters);
+            if (timings is not null)
+            {
+                timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+            }
+
+            return FillNearClippedTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters, timings);
         }
 
         float minX = MathF.Min(MathF.Min(a.X, b.X), c.X);
@@ -2571,11 +2600,21 @@ public static class GxFifoSoftwareRenderer
 
         if (!float.IsFinite(minX) || !float.IsFinite(maxX) || !float.IsFinite(minY) || !float.IsFinite(maxY))
         {
+            if (timings is not null)
+            {
+                timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+            }
+
             return false;
         }
 
         if (maxX <= minX || maxY <= minY)
         {
+            if (timings is not null)
+            {
+                timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+            }
+
             return false;
         }
 
@@ -2608,6 +2647,11 @@ public static class GxFifoSoftwareRenderer
 
         if (right <= left || bottom <= top)
         {
+            if (timings is not null)
+            {
+                timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+            }
+
             return false;
         }
 
@@ -2620,6 +2664,11 @@ public static class GxFifoSoftwareRenderer
         float area = Edge(ax, ay, bx, by, cx, cy);
         if (MathF.Abs(area) < 0.0001f)
         {
+            if (timings is not null)
+            {
+                timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+            }
+
             return false;
         }
 
@@ -2641,6 +2690,11 @@ public static class GxFifoSoftwareRenderer
             && b.TryGetTexCoord(texCoord, out bTexS, out bTexT)
             && c.TryGetTexCoord(texCoord, out cTexS, out cTexT);
         GxTevStage0Mode stage0Mode = state.Stage0Mode;
+        if (timings is not null)
+        {
+            timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+        }
+
         bool wrotePixel = false;
         for (int y = top; y <= bottom; y++)
         {
@@ -2659,8 +2713,14 @@ public static class GxFifoSoftwareRenderer
                 }
 
                 rasterPixelsRemaining--;
+                long coverageStart = timings is null ? 0 : Stopwatch.GetTimestamp();
                 if (!InsideTriangle(w0, w1, w2, area))
                 {
+                    if (timings is not null)
+                    {
+                        timings.CoverageTicks += Stopwatch.GetTimestamp() - coverageStart;
+                    }
+
                     w0 += w0StepX;
                     w1 += w1StepX;
                     w2 += w2StepX;
@@ -2672,10 +2732,21 @@ public static class GxFifoSoftwareRenderer
                 float aWeight = w0 * inverseArea;
                 float bWeight = w1 * inverseArea;
                 float cWeight = w2 * inverseArea;
+                if (timings is not null)
+                {
+                    timings.CoverageTicks += Stopwatch.GetTimestamp() - coverageStart;
+                }
+
+                long depthTestStart = timings is null ? 0 : Stopwatch.GetTimestamp();
                 float z = a.Z * aWeight + b.Z * bWeight + c.Z * cWeight;
                 int depthIndex = depthRow + x;
                 if (!state.DepthTestPasses(z, depth[depthIndex]))
                 {
+                    if (timings is not null)
+                    {
+                        timings.DepthTestTicks += Stopwatch.GetTimestamp() - depthTestStart;
+                    }
+
                     counters?.RecordDepthRejected();
                     w0 += w0StepX;
                     w1 += w1StepX;
@@ -2683,6 +2754,12 @@ public static class GxFifoSoftwareRenderer
                     continue;
                 }
 
+                if (timings is not null)
+                {
+                    timings.DepthTestTicks += Stopwatch.GetTimestamp() - depthTestStart;
+                }
+
+                long tevTextureStart = timings is null ? 0 : Stopwatch.GetTimestamp();
                 byte r = InterpolateByte(a.R, b.R, c.R, aWeight, bWeight, cWeight);
                 byte g = InterpolateByte(a.G, b.G, c.G, aWeight, bWeight, cWeight);
                 byte bValue = InterpolateByte(a.B, b.B, c.B, aWeight, bWeight, cWeight);
@@ -2709,8 +2786,19 @@ public static class GxFifoSoftwareRenderer
                     }
                 }
 
+                if (timings is not null)
+                {
+                    timings.TevTextureTicks += Stopwatch.GetTimestamp() - tevTextureStart;
+                }
+
+                long alphaTestStart = timings is null ? 0 : Stopwatch.GetTimestamp();
                 if (!state.AlphaTestPasses(sourceAlpha))
                 {
+                    if (timings is not null)
+                    {
+                        timings.AlphaTestTicks += Stopwatch.GetTimestamp() - alphaTestStart;
+                    }
+
                     counters?.RecordAlphaRejected();
                     w0 += w0StepX;
                     w1 += w1StepX;
@@ -2718,6 +2806,12 @@ public static class GxFifoSoftwareRenderer
                     continue;
                 }
 
+                if (timings is not null)
+                {
+                    timings.AlphaTestTicks += Stopwatch.GetTimestamp() - alphaTestStart;
+                }
+
+                long blendWriteStart = timings is null ? 0 : Stopwatch.GetTimestamp();
                 if (state.ColorUpdateEnabled)
                 {
                     state.ApplyBlend(rgb, alpha, index, depthIndex, ref r, ref g, ref bValue, ref sourceAlpha);
@@ -2744,6 +2838,11 @@ public static class GxFifoSoftwareRenderer
                 }
 
                 wrotePixel = true;
+                if (timings is not null)
+                {
+                    timings.BlendWriteTicks += Stopwatch.GetTimestamp() - blendWriteStart;
+                }
+
                 w0 += w0StepX;
                 w1 += w1StepX;
                 w2 += w2StepX;
@@ -2753,7 +2852,7 @@ public static class GxFifoSoftwareRenderer
         return wrotePixel;
     }
 
-    private static bool FillNearClippedTriangleBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters)
+    private static bool FillNearClippedTriangleBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings)
     {
         if (!a.HasViewPosition || !b.HasViewPosition || !c.HasViewPosition)
         {
@@ -2763,9 +2862,9 @@ public static class GxFifoSoftwareRenderer
         List<GxVertex> clipped = ClipTriangleToNearPlane([a, b, c], state);
         return clipped.Count switch
         {
-            3 => FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[1], clipped[2], state, memory, ref rasterPixelsRemaining, counters),
-            4 => FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[1], clipped[2], state, memory, ref rasterPixelsRemaining, counters)
-                | FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[2], clipped[3], state, memory, ref rasterPixelsRemaining, counters),
+            3 => FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[1], clipped[2], state, memory, ref rasterPixelsRemaining, counters, timings),
+            4 => FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[1], clipped[2], state, memory, ref rasterPixelsRemaining, counters, timings)
+                | FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[2], clipped[3], state, memory, ref rasterPixelsRemaining, counters, timings),
             _ => false,
         };
     }
