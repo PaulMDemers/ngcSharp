@@ -1,3 +1,4 @@
+using System.Text.Json;
 using NgcSharp.Core;
 using NgcSharp.Cpu;
 
@@ -326,6 +327,146 @@ public sealed class DolRunner
                 chainedBulkWriteObserver?.Invoke(address, length);
                 schedulerTraceRecorder.RecordBulkWrite(executed + 1, currentPc, currentInstruction, address, length);
             };
+        }
+
+        string GetStopReason(string? overrideReason = null)
+        {
+            if (overrideReason is not null)
+            {
+                return overrideReason;
+            }
+
+            if (state.Halted)
+            {
+                return "halted";
+            }
+
+            if (stoppedOnPc)
+            {
+                return "pc";
+            }
+
+            if (stoppedOnHotPc is not null)
+            {
+                return "hot-pc";
+            }
+
+            if (stoppedAfterWriteWatch)
+            {
+                return "write-watch";
+            }
+
+            if (stoppedOnGxFifoOffset)
+            {
+                return "gx-fifo-offset";
+            }
+
+            return executed >= options.MaxInstructions ? "max-instructions" : "completed";
+        }
+
+        void WriteRunSummary(int exitCode, string? stopReasonOverride = null, string? diagnosticFailure = null, string? exceptionType = null, uint? exceptionAddress = null, uint? exceptionInstruction = null)
+        {
+            if (options.RunSummaryPath is null)
+            {
+                return;
+            }
+
+            try
+            {
+                string fullPath = Path.GetFullPath(options.RunSummaryPath);
+                string? directory = Path.GetDirectoryName(fullPath);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                uint summaryInstruction = exceptionInstruction ?? currentInstruction;
+                object summary = new
+                {
+                    schema = "ngcsharp.run-summary.v1",
+                    path = Path.GetFullPath(options.Path),
+                    maxInstructions = options.MaxInstructions,
+                    executedInstructions = executed,
+                    exitCode,
+                    stopReason = GetStopReason(stopReasonOverride),
+                    diagnosticFailure,
+                    exception = exceptionType is null ? null : new
+                    {
+                        type = exceptionType,
+                        address = exceptionAddress is uint address ? $"0x{address:X8}" : null,
+                        instruction = exceptionInstruction is uint instruction ? $"0x{instruction:X8}" : null,
+                        disassembly = exceptionInstruction is uint exceptionOpcode ? PowerPcDisassembler.Disassemble(exceptionOpcode) : null,
+                    },
+                    pc = $"0x{state.Pc:X8}",
+                    lastPc = $"0x{currentPc:X8}",
+                    lastInstruction = $"0x{summaryInstruction:X8}",
+                    lastDisassembly = summaryInstruction == 0 ? null : PowerPcDisassembler.Disassemble(summaryInstruction),
+                    registers = new
+                    {
+                        lr = $"0x{state.Lr:X8}",
+                        ctr = $"0x{state.Ctr:X8}",
+                        cr = $"0x{state.Cr:X8}",
+                        r0 = $"0x{state.Gpr[0]:X8}",
+                        r1 = $"0x{state.Gpr[1]:X8}",
+                        r2 = $"0x{state.Gpr[2]:X8}",
+                        r3 = $"0x{state.Gpr[3]:X8}",
+                        r4 = $"0x{state.Gpr[4]:X8}",
+                        r5 = $"0x{state.Gpr[5]:X8}",
+                        r6 = $"0x{state.Gpr[6]:X8}",
+                        r10 = $"0x{state.Gpr[10]:X8}",
+                        r13 = $"0x{state.Gpr[13]:X8}",
+                        r31 = $"0x{state.Gpr[31]:X8}",
+                    },
+                    stopped = new
+                    {
+                        onPc = stoppedOnPc,
+                        onHotPc = stoppedOnHotPc is uint hotPc ? $"0x{hotPc:X8}" : null,
+                        onHotPcCount = stoppedOnHotPcCount,
+                        afterWriteWatch = stoppedAfterWriteWatch,
+                        afterWriteWatchCount = stoppedAfterWriteWatchCount,
+                        onGxFifoOffset = stoppedOnGxFifoOffset,
+                        gxFifoOffset = options.StopOnGxFifoOffset,
+                    },
+                    gx = new
+                    {
+                        fifoBytesWritten = gxFifoBytesWritten,
+                        memoryCheckpointsRequested = gxMemoryCheckpoints.Length,
+                        memoryCheckpointsWritten = gxMemoryCheckpointsWritten,
+                        autoTextureSnapshots = gxTextureSnapshotCollector?.Snapshots.Count ?? 0,
+                        autoTextureSnapshotDrawsSeen = gxTextureSnapshotCollector?.DrawsSeen ?? 0,
+                    },
+                    fastForward = new
+                    {
+                        idleCycles = idleFastForwardCycles,
+                        ctrDelayInstructions = ctrDelayFastForwardInstructions,
+                        bulkMemoryInstructions = bulkFastForwardInstructions,
+                        cacheInstructions = cacheFastForwardInstructions,
+                        leafHelperInstructions = leafFastForwardInstructions,
+                        memoryCopyInstructions = memoryCopyFastForwardInstructions,
+                        textureSampleInstructions = textureSampleFastForwardInstructions,
+                        stringCopyInstructions = stringCopyFastForwardInstructions,
+                        stringCompareInstructions = stringCompareFastForwardInstructions,
+                        prsDecompressInstructions = prsDecompressFastForwardInstructions,
+                        trigTableInstructions = trigTableFastForwardInstructions,
+                        bitUnpackInstructions = bitUnpackFastForwardInstructions,
+                        tickWaitInstructions = tickWaitFastForwardInstructions,
+                        callbackWaitInstructions = callbackWaitFastForwardInstructions,
+                        dotProductInstructions = dotProductFastForwardInstructions,
+                        resourceLookupInstructions = resourceLookupFastForwardInstructions,
+                        gxAttributeFlushInstructions = gxAttributeFlushFastForwardInstructions,
+                        bitPlaneCropInstructions = bitPlaneCropFastForwardInstructions,
+                        byteTableLookupInstructions = byteTableLookupFastForwardInstructions,
+                        gxVertexEmitInstructions = gxVertexEmitFastForwardInstructions,
+                        normalizedStringScanInstructions = normalizedStringScanFastForwardInstructions,
+                    },
+                };
+
+                File.WriteAllText(fullPath, JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+            {
+                _error.WriteLine($"Run summary write failed: {ex.Message}");
+            }
         }
 
         stepObserver?.Invoke(new DolRunStep(0, state.Pc, 0, state, bus, IsInitial: true));
@@ -755,6 +896,7 @@ public sealed class DolRunner
 
             WriteRequestedMemoryDumps(options, bus, _error);
 
+            WriteRunSummary(2, stopReasonOverride: "unsupported-instruction", exceptionType: nameof(UnsupportedInstructionException), exceptionAddress: ex.Address, exceptionInstruction: ex.Instruction);
             return 2;
         }
         catch (AddressTranslationException ex)
@@ -792,6 +934,7 @@ public sealed class DolRunner
 
             WriteRequestedMemoryDumps(options, bus, _error);
 
+            WriteRunSummary(4, stopReasonOverride: "address-translation", exceptionType: nameof(AddressTranslationException), exceptionAddress: ex.Address);
             return 4;
         }
 
@@ -961,6 +1104,7 @@ public sealed class DolRunner
             if (!GxFifoSoftwareRenderer.TryRender(bus.MmioAccesses, bus.Memory, options.GxFrameDumpPath, gxWidth, gxHeight, gxFrameMaxDraws, options.GxFrameSkipDraws, stopAfterMaxDraws: true, maxRasterizedPixels: gxFrameMaxRasterPixels, ignoreEfbCopyClear: options.GxFrameIgnoreEfbCopyClear, source: options.GxFrameSource, displayCopyIndex: options.GxFrameCopyIndex, out GxFifoSoftwareRenderResult? gxFrame, out string? gxFrameError, memorySnapshots: gxMemorySnapshots))
             {
                 _error.WriteLine($"GX frame dump failed: {gxFrameError}");
+                WriteRunSummary(3, diagnosticFailure: $"gx-frame-dump: {gxFrameError}");
                 return 3;
             }
 
@@ -978,6 +1122,7 @@ public sealed class DolRunner
 
         if (options.GxFrameSweep is not null && WriteGxFrameSweep(bus, options, gxMemorySnapshots) != 0)
         {
+            WriteRunSummary(3, diagnosticFailure: "gx-frame-sweep");
             return 3;
         }
 
@@ -986,6 +1131,7 @@ public sealed class DolRunner
             if (!FramebufferDumper.TryDump(bus, options, out FramebufferDumpResult? frameDump, out string? frameDumpError))
             {
                 _error.WriteLine($"Frame dump failed: {frameDumpError}");
+                WriteRunSummary(3, diagnosticFailure: $"frame-dump: {frameDumpError}");
                 return 3;
             }
 
@@ -1000,6 +1146,7 @@ public sealed class DolRunner
             if (!GxFifoSoftwareRenderer.TryWriteDrawDiagnostics(bus.MmioAccesses, bus.Memory, options.GxDrawDumpPath, options.GxDrawSkipDraws, options.GxDrawMaxDraws, out GxFifoDrawDiagnosticResult? gxDraws, out string? gxDrawError))
             {
                 _error.WriteLine($"GX draw dump failed: {gxDrawError}");
+                WriteRunSummary(3, diagnosticFailure: $"gx-draw-dump: {gxDrawError}");
                 return 3;
             }
 
@@ -1018,6 +1165,7 @@ public sealed class DolRunner
             if (!GxFifoSoftwareRenderer.TryWriteCopyDiagnostics(bus.MmioAccesses, bus.Memory, options.GxCopyDumpPath, gxWidth, gxHeight, gxFrameMaxRasterPixels, options.GxFrameIgnoreEfbCopyClear, out GxFifoCopyDiagnosticResult? gxCopies, out string? gxCopyError))
             {
                 _error.WriteLine($"GX copy dump failed: {gxCopyError}");
+                WriteRunSummary(3, diagnosticFailure: $"gx-copy-dump: {gxCopyError}");
                 return 3;
             }
 
@@ -1037,6 +1185,7 @@ public sealed class DolRunner
             if (!GxFifoSoftwareRenderer.TryWriteDrawCoverageDiagnostics(bus.MmioAccesses, bus.Memory, options.GxCoverageDumpPath, gxWidth, gxHeight, gxFrameMaxRasterPixels, options.GxFrameIgnoreEfbCopyClear, options.GxFrameSkipDraws, gxFrameMaxDraws, out GxFifoCoverageDiagnosticResult? gxCoverage, out string? gxCoverageError))
             {
                 _error.WriteLine($"GX coverage dump failed: {gxCoverageError}");
+                WriteRunSummary(3, diagnosticFailure: $"gx-coverage-dump: {gxCoverageError}");
                 return 3;
             }
 
@@ -1053,6 +1202,7 @@ public sealed class DolRunner
             if (!GxFifoSoftwareRenderer.TryWriteTevSampleDiagnostics(bus.MmioAccesses, bus.Memory, options.GxTevSampleDumpPath, options.GxDrawSkipDraws, options.GxDrawMaxDraws, out GxFifoTevSampleDiagnosticResult? gxTevSamples, out string? gxTevSampleError))
             {
                 _error.WriteLine($"GX TEV sample dump failed: {gxTevSampleError}");
+                WriteRunSummary(3, diagnosticFailure: $"gx-tev-sample-dump: {gxTevSampleError}");
                 return 3;
             }
 
@@ -1068,6 +1218,7 @@ public sealed class DolRunner
             if (!GxFifoSoftwareRenderer.TryWriteTextureDiagnostics(bus.MmioAccesses, bus.Memory, options.GxTextureDumpPath, options.GxDrawSkipDraws, options.GxDrawMaxDraws, out GxFifoTextureDiagnosticResult? gxTextures, out string? gxTextureError, memorySnapshots: gxMemorySnapshots))
             {
                 _error.WriteLine($"GX texture dump failed: {gxTextureError}");
+                WriteRunSummary(3, diagnosticFailure: $"gx-texture-dump: {gxTextureError}");
                 return 3;
             }
 
@@ -1112,6 +1263,7 @@ public sealed class DolRunner
 
         WriteRequestedMemoryDumps(options, bus, _output);
 
+        WriteRunSummary(0);
         return 0;
     }
 

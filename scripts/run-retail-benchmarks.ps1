@@ -235,6 +235,7 @@ foreach ($targetName in $Targets) {
     $stderrPath = Join-Path $targetRoot "stderr.txt"
     $gxJsonPath = Join-Path $targetRoot "gx-copies.summary.json"
     $exiJsonPath = Join-Path $targetRoot "exi.summary.json"
+    $emulatorSummaryPath = Join-Path $targetRoot "emulator-summary.json"
     $runJsonPath = Join-Path $targetRoot "run.json"
 
     $gxFrameMaxDraws = if ($DeepGx -and $target.slug -eq "sonic-20m") { 900 } else { $target.gxFrameMaxDraws }
@@ -253,6 +254,7 @@ foreach ($targetName in $Targets) {
         "--gx-frame-max-draws", "$gxFrameMaxDraws",
         "--gx-frame-max-raster-pixels", "$gxFrameMaxRasterPixels",
         "--trace-exi", $exiTracePath,
+        "--run-summary", $emulatorSummaryPath,
         "--no-registers",
         "--quiet"
     ) + $target.extraArgs
@@ -283,11 +285,28 @@ foreach ($targetName in $Targets) {
         $gxSummary = Read-JsonFile $gxJsonPath
     }
 
+    $emulatorSummary = Read-JsonFile $emulatorSummaryPath
     $frameSummary = Get-FileSummary $framePath
-    $status = if ($result.status -eq "exit-unknown" -and ($null -ne $frameSummary -or $null -ne $exiSummary -or $null -ne $gxSummary)) {
+    $effectiveExitCode = if ($null -ne $result.exitCode) {
+        $result.exitCode
+    } elseif ($null -ne $emulatorSummary) {
+        $emulatorSummary.exitCode
+    } else {
+        $null
+    }
+    $effectiveProcessStatus = if ($result.timedOut) {
+        "timeout"
+    } elseif ($null -ne $effectiveExitCode -and $effectiveExitCode -eq 0) {
         "ok"
+    } elseif ($null -ne $effectiveExitCode) {
+        "exit-$effectiveExitCode"
     } else {
         $result.status
+    }
+    $status = if ($effectiveProcessStatus -eq "exit-unknown" -and ($null -ne $frameSummary -or $null -ne $exiSummary -or $null -ne $gxSummary)) {
+        "ok"
+    } else {
+        $effectiveProcessStatus
     }
 
     $runSummary = [ordered]@{
@@ -301,13 +320,14 @@ foreach ($targetName in $Targets) {
         startedAt = (Get-Date).ToString("o")
         maxInstructions = $target.maxInstructions
         status = $status
-        exitCode = $result.exitCode
+        exitCode = $effectiveExitCode
         elapsedSeconds = $result.elapsedSeconds
         timeoutSeconds = $target.timeoutSeconds
         deepGx = [bool]$DeepGx
         gxFrameMaxDraws = $gxFrameMaxDraws
         gxFrameMaxRasterPixels = $gxFrameMaxRasterPixels
         gxCopiesRequested = $dumpGxCopies
+        emulatorSummary = $emulatorSummary
         frame = $frameSummary
         exiSummary = $exiSummary
         gxCopySummary = $gxSummary
@@ -319,11 +339,17 @@ foreach ($targetName in $Targets) {
     $readArrayCount = if ($null -ne $exiSummary) { $exiSummary.commands.readArray } else { "" }
     $nonblackCopies = if ($null -ne $gxSummary) { $gxSummary.nonblackDisplayCopies } else { "" }
     $frameBytes = if ($null -ne $frameSummary) { $frameSummary.bytes } else { "" }
+    $stopReason = if ($null -ne $emulatorSummary) { $emulatorSummary.stopReason } else { "" }
+    $finalPc = if ($null -ne $emulatorSummary) { $emulatorSummary.pc } else { "" }
+    $executedInstructions = if ($null -ne $emulatorSummary) { $emulatorSummary.executedInstructions } else { "" }
     $summaryRows.Add([pscustomobject]@{
         target = $target.slug
         status = $status
         elapsedSeconds = $result.elapsedSeconds
         maxInstructions = $target.maxInstructions
+        executedInstructions = $executedInstructions
+        stopReason = $stopReason
+        finalPc = $finalPc
         frameBytes = $frameBytes
         exiReadArrayCommands = $readArrayCount
         nonblackDisplayCopies = $nonblackCopies

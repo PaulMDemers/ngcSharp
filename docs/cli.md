@@ -65,8 +65,10 @@ dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-dol fixtures/de
 Run a bounded disc probe:
 
 ```powershell
-dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "path\to\game.rvz" --max-instructions 3000000 --fast-forward-idle --no-registers --quiet
+dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "path\to\game.rvz" --max-instructions 3000000 --fast-forward-idle --run-summary artifacts/run-summary.json --no-registers --quiet
 ```
+
+`--run-summary <json-path>` writes a compact JSON ledger with the executed instruction count, final PC, stop reason, selected registers, GX FIFO byte count, and fast-forward counters. It is the preferred way to compare bounded probes without scraping console output.
 
 Enable a formatted memory card in Slot A:
 
@@ -153,6 +155,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-sonic-check.ps1
 Both scripts write timestamped directories under `artifacts/compat-runs` with:
 
 - `run.json`: machine-readable compatibility ledger for that target.
+- `emulator-summary.json`: per-run emulator stop reason, final PC, GX FIFO byte count, and fast-forward counters.
 - `summary.csv` / `summary.json`: suite-level rollup.
 - `auto.png`: auto-selected GX frame.
 - `exi.summary.json`: EXI/card milestone counts.
