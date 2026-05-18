@@ -88,6 +88,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-sonic-check.ps1 -NoBuild
 These write timestamped runs under `artifacts/compat-runs` with per-target `run.json`, auto-selected GX frames, selected frame-source metadata, EXI summaries, GX copy summaries, and suite-level `summary.csv` / `summary.json`.
 The GX copy summaries include `displayDestinations` and `displayTimeline` sections, which are the quickest way to spot XFB addresses that receive a nonblack frame and are later overwritten by black.
 The default 20M retail targets use lighter GX settings and skip copy CSVs so the routine suite remains bounded; add `-DeepGx` when chasing copy/presentation details.
+Each `emulator-summary.json` also includes a `timings` section that splits wall-clock time into emulation, measured diagnostics, GX frame/copy/coverage/TEV/texture dumps, memory dumps, and profile output. The suite-level `summary.csv` / `summary.json` surface the main timing columns as well; use those before starting an optimization pass so the next hotspot is visible in the artifact instead of inferred from console timing.
 
 Regenerate summaries from existing trace artifacts:
 

@@ -235,7 +235,12 @@ public static class GxFifoSoftwareRenderer
 
                         copiesSeen++;
                         EfbCoverage? displayCoverage = null;
-                        if (copyInfo.IsDisplayCopy)
+                        bool needsDisplayCoverage = copyInfo.IsDisplayCopy
+                            && source is GxFrameDumpSource.Auto
+                                or GxFrameDumpSource.LastNonBlackDisplayCopy
+                                or GxFrameDumpSource.LargestDisplayCopy
+                                or GxFrameDumpSource.LastNonBlackViFramebuffer;
+                        if (needsDisplayCoverage)
                         {
                             displayCoverage = CountNonBlackRegion(rgb, alpha, width, height, copyInfo.SourceLeft, copyInfo.SourceTop, copyInfo.SourceWidth, copyInfo.SourceHeight);
                         }
@@ -266,9 +271,18 @@ public static class GxFifoSoftwareRenderer
                             {
                                 EfbCoverage coverage = displayCoverage ?? default;
                                 displayCopies.Add(new IndexedDisplayCopy(copiesSeen, capturedCopy));
-                                bool shouldCaptureDisplayCopy = source is not GxFrameDumpSource.ViFramebuffer
-                                    && source is not GxFrameDumpSource.CopySourceIndex
-                                    && (source != GxFrameDumpSource.CopyIndex || copiesSeen == displayCopyIndex);
+                                bool hasNonBlackCoverage = coverage.NonBlackPixels > 0;
+                                bool shouldCaptureDisplayCopy = source switch
+                                {
+                                    GxFrameDumpSource.Auto => hasNonBlackCoverage,
+                                    GxFrameDumpSource.LastNonBlackDisplayCopy => hasNonBlackCoverage,
+                                    GxFrameDumpSource.LargestDisplayCopy => hasNonBlackCoverage && (largestDisplayCopy is not SelectedDisplayCopy largest || coverage.NonBlackPixels > largest.Coverage.NonBlackPixels),
+                                    GxFrameDumpSource.LastNonBlackViFramebuffer => hasNonBlackCoverage && requestedViAddress == capturedCopy.DestinationAddress,
+                                    GxFrameDumpSource.CopyIndex => copiesSeen == displayCopyIndex,
+                                    GxFrameDumpSource.Efb => false,
+                                    GxFrameDumpSource.CopySourceIndex or GxFrameDumpSource.ViFramebuffer => false,
+                                    _ => true,
+                                };
                                 if (shouldCaptureDisplayCopy
                                     && TryCaptureDisplayCopyRgb(memory, capturedCopy, out byte[]? displayRgb)
                                     && displayRgb is not null)

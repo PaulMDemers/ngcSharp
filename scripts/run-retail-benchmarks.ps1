@@ -383,6 +383,16 @@ foreach ($targetName in $Targets) {
     $stopReason = if ($null -ne $emulatorSummary) { $emulatorSummary.stopReason } else { "" }
     $finalPc = if ($null -ne $emulatorSummary) { $emulatorSummary.pc } else { "" }
     $executedInstructions = if ($null -ne $emulatorSummary) { $emulatorSummary.executedInstructions } else { "" }
+    $timings = if ($null -ne $emulatorSummary) { $emulatorSummary.timings } else { $null }
+    $totalMs = if ($null -ne $timings) { $timings.totalMs } else { "" }
+    $emulationMs = if ($null -ne $timings) { $timings.emulationMs } else { "" }
+    $postEmulationMs = if ($null -ne $timings) { $timings.postEmulationMs } else { "" }
+    $measuredDiagnosticsMs = if ($null -ne $timings) { $timings.measuredDiagnosticsMs } else { "" }
+    $gxFrameDumpMs = if ($null -ne $timings) { $timings.gxFrameDumpMs } else { "" }
+    $gxCopyDumpMs = if ($null -ne $timings) { $timings.gxCopyDumpMs } else { "" }
+    $gxCoverageDumpMs = if ($null -ne $timings) { $timings.gxCoverageDumpMs } else { "" }
+    $gxTevSampleDumpMs = if ($null -ne $timings) { $timings.gxTevSampleDumpMs } else { "" }
+    $gxTextureDumpMs = if ($null -ne $timings) { $timings.gxTextureDumpMs } else { "" }
     $summaryRows.Add([pscustomobject]@{
         target = $target.slug
         status = $status
@@ -391,6 +401,15 @@ foreach ($targetName in $Targets) {
         executedInstructions = $executedInstructions
         stopReason = $stopReason
         finalPc = $finalPc
+        totalMs = $totalMs
+        emulationMs = $emulationMs
+        postEmulationMs = $postEmulationMs
+        measuredDiagnosticsMs = $measuredDiagnosticsMs
+        gxFrameDumpMs = $gxFrameDumpMs
+        gxCopyDumpMs = $gxCopyDumpMs
+        gxCoverageDumpMs = $gxCoverageDumpMs
+        gxTevSampleDumpMs = $gxTevSampleDumpMs
+        gxTextureDumpMs = $gxTextureDumpMs
         frameBytes = $frameBytes
         exiReadArrayCommands = $readArrayCount
         nonblackDisplayCopies = $nonblackCopies
