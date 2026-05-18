@@ -4,6 +4,7 @@ The local retail benchmark images are user-provided RVZ files in the workspace r
 
 - `Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz`
 - `Pikmin (USA).rvz`
+- `Mario Kart - Double Dash!! (USA) (Debug).rvz`
 
 Use short bounded diagnostics first, then raise the instruction budget only when the previous artifact explains the next blocker.
 
@@ -155,6 +156,7 @@ Workflow update:
 - Tuned the default `sonic-20m` benchmark to use a lighter GX frame budget and skip copy CSV generation. The full copy-heavy path remains available through `-DeepGx`, but the routine four-target suite now stays useful as a bounded regression loop.
 - Added `--run-summary <json-path>` and wired it into the retail benchmark harness. Each target now writes `emulator-summary.json`, and `summary.csv` includes executed instructions, stop reason, and final PC without requiring console-log parsing.
 - Added a narrow Pikmin heap-wait fast-forward for the `0x800466C0..0x800466C8` poll loop. It advances emulated hardware time to video interrupt opportunities instead of modifying the waited-on game flag directly. The 20M Pikmin benchmark now moves from the heap wait at `0x800466C8` to runtime code around `0x80045B90`, with GX FIFO capture increasing from roughly 230K to 549K bytes.
+- Added optional `mariokart-debug-5m` and `mariokart-debug-20m` benchmark targets. The debug build first exposed missing CPU `mffs`; after implementing it, the 5M probe reaches `0x800A5048` cleanly instead of stopping on unsupported instruction `0xFFE0048E` at `0x800AF6C0`. The current 20M wall is a debug/EXI startup poll through `0x800A49A0` and `0x800A5040..0x800A5050`, with reads from the `0xCC005000` register block and no display-copy events yet.
 
 Next useful targets:
 

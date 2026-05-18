@@ -152,6 +152,12 @@ Run only the Sonic checks:
 powershell -ExecutionPolicy Bypass -File scripts/run-sonic-check.ps1
 ```
 
+Run the optional Mario Kart Double Dash debug-image probes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-retail-benchmarks.ps1 -Targets mariokart-debug-5m,mariokart-debug-20m
+```
+
 Both scripts write timestamped directories under `artifacts/compat-runs` with:
 
 - `run.json`: machine-readable compatibility ledger for that target.

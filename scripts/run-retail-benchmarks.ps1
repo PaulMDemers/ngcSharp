@@ -2,6 +2,7 @@ param(
     [string]$OutputDirectory = "artifacts/compat-runs",
     [string]$SonicPath = "Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz",
     [string]$PikminPath = "Pikmin (USA).rvz",
+    [string]$MarioKartDebugPath = "Mario Kart - Double Dash!! (USA) (Debug).rvz",
     [string[]]$Targets = @("sonic-5m", "sonic-20m", "pikmin-5m", "pikmin-20m"),
     [int]$TimeoutSeconds = 300,
     [int]$ProgressIntervalSeconds = 15,
@@ -150,6 +151,7 @@ if (-not (Test-Path -LiteralPath $appDll)) {
 
 $sonicFullPath = Resolve-FullPath $SonicPath
 $pikminFullPath = Resolve-FullPath $PikminPath
+$marioKartDebugFullPath = Resolve-FullPath $MarioKartDebugPath
 $targetDefinitions = @{
     "sonic-5m" = [pscustomobject]@{
         slug = "sonic-5m"
@@ -198,6 +200,30 @@ $targetDefinitions = @{
         gxFrameMaxRasterPixels = 12000000
         dumpGxCopies = $true
         extraArgs = @()
+    }
+    "mariokart-debug-5m" = [pscustomobject]@{
+        slug = "mariokart-debug-5m"
+        game = "Mario Kart Double Dash Debug"
+        gamePath = $marioKartDebugFullPath
+        maxInstructions = 5000000
+        timeoutSeconds = [Math]::Min($TimeoutSeconds, 180)
+        gxFrameSource = "auto"
+        gxFrameMaxDraws = 700
+        gxFrameMaxRasterPixels = 12000000
+        dumpGxCopies = $true
+        extraArgs = @("--memory-card-a", "--controller-button", "a")
+    }
+    "mariokart-debug-20m" = [pscustomobject]@{
+        slug = "mariokart-debug-20m"
+        game = "Mario Kart Double Dash Debug"
+        gamePath = $marioKartDebugFullPath
+        maxInstructions = 20000000
+        timeoutSeconds = $TimeoutSeconds
+        gxFrameSource = "auto"
+        gxFrameMaxDraws = 700
+        gxFrameMaxRasterPixels = 12000000
+        dumpGxCopies = $true
+        extraArgs = @("--memory-card-a", "--controller-button", "a")
     }
 }
 

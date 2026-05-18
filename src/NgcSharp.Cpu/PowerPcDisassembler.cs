@@ -269,6 +269,7 @@ public static class PowerPcDisassembler
             72 => $"fmr{suffix} f{Rd(instruction)}, f{Rb(instruction)}",
             136 => $"fnabs{suffix} f{Rd(instruction)}, f{Rb(instruction)}",
             264 => $"fabs{suffix} f{Rd(instruction)}, f{Rb(instruction)}",
+            583 => $"mffs{suffix} f{Rd(instruction)}",
             711 => $"mtfsf 0x{(instruction >> 17) & 0xFF:X2}, f{Rb(instruction)}",
             _ => null,
         };
