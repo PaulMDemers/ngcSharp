@@ -537,7 +537,13 @@ public sealed class DolRunner
                     }
                 }
 
-                if (options.FastForwardIdle && TryFastForwardKnownIdleLoop(state, bus, out ulong skippedIdleCycles))
+                if (options.FastForwardIdle && TryFastForwardPikminHeapWaitLoop(state, bus, out ulong skippedIdleCycles))
+                {
+                    idleFastForwardCycles += skippedIdleCycles;
+                    continue;
+                }
+
+                if (options.FastForwardIdle && TryFastForwardKnownIdleLoop(state, bus, out skippedIdleCycles))
                 {
                     idleFastForwardCycles += skippedIdleCycles;
                     continue;
@@ -1471,6 +1477,46 @@ public sealed class DolRunner
             || bus.HasPendingExternalInterrupt
             || bus.SmallDataBaseRegister == 0
             || bus.Read32(bus.SmallDataBaseRegister + 0x3230) != 0
+            || !HasEnabledVideoInterrupt(bus))
+        {
+            return false;
+        }
+
+        uint decrementer = state.Spr[22];
+        if ((decrementer & 0x8000_0000) == 0 && decrementer == 0)
+        {
+            return false;
+        }
+
+        int cyclesToSkip = cyclesPerIdleSkip;
+        if ((decrementer & 0x8000_0000) == 0 && decrementer < cyclesToSkip)
+        {
+            cyclesToSkip = (int)decrementer;
+        }
+
+        state.TimeBase += (uint)cyclesToSkip;
+        state.Spr[22] = unchecked(decrementer - (uint)cyclesToSkip);
+        bus.Advance((uint)cyclesToSkip);
+        skippedCycles = (uint)cyclesToSkip;
+        return true;
+    }
+
+    private static bool TryFastForwardPikminHeapWaitLoop(PowerPcState state, GameCubeBus bus, out ulong skippedCycles)
+    {
+        const uint waitPc = 0x8004_66C0;
+        const uint msrExternalInterruptEnable = 0x0000_8000;
+        const int cyclesPerIdleSkip = GameCubeBus.VideoCyclesPerScanline;
+
+        skippedCycles = 0;
+        if (state.Pc != waitPc
+            || (state.Msr & msrExternalInterruptEnable) == 0
+            || bus.HasPendingExternalInterrupt
+            || bus.Read32(waitPc) != 0x8003_032C
+            || bus.Read32(waitPc + 4) != 0x2800_0000
+            || bus.Read32(waitPc + 8) != 0x4182_FFF8
+            || state.Gpr[3] == 0
+            || !bus.Memory.IsMainRamAddress(state.Gpr[3], 0x330)
+            || bus.Read32(state.Gpr[3] + 0x32C) != 0
             || !HasEnabledVideoInterrupt(bus))
         {
             return false;

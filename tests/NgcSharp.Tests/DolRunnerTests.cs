@@ -2197,6 +2197,35 @@ public sealed class DolRunnerTests
         Assert.Equal(0u, state.Spr[22]);
     }
 
+    [Fact]
+    public void PikminHeapWaitFastForwardAdvancesHardwareTime()
+    {
+        const uint waitPc = 0x8004_66C0;
+        const uint heapManager = 0x8039_8000;
+        PowerPcState state = new()
+        {
+            Pc = waitPc,
+            Msr = 0x0000_8000,
+        };
+        state.Gpr[3] = heapManager;
+        state.Spr[22] = 1000;
+
+        GameCubeBus bus = new();
+        bus.Memory.Write32(waitPc, 0x8003_032C);
+        bus.Memory.Write32(waitPc + 4, 0x2800_0000);
+        bus.Memory.Write32(waitPc + 8, 0x4182_FFF8);
+        bus.Memory.Write32(heapManager + 0x32C, 0);
+        bus.Write16(0xCC00_2030, GameCubeBus.VideoInterruptEnable);
+
+        bool skipped = InvokeFastForwardPikminHeapWait(state, bus, out ulong skippedCycles);
+
+        Assert.True(skipped);
+        Assert.Equal((ulong)GameCubeBus.VideoCyclesPerScanline, skippedCycles);
+        Assert.Equal(waitPc, state.Pc);
+        Assert.Equal(1000u - (uint)GameCubeBus.VideoCyclesPerScanline, state.Spr[22]);
+        Assert.Equal((ulong)GameCubeBus.VideoCyclesPerScanline, state.TimeBase);
+    }
+
     private static GameCubeBus CreateIdleFastForwardBus()
     {
         GameCubeBus bus = new()
@@ -2212,6 +2241,16 @@ public sealed class DolRunnerTests
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardKnownIdleLoop", BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("Could not find idle fast-forward helper.");
+        object?[] args = [state, bus, 0ul];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedCycles = (ulong)args[2]!;
+        return result;
+    }
+
+    private static bool InvokeFastForwardPikminHeapWait(PowerPcState state, GameCubeBus bus, out ulong skippedCycles)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardPikminHeapWaitLoop", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Pikmin heap wait fast-forward helper.");
         object?[] args = [state, bus, 0ul];
         bool result = (bool)method.Invoke(null, args)!;
         skippedCycles = (ulong)args[2]!;
