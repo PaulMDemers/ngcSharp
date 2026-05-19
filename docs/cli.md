@@ -140,6 +140,13 @@ Run the default short compatibility checks for Sonic and Pikmin:
 powershell -ExecutionPolicy Bypass -File scripts/run-retail-benchmarks.ps1
 ```
 
+Run the curated compatibility matrix:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-compat-matrix.ps1 -Suites quick -NoBuild -SkipMissing
+powershell -ExecutionPolicy Bypass -File scripts/run-compat-matrix.ps1 -Targets sonic-20m,pikmin-5m -NoBuild -SkipMissing
+```
+
 The default suite keeps long Sonic probes lightweight enough to finish under the watchdog. Use `-DeepGx` when you explicitly want heavyweight GX copy CSVs for every target:
 
 ```powershell

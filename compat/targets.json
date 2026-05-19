@@ -1,0 +1,302 @@
+{
+  "schema": "ngcsharp.compat-targets.v1",
+  "description": "Curated local compatibility targets. Paths may point at ignored artifacts or user-provided retail images.",
+  "defaults": {
+    "timeoutSeconds": 60,
+    "traceTail": 32,
+    "profilePc": 12,
+    "fastForwardIdle": true,
+    "noRegisters": true,
+    "quiet": true
+  },
+  "targets": [
+    {
+      "id": "smoke-dol",
+      "name": "Synthetic smoke DOL",
+      "type": "dol",
+      "path": "artifacts/smoke.dol",
+      "suites": [ "quick", "smoke" ],
+      "tags": [ "cpu", "loader", "memory" ],
+      "maxInstructions": 32,
+      "timeoutSeconds": 15,
+      "expected": {
+        "status": "ok",
+        "stopReason": "halted"
+      }
+    },
+    {
+      "id": "xfb-smoke",
+      "name": "Source-built XFB smoke fixture",
+      "type": "dol",
+      "path": "artifacts/devkitpro/xfb-smoke.dol",
+      "suites": [ "quick", "homebrew", "xfb" ],
+      "tags": [ "vi", "xfb", "framebuffer" ],
+      "maxInstructions": 1000000,
+      "timeoutSeconds": 30,
+      "xfbFrame": {
+        "address": "0x81200000",
+        "width": 4,
+        "height": 2,
+        "format": "rgb565"
+      },
+      "expected": {
+        "status": "ok",
+        "stopReason": "max-instructions",
+        "frameSha256": "f5936788ea8fb2ec08688a5e2e87c3804af5bcb85b4aa66603ed83bdf40773b8"
+      }
+    },
+    {
+      "id": "gx-ladder",
+      "name": "Source-built GX ladder fixture",
+      "type": "dol",
+      "path": "artifacts/devkitpro/gx-ladder.dol",
+      "suites": [ "quick", "homebrew", "gx" ],
+      "tags": [ "gx", "tev", "texture", "efb-copy", "xfb" ],
+      "maxInstructions": 3000000,
+      "timeoutSeconds": 45,
+      "gxFrame": {
+        "source": "auto",
+        "maxDraws": 160,
+        "maxRasterPixels": 12000000
+      },
+      "expected": {
+        "status": "ok",
+        "stopReason": "max-instructions",
+        "minGxFifoBytes": 1,
+        "minRenderedTriangles": 12,
+        "frameSha256": "53d72e2558aada66e9f6ba11e2bf28dfa3fed66e19b2ce50c23de3dee05d65ae"
+      }
+    },
+    {
+      "id": "devkitpro-application",
+      "name": "devkitPro template application",
+      "type": "dol",
+      "path": "artifacts/demo-dols/devkitpro/templates-application-application.dol",
+      "suites": [ "homebrew", "demo" ],
+      "tags": [ "libogc", "startup", "scheduler" ],
+      "maxInstructions": 2000000,
+      "timeoutSeconds": 60,
+      "expected": {
+        "status": "ok"
+      }
+    },
+    {
+      "id": "devkitpro-consoletest",
+      "name": "devkitPro framebuffer console",
+      "type": "dol",
+      "path": "artifacts/demo-dols/devkitpro/graphics-fb-consoletest-consoletest.dol",
+      "suites": [ "homebrew", "demo", "xfb" ],
+      "tags": [ "libogc", "vi", "xfb", "si" ],
+      "maxInstructions": 2000000,
+      "timeoutSeconds": 60,
+      "expected": {
+        "status": "ok"
+      }
+    },
+    {
+      "id": "devkitpro-pageflip",
+      "name": "devkitPro framebuffer pageflip",
+      "type": "dol",
+      "path": "artifacts/demo-dols/devkitpro/graphics-fb-pageflip-pageflip.dol",
+      "suites": [ "homebrew", "demo", "xfb" ],
+      "tags": [ "libogc", "vi", "xfb" ],
+      "maxInstructions": 2000000,
+      "timeoutSeconds": 60,
+      "expected": {
+        "status": "ok"
+      }
+    },
+    {
+      "id": "devkitpro-texturetest",
+      "name": "devkitPro GX texturetest",
+      "type": "dol",
+      "path": "artifacts/demo-dols/devkitpro/graphics-gx-texturetest-texturetest.dol",
+      "suites": [ "homebrew", "demo", "gx" ],
+      "tags": [ "gx", "texture", "tev", "efb-copy" ],
+      "maxInstructions": 3000000,
+      "timeoutSeconds": 45,
+      "gxFrame": {
+        "source": "auto",
+        "maxDraws": 160,
+        "maxRasterPixels": 12000000
+      },
+      "expected": {
+        "status": "ok",
+        "minGxFifoBytes": 1
+      }
+    },
+    {
+      "id": "devkitpro-gxsprites",
+      "name": "devkitPro GX sprites",
+      "type": "dol",
+      "path": "artifacts/demo-dols/devkitpro/graphics-gx-gxsprites-gxsprites.dol",
+      "suites": [ "homebrew", "demo", "gx" ],
+      "tags": [ "gx", "texture", "tev", "sprites" ],
+      "maxInstructions": 3000000,
+      "timeoutSeconds": 45,
+      "gxFrame": {
+        "source": "auto",
+        "maxDraws": 160,
+        "maxRasterPixels": 12000000
+      },
+      "expected": {
+        "status": "ok",
+        "minGxFifoBytes": 1
+      }
+    },
+    {
+      "id": "devkitpro-lesson10",
+      "name": "NeHe GX lesson 10",
+      "type": "dol",
+      "path": "artifacts/demo-dols/devkitpro/graphics-gx-nehegx-lesson10-lesson10.dol",
+      "suites": [ "homebrew", "demo", "gx" ],
+      "tags": [ "gx", "texture", "wrap-repeat", "depth", "projection" ],
+      "maxInstructions": 3000000,
+      "timeoutSeconds": 45,
+      "gxFrame": {
+        "source": "auto",
+        "maxDraws": 160,
+        "maxRasterPixels": 12000000
+      },
+      "expected": {
+        "status": "ok",
+        "minGxFifoBytes": 1
+      }
+    },
+    {
+      "id": "gcmm",
+      "name": "GCMM GameCube utility",
+      "type": "dol",
+      "path": "artifacts/demo-dols/downloaded/gcmm/gcmm_1.5.2-gamecube-gcmm_gc.dol",
+      "suites": [ "homebrew", "utility" ],
+      "tags": [ "exi-card", "si", "xfb", "large-homebrew" ],
+      "maxInstructions": 2000000,
+      "timeoutSeconds": 90,
+      "extraArgs": [ "--memory-card-a" ],
+      "expected": {
+        "status": "ok"
+      }
+    },
+    {
+      "id": "swiss",
+      "name": "Swiss GameCube utility",
+      "type": "dol",
+      "path": "artifacts/demo-dols/downloaded/swiss/swiss_r2041-dol-swiss_r2041.dol",
+      "suites": [ "homebrew", "utility" ],
+      "tags": [ "di", "exi-card", "si", "large-homebrew" ],
+      "maxInstructions": 2000000,
+      "timeoutSeconds": 90,
+      "extraArgs": [ "--memory-card-a" ],
+      "expected": {
+        "status": "ok"
+      }
+    },
+    {
+      "id": "vbagx",
+      "name": "Visual Boy Advance GX GameCube utility",
+      "type": "dol",
+      "path": "artifacts/demo-dols/downloaded/vbagx/vbagx-gc.dol",
+      "suites": [ "homebrew", "utility", "known-failing" ],
+      "tags": [ "large-homebrew", "memory-map", "stress" ],
+      "maxInstructions": 2000000,
+      "timeoutSeconds": 90,
+      "expected": {
+        "status": "known-failing",
+        "note": "Currently reaches an unmapped 0x81800000 access in the demo sweep."
+      }
+    },
+    {
+      "id": "sonic-5m",
+      "name": "Sonic Adventure 2 Battle 5M",
+      "type": "disc",
+      "path": "Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz",
+      "suites": [ "retail", "sonic" ],
+      "tags": [ "retail", "si", "exi-card", "di", "gx" ],
+      "maxInstructions": 5000000,
+      "timeoutSeconds": 180,
+      "trace": { "exi": true },
+      "extraArgs": [ "--memory-card-a", "--controller-button", "a", "--fast-forward-write-watch" ],
+      "expected": {
+        "status": "ok",
+        "stopReason": "max-instructions"
+      }
+    },
+    {
+      "id": "sonic-20m",
+      "name": "Sonic Adventure 2 Battle 20M",
+      "type": "disc",
+      "path": "Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz",
+      "suites": [ "retail", "sonic" ],
+      "tags": [ "retail", "si", "exi-card", "di", "gx", "presentation" ],
+      "maxInstructions": 20000000,
+      "timeoutSeconds": 300,
+      "trace": { "exi": true },
+      "gxFrame": {
+        "source": "auto",
+        "maxDraws": 160,
+        "maxRasterPixels": 3000000
+      },
+      "extraArgs": [ "--memory-card-a", "--controller-button", "a", "--fast-forward-write-watch" ],
+      "expected": {
+        "status": "ok",
+        "stopReason": "max-instructions",
+        "minGxFifoBytes": 1
+      }
+    },
+    {
+      "id": "pikmin-5m",
+      "name": "Pikmin 5M",
+      "type": "disc",
+      "path": "Pikmin (USA).rvz",
+      "suites": [ "retail", "pikmin" ],
+      "tags": [ "retail", "di", "gx", "presentation" ],
+      "maxInstructions": 5000000,
+      "timeoutSeconds": 180,
+      "gxFrame": {
+        "source": "auto",
+        "maxDraws": 700,
+        "maxRasterPixels": 12000000
+      },
+      "expected": {
+        "status": "ok",
+        "stopReason": "max-instructions",
+        "minGxFifoBytes": 1
+      }
+    },
+    {
+      "id": "pikmin-20m",
+      "name": "Pikmin 20M",
+      "type": "disc",
+      "path": "Pikmin (USA).rvz",
+      "suites": [ "retail", "pikmin", "slow" ],
+      "tags": [ "retail", "di", "gx", "scheduler", "presentation" ],
+      "maxInstructions": 20000000,
+      "timeoutSeconds": 300,
+      "gxFrame": {
+        "source": "auto",
+        "maxDraws": 1100,
+        "maxRasterPixels": 12000000
+      },
+      "expected": {
+        "status": "ok",
+        "stopReason": "max-instructions",
+        "minGxFifoBytes": 1
+      }
+    },
+    {
+      "id": "mariokart-debug-5m",
+      "name": "Mario Kart Double Dash Debug 5M",
+      "type": "disc",
+      "path": "Mario Kart - Double Dash!! (USA) (Debug).rvz",
+      "suites": [ "retail", "mariokart-debug" ],
+      "tags": [ "retail", "cpu", "dsp", "debug-runtime", "metrotrk" ],
+      "maxInstructions": 5000000,
+      "timeoutSeconds": 180,
+      "extraArgs": [ "--memory-card-a", "--controller-button", "a", "--fast-forward-write-watch" ],
+      "expected": {
+        "status": "ok",
+        "stopReason": "max-instructions"
+      }
+    }
+  ]
+}

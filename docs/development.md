@@ -59,6 +59,30 @@ powershell -ExecutionPolicy Bypass -File scripts/run-gx-demo-sweep.ps1
 
 See [build-devkitpro-fixtures.md](build-devkitpro-fixtures.md) and [gx-fixtures.md](gx-fixtures.md).
 
+## Compatibility Matrix
+
+The compatibility matrix is the preferred entry point when a change could affect multiple subsystems. It runs checked-in target definitions from `compat/targets.json` while keeping binaries and generated output under ignored `artifacts/` paths.
+
+List curated targets:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-compat-matrix.ps1 -List
+```
+
+Run the quick smoke matrix:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-compat-matrix.ps1 -Suites quick -NoBuild -SkipMissing
+```
+
+Refresh the local binary inventory:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/update-compat-inventory.ps1
+```
+
+See [compat-matrix.md](compat-matrix.md).
+
 ## Retail Benchmarks
 
 Retail testing requires legally obtained user-provided game images. Keep them outside git. The default local benchmark scripts look for:
