@@ -369,7 +369,7 @@ public static class GxFifoSoftwareRenderer
                                 {
                                     GxFrameDumpSource.Auto => hasNonBlackCoverage,
                                     GxFrameDumpSource.LastNonBlackDisplayCopy => hasNonBlackCoverage,
-                                    GxFrameDumpSource.LargestDisplayCopy => hasNonBlackCoverage && (largestDisplayCopy is not SelectedDisplayCopy largest || coverage.NonBlackPixels > largest.Coverage.NonBlackPixels),
+                                    GxFrameDumpSource.LargestDisplayCopy => hasNonBlackCoverage,
                                     GxFrameDumpSource.LastNonBlackViFramebuffer => hasNonBlackCoverage && requestedViAddress == capturedCopy.DestinationAddress,
                                     GxFrameDumpSource.CopyIndex => copiesSeen == displayCopyIndex,
                                     GxFrameDumpSource.Efb => false,
@@ -380,10 +380,11 @@ public static class GxFifoSoftwareRenderer
                                     && TryTimedCaptureDisplayCopyRgb(memory, capturedCopy, ref displayCaptureTicks, out byte[]? displayRgb)
                                     && displayRgb is not null)
                                 {
-                                    SelectedDisplayCopy selected = new(copiesSeen, capturedCopy, coverage, displayRgb);
+                                    EfbCoverage capturedCoverage = CountNonBlackRgb(displayRgb, capturedCopy.Width, capturedCopy.Height);
+                                    SelectedDisplayCopy selected = new(copiesSeen, capturedCopy, capturedCoverage, displayRgb);
                                     if (source == GxFrameDumpSource.LastNonBlackViFramebuffer
                                         && requestedViAddress == capturedCopy.DestinationAddress
-                                        && RgbHasNonBlackPixels(displayRgb))
+                                        && capturedCoverage.NonBlackPixels > 0)
                                     {
                                         lastNonBlackViDisplayCopy = selected;
                                     }
@@ -395,12 +396,12 @@ public static class GxFifoSoftwareRenderer
                                     else
                                     {
                                         lastDisplayCopy = selected;
-                                        if (coverage.NonBlackPixels > 0)
+                                        if (capturedCoverage.NonBlackPixels > 0)
                                         {
                                             lastNonBlackDisplayCopy = selected;
                                         }
 
-                                        if (largestDisplayCopy is not SelectedDisplayCopy largest || coverage.NonBlackPixels > largest.Coverage.NonBlackPixels)
+                                        if (largestDisplayCopy is not SelectedDisplayCopy largest || capturedCoverage.NonBlackPixels > largest.Coverage.NonBlackPixels)
                                         {
                                             largestDisplayCopy = selected;
                                         }
@@ -507,17 +508,6 @@ public static class GxFifoSoftwareRenderer
             {
                 resultSource = GxFrameDumpSource.Efb;
             }
-            else if (lastNonBlackDisplayCopy is SelectedDisplayCopy selectedNonBlackDisplay)
-            {
-                DisplayCopyResult copy = selectedNonBlackDisplay.Copy;
-                rgb = selectedNonBlackDisplay.Rgb;
-                outputWidth = copy.Width;
-                outputHeight = copy.Height;
-                sourceAddress = copy.DestinationAddress;
-                sourceFormat = copy.Format;
-                sourceCopyIndex = selectedNonBlackDisplay.CopyIndex;
-                resultSource = GxFrameDumpSource.LastNonBlackDisplayCopy;
-            }
             else if (largestDisplayCopy is SelectedDisplayCopy selectedLargestDisplay)
             {
                 DisplayCopyResult copy = selectedLargestDisplay.Copy;
@@ -528,6 +518,17 @@ public static class GxFifoSoftwareRenderer
                 sourceFormat = copy.Format;
                 sourceCopyIndex = selectedLargestDisplay.CopyIndex;
                 resultSource = GxFrameDumpSource.LargestDisplayCopy;
+            }
+            else if (lastNonBlackDisplayCopy is SelectedDisplayCopy selectedNonBlackDisplay)
+            {
+                DisplayCopyResult copy = selectedNonBlackDisplay.Copy;
+                rgb = selectedNonBlackDisplay.Rgb;
+                outputWidth = copy.Width;
+                outputHeight = copy.Height;
+                sourceAddress = copy.DestinationAddress;
+                sourceFormat = copy.Format;
+                sourceCopyIndex = selectedNonBlackDisplay.CopyIndex;
+                resultSource = GxFrameDumpSource.LastNonBlackDisplayCopy;
             }
             else if (lastDisplayCopy is SelectedDisplayCopy selectedLastDisplay)
             {
@@ -709,6 +710,59 @@ public static class GxFifoSoftwareRenderer
         }
 
         return false;
+    }
+
+    private static EfbCoverage CountNonBlackRgb(byte[] rgb, int width, int height)
+    {
+        int pixels = 0;
+        int nonBlack = 0;
+        int minX = int.MaxValue;
+        int minY = int.MaxValue;
+        int maxX = int.MinValue;
+        int maxY = int.MinValue;
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                pixels++;
+                int offset = (y * width + x) * 3;
+                if (rgb[offset] == 0 && rgb[offset + 1] == 0 && rgb[offset + 2] == 0)
+                {
+                    continue;
+                }
+
+                nonBlack++;
+                if (x < minX)
+                {
+                    minX = x;
+                }
+                if (y < minY)
+                {
+                    minY = y;
+                }
+                if (x > maxX)
+                {
+                    maxX = x;
+                }
+                if (y > maxY)
+                {
+                    maxY = y;
+                }
+            }
+        }
+
+        return new EfbCoverage(
+            pixels,
+            nonBlack,
+            nonBlack,
+            nonBlack == 0 ? -1 : minX,
+            nonBlack == 0 ? -1 : minY,
+            nonBlack == 0 ? -1 : maxX,
+            nonBlack == 0 ? -1 : maxY,
+            nonBlack == 0 ? -1 : minX,
+            nonBlack == 0 ? -1 : minY,
+            nonBlack == 0 ? -1 : maxX,
+            nonBlack == 0 ? -1 : maxY);
     }
 
     private static bool TryCaptureDisplayCopyRgb(GameCubeMemory? memory, DisplayCopyResult copy, out byte[]? rgb)

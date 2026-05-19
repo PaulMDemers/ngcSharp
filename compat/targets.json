@@ -299,7 +299,10 @@
         "minDisplayCopies": 547,
         "minTextureCopies": 1092,
         "minNonblackDisplayCopies": 194,
-        "minMaxDisplayNonblack": 244923
+        "minMaxDisplayNonblack": 244923,
+        "frameSource": "largest-display-copy",
+        "frameSourceAddress": "0x00538460",
+        "frameSourceCopyIndex": 602
       }
     },
     {

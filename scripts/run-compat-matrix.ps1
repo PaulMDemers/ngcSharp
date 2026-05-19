@@ -340,6 +340,9 @@ foreach ($target in $selectedTargets) {
             textureCopies = ""
             nonblackDisplayCopies = ""
             maxDisplayNonblack = ""
+            frameSource = ""
+            frameSourceAddress = ""
+            frameSourceCopyIndex = ""
             frameSha256 = ""
             regressions = "missing target file"
             targetPath = $path
@@ -498,6 +501,25 @@ foreach ($target in $selectedTargets) {
         $regressions.Add("renderedTriangles expected >= $expectedMinRenderedTriangles got $renderedTriangles")
     }
 
+    $frameSource = Get-Value $frameDump "source" ""
+    $frameSourceAddress = Get-Value $frameDump "sourceAddress" ""
+    $frameSourceCopyIndex = Get-Value $frameDump "sourceCopyIndex" ""
+
+    $expectedFrameSource = Get-Value $expected "frameSource" $null
+    if ($status -eq "ok" -and $null -ne $expectedFrameSource -and "$expectedFrameSource" -ne "$frameSource") {
+        $regressions.Add("frameSource expected $expectedFrameSource got $frameSource")
+    }
+
+    $expectedFrameSourceAddress = Get-Value $expected "frameSourceAddress" $null
+    if ($status -eq "ok" -and $null -ne $expectedFrameSourceAddress -and "$expectedFrameSourceAddress" -ne "$frameSourceAddress") {
+        $regressions.Add("frameSourceAddress expected $expectedFrameSourceAddress got $frameSourceAddress")
+    }
+
+    $expectedFrameSourceCopyIndex = Get-Value $expected "frameSourceCopyIndex" $null
+    if ($status -eq "ok" -and $null -ne $expectedFrameSourceCopyIndex -and "$expectedFrameSourceCopyIndex" -ne "$frameSourceCopyIndex") {
+        $regressions.Add("frameSourceCopyIndex expected $expectedFrameSourceCopyIndex got $frameSourceCopyIndex")
+    }
+
     $displayCopies = Get-Value $gxCopySummary "displayCopies" ""
     $textureCopies = Get-Value $gxCopySummary "textureCopies" ""
     $nonblackDisplayCopies = Get-Value $gxCopySummary "nonblackDisplayCopies" ""
@@ -575,6 +597,9 @@ foreach ($target in $selectedTargets) {
         maxDisplayNonblack = $maxDisplayNonblack
         renderedQuads = $renderedQuads
         renderedTriangles = $renderedTriangles
+        frameSource = $frameSource
+        frameSourceAddress = $frameSourceAddress
+        frameSourceCopyIndex = $frameSourceCopyIndex
         frameSha256 = if ($null -ne $frameSummary) { $frameSummary.sha256 } else { "" }
         regressions = $regressions -join "; "
         targetPath = ConvertTo-RelativePath $resolvedPath $repoRoot
