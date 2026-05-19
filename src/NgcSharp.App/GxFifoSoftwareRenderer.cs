@@ -5861,9 +5861,7 @@ public static class GxFifoSoftwareRenderer
 
                 if (HasColorEnv)
                 {
-                    r = EvaluateTevColorChannelFast(ColorEnv, channel: 0, previous, texture, raster, KonstColor);
-                    g = EvaluateTevColorChannelFast(ColorEnv, channel: 1, previous, texture, raster, KonstColor);
-                    bValue = EvaluateTevColorChannelFast(ColorEnv, channel: 2, previous, texture, raster, KonstColor);
+                    EvaluateTevColorFast(ColorEnv, previous, texture, raster, KonstColor, out r, out g, out bValue);
                 }
 
                 if (HasAlphaEnv)
@@ -6941,6 +6939,25 @@ public static class GxFifoSoftwareRenderer
                 ColorComponent(b, channel),
                 ColorComponent(c, channel),
                 ColorComponent(d, channel));
+        }
+
+        private static void EvaluateTevColorFast(uint env, GxTevColor previous, GxTevColor texture, GxTevColor raster, GxTevColor konst, out byte r, out byte g, out byte bValue)
+        {
+            GxTevColor a = ColorInputFast((int)((env >> 12) & 0xF), previous, texture, raster, konst);
+            GxTevColor b = ColorInputFast((int)((env >> 8) & 0xF), previous, texture, raster, konst);
+            GxTevColor c = ColorInputFast((int)((env >> 4) & 0xF), previous, texture, raster, konst);
+            GxTevColor d = ColorInputFast((int)(env & 0xF), previous, texture, raster, konst);
+            if (IsTevCompareOperation(env))
+            {
+                r = ApplyTevColorCompare(env, channel: 0, a, b, c, d);
+                g = ApplyTevColorCompare(env, channel: 1, a, b, c, d);
+                bValue = ApplyTevColorCompare(env, channel: 2, a, b, c, d);
+                return;
+            }
+
+            r = ApplyTevArithmetic(env, a.R, b.R, c.R, d.R);
+            g = ApplyTevArithmetic(env, a.G, b.G, c.G, d.G);
+            bValue = ApplyTevArithmetic(env, a.B, b.B, c.B, d.B);
         }
 
         private static byte EvaluateTevAlphaFast(uint env, GxTevColor previous, GxTevColor texture, GxTevColor raster, int konst)
