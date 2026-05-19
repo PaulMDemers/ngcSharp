@@ -442,7 +442,7 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "pc": "0x80BC8118",
+        "pc": "0x80BCC050",
         "topPc": "0x800E3134",
         "minTopPcCount": 50000,
         "nonExternalInterruptTopPc": "0x800E3134",

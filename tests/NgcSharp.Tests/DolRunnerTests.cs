@@ -748,6 +748,79 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void TimeBaseReadLeafFastForwardReturnsStableTimeBase()
+    {
+        const uint pc = 0x8000_3580;
+        GameCubeBus bus = new();
+        WriteTimeBaseReadLeaf(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8000_35A0,
+            TimeBase = 0x0000_0001_0000_0000,
+        };
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardSmallLeafHelper(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(6, skippedInstructions);
+        Assert.Equal(0x8000_35A0u, state.Pc);
+        Assert.Equal(1u, state.Gpr[3]);
+        Assert.Equal(2u, state.Gpr[4]);
+        Assert.Equal(1u, state.Gpr[5]);
+        Assert.Equal(0x2000_0000u, state.Cr & 0xF000_0000);
+        Assert.Equal(0x0000_0001_0000_0006ul, state.TimeBase);
+        Assert.Equal(0xFFFF_F000u - 6u, state.Spr[22]);
+    }
+
+    [Fact]
+    public void TimeBaseReadLeafFastForwardFallsBackAcrossUpperChange()
+    {
+        const uint pc = 0x8000_3580;
+        GameCubeBus bus = new();
+        WriteTimeBaseReadLeaf(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8000_35A0,
+            TimeBase = 0x0000_0000_FFFF_FFFE,
+        };
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardSmallLeafHelper(state, bus, out int skippedInstructions);
+
+        Assert.False(skipped);
+        Assert.Equal(0, skippedInstructions);
+        Assert.Equal(pc, state.Pc);
+        Assert.Equal(0x0000_0000_FFFF_FFFEul, state.TimeBase);
+    }
+
+    [Fact]
+    public void LowerTimeBaseReadLeafFastForwardReturnsLowWord()
+    {
+        const uint pc = 0x8000_35C0;
+        GameCubeBus bus = new();
+        WriteLowerTimeBaseReadLeaf(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8000_35D0,
+            TimeBase = 0x0000_0002_1234_5678,
+        };
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardSmallLeafHelper(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(2, skippedInstructions);
+        Assert.Equal(0x8000_35D0u, state.Pc);
+        Assert.Equal(0x1234_5679u, state.Gpr[3]);
+        Assert.Equal(0x0000_0002_1234_567Aul, state.TimeBase);
+        Assert.Equal(0xFFFF_F000u - 2u, state.Spr[22]);
+    }
+
+    [Fact]
     public void CtrZeroStoreLoopFastForwardClearsMemoryAndFinishesLoop()
     {
         const uint pc = 0x8000_3300;
@@ -2854,6 +2927,22 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x44, 0x9141_0024);
         WriteInstruction(memory, pc + 0x48, 0x3821_0070);
         WriteInstruction(memory, pc + 0x4C, 0x4E80_0020);
+    }
+
+    private static void WriteTimeBaseReadLeaf(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x7C6D_42E6);
+        WriteInstruction(memory, pc + 0x04, 0x7C8C_42E6);
+        WriteInstruction(memory, pc + 0x08, 0x7CAD_42E6);
+        WriteInstruction(memory, pc + 0x0C, 0x7C03_2800);
+        WriteInstruction(memory, pc + 0x10, 0x4082_FFF0);
+        WriteInstruction(memory, pc + 0x14, 0x4E80_0020);
+    }
+
+    private static void WriteLowerTimeBaseReadLeaf(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x7C6C_42E6);
+        WriteInstruction(memory, pc + 0x04, 0x4E80_0020);
     }
 
     private static void WriteCtrCacheBlockLoop(GameCubeMemory memory, uint pc)

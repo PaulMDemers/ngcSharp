@@ -2594,12 +2594,62 @@ public sealed class DolRunner
             }
         }
 
+        if (first == 0x7C6D_42E6 || first == 0x7C6C_42E6)
+        {
+            return TryFastForwardTimeBaseReadLeaf(state, bus, pc, out skippedInstructions);
+        }
+
         if (first == 0x2C03_0000)
         {
             return TryFastForwardRestoreExternalInterruptLeaf(state, bus, pc, out skippedInstructions);
         }
 
         return false;
+    }
+
+    private static bool TryFastForwardTimeBaseReadLeaf(PowerPcState state, GameCubeBus bus, uint pc, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (bus.Read32(pc) == 0x7C6C_42E6
+            && bus.Read32(pc + 0x04) == 0x4E80_0020
+            && CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 2, extraInstructions: 0))
+        {
+            state.Gpr[3] = (uint)(state.TimeBase + 1);
+            state.Pc = state.Lr;
+            AdvanceFastForwardedInstructions(state, bus, 2);
+            skippedInstructions = 2;
+            return true;
+        }
+
+        if (bus.Read32(pc) != 0x7C6D_42E6
+            || bus.Read32(pc + 0x04) != 0x7C8C_42E6
+            || bus.Read32(pc + 0x08) != 0x7CAD_42E6
+            || bus.Read32(pc + 0x0C) != 0x7C03_2800
+            || bus.Read32(pc + 0x10) != 0x4082_FFF0
+            || bus.Read32(pc + 0x14) != 0x4E80_0020
+            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 6, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        ulong firstReadTime = state.TimeBase + 1;
+        ulong lowReadTime = state.TimeBase + 2;
+        ulong secondReadTime = state.TimeBase + 3;
+        uint firstUpper = (uint)(firstReadTime >> 32);
+        uint secondUpper = (uint)(secondReadTime >> 32);
+        if (firstUpper != secondUpper)
+        {
+            return false;
+        }
+
+        state.Gpr[3] = firstUpper;
+        state.Gpr[4] = (uint)lowReadTime;
+        state.Gpr[5] = secondUpper;
+        SetCr0(state, 0);
+        state.Pc = state.Lr;
+        AdvanceFastForwardedInstructions(state, bus, 6);
+        skippedInstructions = 6;
+        return true;
     }
 
     private static bool TryFastForwardExternalInterruptLeafHelper(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
