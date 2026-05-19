@@ -21,7 +21,7 @@ Each target records:
 - `tags`: subsystem coverage such as `cpu`, `vi`, `xfb`, `gx`, `tev`, `exi-card`, `si`, `di`, or `dsp`.
 - `maxInstructions` and `timeoutSeconds`: bounded run controls.
 - Optional `gxFrame`, `xfbFrame`, `trace`, and `extraArgs` sections.
-- Optional `expected` milestones such as `stopReason`, final `pc`, `minGxFifoBytes`, `minRenderedQuads`, `minRenderedTriangles`, or `frameSha256`.
+- Optional `expected` milestones such as `stopReason`, final `pc`, `minGxFifoBytes`, `minRenderedQuads`, `minRenderedTriangles`, `minDisplayCopies`, `minTextureCopies`, `minNonblackDisplayCopies`, `minMaxDisplayNonblack`, or `frameSha256`.
 
 ## Inventory Local Binaries
 
@@ -71,7 +71,7 @@ Each run writes:
 - `summary.csv`: compact pass/fail/regression rollup.
 - `summary.json`: full machine-readable run detail.
 - Per-target `stdout.txt`, `stderr.txt`, and `run-summary.json`.
-- Optional PNGs and traces when requested by the target manifest.
+- Optional PNGs, traces, `gx-copies.csv`, and `gx-copies.summary.json` when requested by the target manifest.
 
 ## Interpreting Status
 

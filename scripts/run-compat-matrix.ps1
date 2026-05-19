@@ -336,6 +336,10 @@ foreach ($target in $selectedTargets) {
             pc = ""
             executedInstructions = ""
             gxFifoBytes = ""
+            displayCopies = ""
+            textureCopies = ""
+            nonblackDisplayCopies = ""
+            maxDisplayNonblack = ""
             frameSha256 = ""
             regressions = "missing target file"
             targetPath = $path
@@ -359,6 +363,7 @@ foreach ($target in $selectedTargets) {
     $exiTracePath = Join-Path $targetRoot "exi.csv"
     $siTracePath = Join-Path $targetRoot "si.csv"
     $gxCopiesPath = Join-Path $targetRoot "gx-copies.csv"
+    $gxCopiesSummaryPath = Join-Path $targetRoot "gx-copies.summary.json"
 
     $args = New-Object System.Collections.Generic.List[string]
     $args.Add($appDll)
@@ -440,6 +445,12 @@ foreach ($target in $selectedTargets) {
         -Label $id
 
     $summary = Read-JsonFile $runSummaryPath
+    $gxCopySummary = $null
+    if ((Test-Path -LiteralPath $gxCopiesPath) -and (Get-Item -LiteralPath $gxCopiesPath).Length -gt 0) {
+        & (Join-Path $PSScriptRoot "summarize-gx-copies.ps1") -CopyCsvPath $gxCopiesPath -JsonPath $gxCopiesSummaryPath | Out-Null
+        $gxCopySummary = Read-JsonFile $gxCopiesSummaryPath
+    }
+
     $gxFrameSummary = Get-HashSummary $gxFramePath
     $xfbFrameSummary = Get-HashSummary $xfbFramePath
     $frameSummary = if ($null -ne $gxFrameSummary) { $gxFrameSummary } else { $xfbFrameSummary }
@@ -487,6 +498,48 @@ foreach ($target in $selectedTargets) {
         $regressions.Add("renderedTriangles expected >= $expectedMinRenderedTriangles got $renderedTriangles")
     }
 
+    $displayCopies = Get-Value $gxCopySummary "displayCopies" ""
+    $textureCopies = Get-Value $gxCopySummary "textureCopies" ""
+    $nonblackDisplayCopies = Get-Value $gxCopySummary "nonblackDisplayCopies" ""
+    $maxDisplayNonblack = Get-Value $gxCopySummary "maxDisplayNonblack" ""
+
+    $expectedMinDisplayCopies = Get-Value $expected "minDisplayCopies" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinDisplayCopies -and [long]$displayCopies -lt [long]$expectedMinDisplayCopies) {
+        $regressions.Add("displayCopies expected >= $expectedMinDisplayCopies got $displayCopies")
+    }
+
+    $expectedMinTextureCopies = Get-Value $expected "minTextureCopies" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinTextureCopies -and [long]$textureCopies -lt [long]$expectedMinTextureCopies) {
+        $regressions.Add("textureCopies expected >= $expectedMinTextureCopies got $textureCopies")
+    }
+
+    $expectedMinNonblackDisplayCopies = Get-Value $expected "minNonblackDisplayCopies" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinNonblackDisplayCopies -and [long]$nonblackDisplayCopies -lt [long]$expectedMinNonblackDisplayCopies) {
+        $regressions.Add("nonblackDisplayCopies expected >= $expectedMinNonblackDisplayCopies got $nonblackDisplayCopies")
+    }
+
+    $expectedMinMaxDisplayNonblack = Get-Value $expected "minMaxDisplayNonblack" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinMaxDisplayNonblack -and [long]$maxDisplayNonblack -lt [long]$expectedMinMaxDisplayNonblack) {
+        $regressions.Add("maxDisplayNonblack expected >= $expectedMinMaxDisplayNonblack got $maxDisplayNonblack")
+    }
+
+    $gxCopySummaryCompact = $null
+    if ($null -ne $gxCopySummary) {
+        $gxCopySummaryCompact = [ordered]@{
+            path = ConvertTo-RelativePath $gxCopiesSummaryPath $repoRoot
+            rows = Get-Value $gxCopySummary "rows" ""
+            displayCopies = $displayCopies
+            textureCopies = $textureCopies
+            nonblackDisplayCopies = $nonblackDisplayCopies
+            maxDisplayNonblack = $maxDisplayNonblack
+            firstNonblackDisplayCopy = Get-Value $gxCopySummary "firstNonblackDisplayCopy" $null
+            lastNonblackDisplayCopy = Get-Value $gxCopySummary "lastNonblackDisplayCopy" $null
+            largestDisplayCopy = Get-Value $gxCopySummary "largestDisplayCopy" $null
+            displayDestinations = Get-Value $gxCopySummary "displayDestinations" @()
+            lastCopy = Get-Value $gxCopySummary "lastCopy" $null
+        }
+    }
+
     $expectedFrameHash = Get-Value $expected "frameSha256" $null
     if ($status -eq "ok" -and $null -ne $expectedFrameHash) {
         $actualFrameHash = if ($null -ne $frameSummary) { $frameSummary.sha256 } else { "" }
@@ -516,6 +569,10 @@ foreach ($target in $selectedTargets) {
         pc = $pc
         executedInstructions = Get-Value $summary "executedInstructions" ""
         gxFifoBytes = $gxFifoBytes
+        displayCopies = $displayCopies
+        textureCopies = $textureCopies
+        nonblackDisplayCopies = $nonblackDisplayCopies
+        maxDisplayNonblack = $maxDisplayNonblack
         renderedQuads = $renderedQuads
         renderedTriangles = $renderedTriangles
         frameSha256 = if ($null -ne $frameSummary) { $frameSummary.sha256 } else { "" }
@@ -532,6 +589,7 @@ foreach ($target in $selectedTargets) {
         stdout = $stdoutPath
         stderr = $stderrPath
         runSummary = $summary
+        gxCopySummary = $gxCopySummaryCompact
         frame = $frameSummary
     })
 }
