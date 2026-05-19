@@ -353,6 +353,10 @@ foreach ($target in $selectedTargets) {
             branchSiteTopTarget = ""
             branchSiteTopTargetCount = ""
             branchSiteTargets = ""
+            pcLrSite = ""
+            pcLrTopLr = ""
+            pcLrTopLrCount = ""
+            pcLrTargets = ""
             sonicStateByte13 = ""
             sonicStateByte47 = ""
             sonicStateWord80 = ""
@@ -641,6 +645,43 @@ foreach ($target in $selectedTargets) {
         $regressions.Add("branchSiteTopTargetCount expected >= $expectedMinBranchSiteTopTargetCount got $branchSiteTopTargetCount")
     }
 
+    $pcLrProfiles = @((Get-Value $summary "pcLrProfiles" @()))
+    $firstPcLrProfile = if ($pcLrProfiles.Count -gt 0) { $pcLrProfiles[0] } else { $null }
+    $firstPcLrEntries = @((Get-Value $firstPcLrProfile "entries" @()))
+    $firstPcLrTopEntry = if ($firstPcLrEntries.Count -gt 0) { $firstPcLrEntries[0] } else { $null }
+    $pcLrSite = Get-Value $firstPcLrProfile "pc" ""
+    $pcLrTopLr = Get-Value $firstPcLrTopEntry "lr" ""
+    $pcLrTopLrCount = Get-Value $firstPcLrTopEntry "count" ""
+    $pcLrTargets = ($pcLrProfiles | ForEach-Object {
+            $site = Get-Value $_ "pc" ""
+            $entries = @((Get-Value $_ "entries" @()))
+            if ([string]::IsNullOrWhiteSpace($site) -or $entries.Count -eq 0) {
+                return
+            }
+
+            $entry = $entries[0]
+            $lr = Get-Value $entry "lr" ""
+            $count = Get-Value $entry "count" ""
+            if (-not [string]::IsNullOrWhiteSpace($lr)) {
+                "${site}<-LR${lr}:${count}"
+            }
+        }) -join "; "
+
+    $expectedPcLrSite = Get-Value $expected "pcLrSite" $null
+    if ($status -eq "ok" -and $null -ne $expectedPcLrSite -and "$expectedPcLrSite" -ne "$pcLrSite") {
+        $regressions.Add("pcLrSite expected $expectedPcLrSite got $pcLrSite")
+    }
+
+    $expectedPcLrTopLr = Get-Value $expected "pcLrTopLr" $null
+    if ($status -eq "ok" -and $null -ne $expectedPcLrTopLr -and "$expectedPcLrTopLr" -ne "$pcLrTopLr") {
+        $regressions.Add("pcLrTopLr expected $expectedPcLrTopLr got $pcLrTopLr")
+    }
+
+    $expectedMinPcLrTopLrCount = Get-Value $expected "minPcLrTopLrCount" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinPcLrTopLrCount -and [long]$pcLrTopLrCount -lt [long]$expectedMinPcLrTopLrCount) {
+        $regressions.Add("pcLrTopLrCount expected >= $expectedMinPcLrTopLrCount got $pcLrTopLrCount")
+    }
+
     $sonicResourceState = Get-Value $summary "sonicResourceState" $null
     $sonicStateByte13 = Get-Value $sonicResourceState "stateByte13" ""
     $sonicStateByte47 = Get-Value $sonicResourceState "stateByte47" ""
@@ -743,6 +784,10 @@ foreach ($target in $selectedTargets) {
         branchSiteTopTarget = $branchSiteTopTarget
         branchSiteTopTargetCount = $branchSiteTopTargetCount
         branchSiteTargets = $branchSiteTargets
+        pcLrSite = $pcLrSite
+        pcLrTopLr = $pcLrTopLr
+        pcLrTopLrCount = $pcLrTopLrCount
+        pcLrTargets = $pcLrTargets
         sonicStateByte13 = $sonicStateByte13
         sonicStateByte47 = $sonicStateByte47
         sonicStateWord80 = $sonicStateWord80

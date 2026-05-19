@@ -107,6 +107,7 @@ public sealed class DolRunner
         Dictionary<uint, ulong>? hotPcProfile = options.StopOnHotPc is not null ? [] : null;
         Dictionary<uint, ulong>? indirectCallSiteProfile = options.IndirectCallSiteProfileAddress is not null ? [] : null;
         Dictionary<uint, Dictionary<uint, ulong>>? branchSiteProfiles = BuildBranchSiteProfileDictionaries(options);
+        Dictionary<uint, Dictionary<uint, ulong>>? pcLrProfiles = BuildPcLrProfileDictionaries(options);
         bool stoppedOnPc = false;
         uint? stoppedOnHotPc = null;
         ulong stoppedOnHotPcCount = 0;
@@ -526,6 +527,9 @@ public sealed class DolRunner
                     branchSiteProfiles = branchSiteProfiles is not null
                         ? BuildBranchSiteProfilesSummary(options.BranchSiteProfiles, branchSiteProfiles)
                         : null,
+                    pcLrProfiles = pcLrProfiles is not null
+                        ? BuildPcLrProfilesSummary(options.PcLrProfiles, pcLrProfiles)
+                        : null,
                     gx = new
                     {
                         fifoBytesWritten = gxFifoBytesWritten,
@@ -675,6 +679,12 @@ public sealed class DolRunner
 
                 currentPc = pc;
                 currentInstruction = bus.Read32(pc);
+                if (pcLrProfiles is not null && pcLrProfiles.TryGetValue(pc, out Dictionary<uint, ulong>? pcLrProfile))
+                {
+                    pcLrProfile.TryGetValue(state.Lr, out ulong pcLrCount);
+                    pcLrProfile[state.Lr] = pcLrCount + 1;
+                }
+
                 if (branchSiteProfiles is not null
                     && branchSiteProfiles.TryGetValue(pc, out Dictionary<uint, ulong>? branchSiteProfile)
                     && TryGetBranchSiteTarget(currentInstruction, pc, state, out uint branchSiteTarget))
@@ -1590,6 +1600,17 @@ public sealed class DolRunner
                 if (branchSiteProfiles.TryGetValue(request.Address, out Dictionary<uint, ulong>? profile))
                 {
                     WriteBranchSiteProfile(_output, request.Address, profile, request.TopCount);
+                }
+            }
+        }
+
+        if (pcLrProfiles is not null)
+        {
+            foreach (PcLrProfileRequest request in options.PcLrProfiles ?? [])
+            {
+                if (pcLrProfiles.TryGetValue(request.Address, out Dictionary<uint, ulong>? profile))
+                {
+                    WritePcLrProfile(_output, request.Address, profile, request.TopCount);
                 }
             }
         }
@@ -5475,6 +5496,19 @@ public sealed class DolRunner
             .ToDictionary(static address => address, static _ => new Dictionary<uint, ulong>());
     }
 
+    private static Dictionary<uint, Dictionary<uint, ulong>>? BuildPcLrProfileDictionaries(RunDolOptions options)
+    {
+        if (options.PcLrProfiles is not { Count: > 0 } requests)
+        {
+            return null;
+        }
+
+        return requests
+            .Select(request => request.Address)
+            .Distinct()
+            .ToDictionary(static address => address, static _ => new Dictionary<uint, ulong>());
+    }
+
     private static GxMemoryCheckpointState[] BuildGxMemoryCheckpointStates(RunDolOptions options) =>
         options.GxMemoryCheckpoints is { Count: > 0 }
             ? options.GxMemoryCheckpoints.Select(request => new GxMemoryCheckpointState(request)).ToArray()
@@ -5811,6 +5845,17 @@ public sealed class DolRunner
         }
     }
 
+    private static void WritePcLrProfile(TextWriter output, uint pc, IReadOnlyDictionary<uint, ulong> profile, int topCount)
+    {
+        ulong total = profile.Values.Aggregate(0UL, static (sum, count) => sum + count);
+        output.WriteLine($"PC LR profile 0x{pc:X8}: {profile.Count} unique LR value(s), {total} hit(s)");
+        foreach (KeyValuePair<uint, ulong> entry in profile.OrderByDescending(entry => entry.Value).ThenBy(entry => entry.Key).Take(topCount))
+        {
+            double percent = total == 0 ? 0 : (double)entry.Value * 100 / total;
+            output.WriteLine($"0x{entry.Key:X8}  {entry.Value,10}  {percent,6:F2}%");
+        }
+    }
+
     private static object BuildPcProfileSummary(IReadOnlyDictionary<uint, ulong> profile, int topCount, int executedInstructions)
     {
         return new
@@ -5990,6 +6035,41 @@ public sealed class DolRunner
                             target = $"0x{entry.Key:X8}",
                             count = entry.Value,
                             percent = totalBranches == 0 ? 0 : Math.Round((double)entry.Value * 100 / totalBranches, 3),
+                        })
+                        .ToArray(),
+                };
+            })
+            .ToArray();
+    }
+
+    private static object[] BuildPcLrProfilesSummary(IReadOnlyList<PcLrProfileRequest>? requests, IReadOnlyDictionary<uint, Dictionary<uint, ulong>> profiles)
+    {
+        if (requests is not { Count: > 0 })
+        {
+            return [];
+        }
+
+        return requests
+            .GroupBy(static request => request.Address)
+            .Select(group =>
+            {
+                PcLrProfileRequest request = group.First();
+                Dictionary<uint, ulong> profile = profiles[request.Address];
+                ulong totalHits = profile.Values.Aggregate(0UL, static (total, count) => total + count);
+                return new
+                {
+                    pc = $"0x{request.Address:X8}",
+                    uniqueLrs = profile.Count,
+                    totalHits,
+                    entries = profile
+                        .OrderByDescending(entry => entry.Value)
+                        .ThenBy(entry => entry.Key)
+                        .Take(group.Max(static request => request.TopCount))
+                        .Select(entry => new
+                        {
+                            lr = $"0x{entry.Key:X8}",
+                            count = entry.Value,
+                            percent = totalHits == 0 ? 0 : Math.Round((double)entry.Value * 100 / totalHits, 3),
                         })
                         .ToArray(),
                 };
