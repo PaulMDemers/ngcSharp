@@ -340,6 +340,10 @@ foreach ($target in $selectedTargets) {
             textureCopies = ""
             nonblackDisplayCopies = ""
             maxDisplayNonblack = ""
+            prsDecompressInstructions = ""
+            resourceLookupInstructions = ""
+            topPc = ""
+            topPcCount = ""
             frameSource = ""
             frameSourceAddress = ""
             frameSourceCopyIndex = ""
@@ -520,6 +524,36 @@ foreach ($target in $selectedTargets) {
         $regressions.Add("frameSourceCopyIndex expected $expectedFrameSourceCopyIndex got $frameSourceCopyIndex")
     }
 
+    $fastForward = Get-Value $summary "fastForward" $null
+    $prsDecompressInstructions = Get-Value $fastForward "prsDecompressInstructions" ""
+    $resourceLookupInstructions = Get-Value $fastForward "resourceLookupInstructions" ""
+
+    $expectedMinPrsDecompressInstructions = Get-Value $expected "minPrsDecompressInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinPrsDecompressInstructions -and [long]$prsDecompressInstructions -lt [long]$expectedMinPrsDecompressInstructions) {
+        $regressions.Add("prsDecompressInstructions expected >= $expectedMinPrsDecompressInstructions got $prsDecompressInstructions")
+    }
+
+    $expectedMinResourceLookupInstructions = Get-Value $expected "minResourceLookupInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinResourceLookupInstructions -and [long]$resourceLookupInstructions -lt [long]$expectedMinResourceLookupInstructions) {
+        $regressions.Add("resourceLookupInstructions expected >= $expectedMinResourceLookupInstructions got $resourceLookupInstructions")
+    }
+
+    $pcProfile = Get-Value $summary "pcProfile" $null
+    $pcProfileEntries = @((Get-Value $pcProfile "entries" @()))
+    $topPcEntry = if ($pcProfileEntries.Count -gt 0) { $pcProfileEntries[0] } else { $null }
+    $topPc = Get-Value $topPcEntry "pc" ""
+    $topPcCount = Get-Value $topPcEntry "count" ""
+
+    $expectedTopPc = Get-Value $expected "topPc" $null
+    if ($status -eq "ok" -and $null -ne $expectedTopPc -and "$expectedTopPc" -ne "$topPc") {
+        $regressions.Add("topPc expected $expectedTopPc got $topPc")
+    }
+
+    $expectedMinTopPcCount = Get-Value $expected "minTopPcCount" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinTopPcCount -and [long]$topPcCount -lt [long]$expectedMinTopPcCount) {
+        $regressions.Add("topPcCount expected >= $expectedMinTopPcCount got $topPcCount")
+    }
+
     $displayCopies = Get-Value $gxCopySummary "displayCopies" ""
     $textureCopies = Get-Value $gxCopySummary "textureCopies" ""
     $nonblackDisplayCopies = Get-Value $gxCopySummary "nonblackDisplayCopies" ""
@@ -595,6 +629,10 @@ foreach ($target in $selectedTargets) {
         textureCopies = $textureCopies
         nonblackDisplayCopies = $nonblackDisplayCopies
         maxDisplayNonblack = $maxDisplayNonblack
+        prsDecompressInstructions = $prsDecompressInstructions
+        resourceLookupInstructions = $resourceLookupInstructions
+        topPc = $topPc
+        topPcCount = $topPcCount
         renderedQuads = $renderedQuads
         renderedTriangles = $renderedTriangles
         frameSource = $frameSource

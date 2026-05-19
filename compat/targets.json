@@ -306,6 +306,45 @@
       }
     },
     {
+      "id": "sonic-resource-20m",
+      "name": "Sonic Adventure 2 Battle 20M Resource Profile",
+      "type": "disc",
+      "path": "Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz",
+      "suites": [ "retail", "sonic", "diagnostic", "slow" ],
+      "tags": [ "retail", "cpu", "prs", "resource", "profile", "exi-card", "di" ],
+      "maxInstructions": 20000000,
+      "timeoutSeconds": 180,
+      "profilePc": 24,
+      "extraArgs": [
+        "--memory-card-a",
+        "--controller-button",
+        "a",
+        "--fast-forward-write-watch",
+        "--trace-prs-decompress",
+        "--trace-pc-after",
+        "0x1000000",
+        "--watch-limit",
+        "24",
+        "--trace-pc",
+        "0x800D2684",
+        "--trace-pc",
+        "0x800D2694",
+        "--trace-pc",
+        "0x800D2824",
+        "--trace-pc",
+        "0x80116B9C"
+      ],
+      "expected": {
+        "status": "ok",
+        "stopReason": "max-instructions",
+        "pc": "0x81230FF8",
+        "topPc": "0x800E78AC",
+        "minTopPcCount": 80000,
+        "minPrsDecompressInstructions": 86000000,
+        "minResourceLookupInstructions": 600000
+      }
+    },
+    {
       "id": "pikmin-5m",
       "name": "Pikmin 5M",
       "type": "disc",

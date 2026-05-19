@@ -507,6 +507,14 @@ public sealed class DolRunner
                         onGxFifoOffset = stoppedOnGxFifoOffset,
                         gxFifoOffset = options.StopOnGxFifoOffset,
                     },
+                    pcProfile = options.PcProfileTop is int pcProfileTop && pcProfile is not null
+                        ? BuildPcProfileSummary(pcProfile, pcProfileTop, executed)
+                        : null,
+                    indirectCallSiteProfile = options.IndirectCallSiteProfileAddress is uint profiledCallSiteSummary
+                        && options.IndirectCallSiteProfileTop is int indirectCallSiteProfileTopSummary
+                        && indirectCallSiteProfile is not null
+                            ? BuildIndirectCallSiteProfileSummary(profiledCallSiteSummary, indirectCallSiteProfile, indirectCallSiteProfileTopSummary)
+                            : null,
                     gx = new
                     {
                         fifoBytesWritten = gxFifoBytesWritten,
@@ -5457,6 +5465,48 @@ public sealed class DolRunner
             double percent = total == 0 ? 0 : (double)entry.Value * 100 / total;
             output.WriteLine($"0x{entry.Key:X8}  {entry.Value,10}  {percent,6:F2}%");
         }
+    }
+
+    private static object BuildPcProfileSummary(IReadOnlyDictionary<uint, ulong> profile, int topCount, int executedInstructions)
+    {
+        return new
+        {
+            uniqueAddresses = profile.Count,
+            totalSamples = profile.Values.Aggregate(0UL, static (total, count) => total + count),
+            entries = profile
+                .OrderByDescending(entry => entry.Value)
+                .ThenBy(entry => entry.Key)
+                .Take(topCount)
+                .Select(entry => new
+                {
+                    pc = $"0x{entry.Key:X8}",
+                    count = entry.Value,
+                    percent = executedInstructions == 0 ? 0 : Math.Round((double)entry.Value * 100 / executedInstructions, 3),
+                })
+                .ToArray(),
+        };
+    }
+
+    private static object BuildIndirectCallSiteProfileSummary(uint callSite, IReadOnlyDictionary<uint, ulong> profile, int topCount)
+    {
+        ulong totalCalls = profile.Values.Aggregate(0UL, static (total, count) => total + count);
+        return new
+        {
+            callSite = $"0x{callSite:X8}",
+            uniqueTargets = profile.Count,
+            totalCalls,
+            entries = profile
+                .OrderByDescending(entry => entry.Value)
+                .ThenBy(entry => entry.Key)
+                .Take(topCount)
+                .Select(entry => new
+                {
+                    target = $"0x{entry.Key:X8}",
+                    count = entry.Value,
+                    percent = totalCalls == 0 ? 0 : Math.Round((double)entry.Value * 100 / totalCalls, 3),
+                })
+                .ToArray(),
+        };
     }
 
     private static string FormatGxFrameSource(GxFrameDumpSource source) =>
