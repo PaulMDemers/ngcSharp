@@ -345,6 +345,7 @@ foreach ($target in $selectedTargets) {
             externalInterruptLeafInstructions = ""
             sonicResourceModeQueryInstructions = ""
             sonicResourceStatePollInstructions = ""
+            sonicModeWrapperInstructions = ""
             topPc = ""
             topPcCount = ""
             nonExternalInterruptTopPc = ""
@@ -550,6 +551,7 @@ foreach ($target in $selectedTargets) {
     $externalInterruptLeafInstructions = Get-Value $fastForward "externalInterruptLeafInstructions" ""
     $sonicResourceModeQueryInstructions = Get-Value $fastForward "sonicResourceModeQueryInstructions" ""
     $sonicResourceStatePollInstructions = Get-Value $fastForward "sonicResourceStatePollInstructions" ""
+    $sonicModeWrapperInstructions = Get-Value $fastForward "sonicModeWrapperInstructions" ""
 
     $expectedMinPrsDecompressInstructions = Get-Value $expected "minPrsDecompressInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinPrsDecompressInstructions -and [long]$prsDecompressInstructions -lt [long]$expectedMinPrsDecompressInstructions) {
@@ -574,6 +576,11 @@ foreach ($target in $selectedTargets) {
     $expectedMinSonicResourceStatePollInstructions = Get-Value $expected "minSonicResourceStatePollInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinSonicResourceStatePollInstructions -and [long]$sonicResourceStatePollInstructions -lt [long]$expectedMinSonicResourceStatePollInstructions) {
         $regressions.Add("sonicResourceStatePollInstructions expected >= $expectedMinSonicResourceStatePollInstructions got $sonicResourceStatePollInstructions")
+    }
+
+    $expectedMinSonicModeWrapperInstructions = Get-Value $expected "minSonicModeWrapperInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinSonicModeWrapperInstructions -and [long]$sonicModeWrapperInstructions -lt [long]$expectedMinSonicModeWrapperInstructions) {
+        $regressions.Add("sonicModeWrapperInstructions expected >= $expectedMinSonicModeWrapperInstructions got $sonicModeWrapperInstructions")
     }
 
     $pcProfile = Get-Value $summary "pcProfile" $null
@@ -776,6 +783,7 @@ foreach ($target in $selectedTargets) {
         externalInterruptLeafInstructions = $externalInterruptLeafInstructions
         sonicResourceModeQueryInstructions = $sonicResourceModeQueryInstructions
         sonicResourceStatePollInstructions = $sonicResourceStatePollInstructions
+        sonicModeWrapperInstructions = $sonicModeWrapperInstructions
         topPc = $topPc
         topPcCount = $topPcCount
         nonExternalInterruptTopPc = $nonExternalInterruptTopPc

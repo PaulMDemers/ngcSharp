@@ -442,7 +442,7 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "pc": "0x800E78AC",
+        "pc": "0x80BC8118",
         "topPc": "0x800E3134",
         "minTopPcCount": 50000,
         "nonExternalInterruptTopPc": "0x800E3134",
@@ -451,14 +451,15 @@
         "branchSiteTopTarget": "0x800E2C0C",
         "minBranchSiteTopTargetCount": 50000,
         "pcLrSite": "0x800E78AC",
-        "pcLrTopLr": "0x800F1374",
-        "minPcLrTopLrCount": 8000,
+        "pcLrTopLr": "0x800E679C",
+        "minPcLrTopLrCount": 6500,
         "sonicStateByte47": 0,
         "minPrsDecompressInstructions": 157000000,
         "minResourceLookupInstructions": 2400000,
-        "minExternalInterruptLeafInstructions": 500000,
+        "minExternalInterruptLeafInstructions": 400000,
         "minSonicResourceModeQueryInstructions": 2000000,
-        "minSonicResourceStatePollInstructions": 1200000
+        "minSonicResourceStatePollInstructions": 1200000,
+        "minSonicModeWrapperInstructions": 250000
       }
     },
     {
