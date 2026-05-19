@@ -344,6 +344,7 @@ foreach ($target in $selectedTargets) {
             resourceLookupInstructions = ""
             externalInterruptLeafInstructions = ""
             sonicResourceModeQueryInstructions = ""
+            sonicResourceStatePollInstructions = ""
             topPc = ""
             topPcCount = ""
             nonExternalInterruptTopPc = ""
@@ -352,6 +353,13 @@ foreach ($target in $selectedTargets) {
             branchSiteTopTarget = ""
             branchSiteTopTargetCount = ""
             branchSiteTargets = ""
+            sonicStateByte13 = ""
+            sonicStateByte47 = ""
+            sonicStateWord80 = ""
+            sonicStateWordEc = ""
+            sonicSmallDataState = ""
+            sonicModePointer = ""
+            sonicModePointerValue = ""
             frameSource = ""
             frameSourceAddress = ""
             frameSourceCopyIndex = ""
@@ -537,6 +545,7 @@ foreach ($target in $selectedTargets) {
     $resourceLookupInstructions = Get-Value $fastForward "resourceLookupInstructions" ""
     $externalInterruptLeafInstructions = Get-Value $fastForward "externalInterruptLeafInstructions" ""
     $sonicResourceModeQueryInstructions = Get-Value $fastForward "sonicResourceModeQueryInstructions" ""
+    $sonicResourceStatePollInstructions = Get-Value $fastForward "sonicResourceStatePollInstructions" ""
 
     $expectedMinPrsDecompressInstructions = Get-Value $expected "minPrsDecompressInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinPrsDecompressInstructions -and [long]$prsDecompressInstructions -lt [long]$expectedMinPrsDecompressInstructions) {
@@ -556,6 +565,11 @@ foreach ($target in $selectedTargets) {
     $expectedMinSonicResourceModeQueryInstructions = Get-Value $expected "minSonicResourceModeQueryInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinSonicResourceModeQueryInstructions -and [long]$sonicResourceModeQueryInstructions -lt [long]$expectedMinSonicResourceModeQueryInstructions) {
         $regressions.Add("sonicResourceModeQueryInstructions expected >= $expectedMinSonicResourceModeQueryInstructions got $sonicResourceModeQueryInstructions")
+    }
+
+    $expectedMinSonicResourceStatePollInstructions = Get-Value $expected "minSonicResourceStatePollInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinSonicResourceStatePollInstructions -and [long]$sonicResourceStatePollInstructions -lt [long]$expectedMinSonicResourceStatePollInstructions) {
+        $regressions.Add("sonicResourceStatePollInstructions expected >= $expectedMinSonicResourceStatePollInstructions got $sonicResourceStatePollInstructions")
     }
 
     $pcProfile = Get-Value $summary "pcProfile" $null
@@ -625,6 +639,20 @@ foreach ($target in $selectedTargets) {
     $expectedMinBranchSiteTopTargetCount = Get-Value $expected "minBranchSiteTopTargetCount" $null
     if ($status -eq "ok" -and $null -ne $expectedMinBranchSiteTopTargetCount -and [long]$branchSiteTopTargetCount -lt [long]$expectedMinBranchSiteTopTargetCount) {
         $regressions.Add("branchSiteTopTargetCount expected >= $expectedMinBranchSiteTopTargetCount got $branchSiteTopTargetCount")
+    }
+
+    $sonicResourceState = Get-Value $summary "sonicResourceState" $null
+    $sonicStateByte13 = Get-Value $sonicResourceState "stateByte13" ""
+    $sonicStateByte47 = Get-Value $sonicResourceState "stateByte47" ""
+    $sonicStateWord80 = Get-Value $sonicResourceState "word80" ""
+    $sonicStateWordEc = Get-Value $sonicResourceState "wordEc" ""
+    $sonicSmallDataState = Get-Value $sonicResourceState "smallDataState" ""
+    $sonicModePointer = Get-Value $sonicResourceState "modePointer" ""
+    $sonicModePointerValue = Get-Value $sonicResourceState "modePointerValue" ""
+
+    $expectedSonicStateByte47 = Get-Value $expected "sonicStateByte47" $null
+    if ($status -eq "ok" -and $null -ne $expectedSonicStateByte47 -and [int]$sonicStateByte47 -ne [int]$expectedSonicStateByte47) {
+        $regressions.Add("sonicStateByte47 expected $expectedSonicStateByte47 got $sonicStateByte47")
     }
 
     $displayCopies = Get-Value $gxCopySummary "displayCopies" ""
@@ -706,6 +734,7 @@ foreach ($target in $selectedTargets) {
         resourceLookupInstructions = $resourceLookupInstructions
         externalInterruptLeafInstructions = $externalInterruptLeafInstructions
         sonicResourceModeQueryInstructions = $sonicResourceModeQueryInstructions
+        sonicResourceStatePollInstructions = $sonicResourceStatePollInstructions
         topPc = $topPc
         topPcCount = $topPcCount
         nonExternalInterruptTopPc = $nonExternalInterruptTopPc
@@ -714,6 +743,13 @@ foreach ($target in $selectedTargets) {
         branchSiteTopTarget = $branchSiteTopTarget
         branchSiteTopTargetCount = $branchSiteTopTargetCount
         branchSiteTargets = $branchSiteTargets
+        sonicStateByte13 = $sonicStateByte13
+        sonicStateByte47 = $sonicStateByte47
+        sonicStateWord80 = $sonicStateWord80
+        sonicStateWordEc = $sonicStateWordEc
+        sonicSmallDataState = $sonicSmallDataState
+        sonicModePointer = $sonicModePointer
+        sonicModePointerValue = $sonicModePointerValue
         renderedQuads = $renderedQuads
         renderedTriangles = $renderedTriangles
         frameSource = $frameSource

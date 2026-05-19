@@ -142,6 +142,7 @@ public sealed class DolRunner
         ulong gxVertexEmitFastForwardInstructions = 0;
         ulong normalizedStringScanFastForwardInstructions = 0;
         ulong sonicResourceModeQueryFastForwardInstructions = 0;
+        ulong sonicResourceStatePollFastForwardInstructions = 0;
         uint currentPc = state.Pc;
         uint currentInstruction = 0;
         Action<uint, uint>? previousWriteObserver = bus.MainRamWrite32Observer;
@@ -510,6 +511,7 @@ public sealed class DolRunner
                         onGxFifoOffset = stoppedOnGxFifoOffset,
                         gxFifoOffset = options.StopOnGxFifoOffset,
                     },
+                    sonicResourceState = BuildSonicResourceStateSummary(bus, state),
                     pcProfile = options.PcProfileTop is int pcProfileTop && pcProfile is not null
                         ? BuildPcProfileSummary(pcProfile, pcProfileTop, executed)
                         : null,
@@ -623,6 +625,7 @@ public sealed class DolRunner
                         gxVertexEmitInstructions = gxVertexEmitFastForwardInstructions,
                         normalizedStringScanInstructions = normalizedStringScanFastForwardInstructions,
                         sonicResourceModeQueryInstructions = sonicResourceModeQueryFastForwardInstructions,
+                        sonicResourceStatePollInstructions = sonicResourceStatePollFastForwardInstructions,
                     },
                 };
 
@@ -959,6 +962,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicResourceModeQuery(state, bus, out skippedInstructions))
                 {
                     sonicResourceModeQueryFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicResourceStatePoll(state, bus, out skippedInstructions))
+                {
+                    sonicResourceStatePollFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1338,6 +1348,11 @@ public sealed class DolRunner
             if (sonicResourceModeQueryFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {sonicResourceModeQueryFastForwardInstructions} Sonic resource mode query instruction(s).");
+            }
+
+            if (sonicResourceStatePollFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {sonicResourceStatePollFastForwardInstructions} Sonic resource state poll instruction(s).");
             }
 
             if (gxMemoryCheckpoints.Length != 0)
@@ -4921,6 +4936,79 @@ public sealed class DolRunner
         return true;
     }
 
+    private static bool TryFastForwardSonicResourceStatePoll(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        if (bus.Read32(pc) != 0x3C80_801D
+            || bus.Read32(pc + 0x04) != 0x3884_C168
+            || bus.Read32(pc + 0x08) != 0x38C4_0047
+            || bus.Read32(pc + 0x0C) != 0x88A4_0047
+            || bus.Read32(pc + 0x10) != 0x7CA4_0774
+            || bus.Read32(pc + 0x14) != 0x2C04_0014
+            || bus.Read32(pc + 0x18) != 0x4182_0018
+            || bus.Read32(pc + 0x1C) != 0x3805_FFEB
+            || bus.Read32(pc + 0x20) != 0x5400_063E
+            || bus.Read32(pc + 0x24) != 0x2800_0002
+            || bus.Read32(pc + 0x28) != 0x4081_0008
+            || bus.Read32(pc + 0x2C) != 0x908D_897C
+            || bus.Read32(pc + 0x30) != 0x3803_0001
+            || bus.Read32(pc + 0x34) != 0x2800_000C
+            || bus.Read32(pc + 0x38) != 0x4181_0054
+            || bus.Read32(pc + 0x3C) != 0x3C60_801D
+            || bus.Read32(pc + 0x40) != 0x3863_DC70
+            || bus.Read32(pc + 0x44) != 0x5400_103A
+            || bus.Read32(pc + 0x48) != 0x7C03_002E
+            || bus.Read32(pc + 0x4C) != 0x7C09_03A6
+            || bus.Read32(pc + 0x50) != 0x4E80_0420
+            || bus.Read32(pc + 0x8C) != 0x8806_0000
+            || bus.Read32(pc + 0x90) != 0x7C00_0774
+            || bus.Read32(pc + 0x94) != 0x2C00_0014
+            || bus.Read32(pc + 0x98) != 0x4D80_0020)
+        {
+            return false;
+        }
+
+        const uint stateBase = 0x801C_C168;
+        const uint jumpTable = 0x801C_DC70;
+        uint tableIndex = state.Gpr[3] + 1;
+        uint tableEntryAddress = jumpTable + tableIndex * sizeof(uint);
+        if (tableIndex > 12
+            || !bus.Memory.IsMainRamAddress(stateBase + 0x47, 1)
+            || !bus.Memory.IsMainRamAddress(tableEntryAddress, sizeof(uint)))
+        {
+            return false;
+        }
+
+        byte rawState = bus.Memory.Read8(stateBase + 0x47);
+        int signedState = unchecked((sbyte)rawState);
+        if (signedState >= 20 || bus.Memory.Read32(tableEntryAddress) != pc + 0x8C)
+        {
+            return false;
+        }
+
+        uint smallDataStateAddress = unchecked(state.Gpr[13] - 30340u);
+        if (!bus.Memory.IsMainRamAddress(smallDataStateAddress, sizeof(uint))
+            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 25, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        uint stateValue = unchecked((uint)signedState);
+        bus.Memory.Write32(smallDataStateAddress, stateValue);
+        state.Gpr[0] = stateValue;
+        state.Gpr[3] = jumpTable;
+        state.Gpr[4] = stateValue;
+        state.Gpr[5] = rawState;
+        state.Gpr[6] = stateBase + 0x47;
+        state.Ctr = pc + 0x8C;
+        SetCr0ForSignedCompareImmediate(state, stateValue, 20);
+        state.Pc = state.Lr;
+        AdvanceFastForwardedInstructions(state, bus, 25);
+        skippedInstructions = 25;
+        return true;
+    }
+
     private static bool MatchesSonicNormalizedStringScan(GameCubeBus bus, uint pc, out uint tableAddress)
     {
         tableAddress = 0;
@@ -5741,6 +5829,56 @@ public sealed class DolRunner
                 })
                 .ToArray(),
         };
+    }
+
+    private static object? BuildSonicResourceStateSummary(GameCubeBus bus, PowerPcState state)
+    {
+        const uint stateBase = 0x801C_C168;
+        if (!bus.Memory.IsMainRamAddress(stateBase, 0x100))
+        {
+            return null;
+        }
+
+        uint smallDataStateAddress = unchecked(state.Gpr[13] - 30340u);
+        uint firstModeFlagAddress = unchecked(state.Gpr[13] - 30016u);
+        uint secondModeFlagAddress = unchecked(state.Gpr[13] - 30024u);
+        uint modePointerAddress = unchecked(state.Gpr[13] - 30040u);
+
+        return new
+        {
+            stateBase = $"0x{stateBase:X8}",
+            stateByte13 = bus.Memory.Read8(stateBase + 0x13),
+            stateByte47 = bus.Memory.Read8(stateBase + 0x47),
+            word80 = $"0x{bus.Memory.Read32(stateBase + 0x80):X8}",
+            wordEc = $"0x{bus.Memory.Read32(stateBase + 0xEC):X8}",
+            smallDataState = TryReadMainRam32(bus, smallDataStateAddress, out uint smallDataState)
+                ? $"0x{smallDataState:X8}"
+                : null,
+            firstModeFlag = TryReadMainRam32(bus, firstModeFlagAddress, out uint firstModeFlag)
+                ? $"0x{firstModeFlag:X8}"
+                : null,
+            secondModeFlag = TryReadMainRam32(bus, secondModeFlagAddress, out uint secondModeFlag)
+                ? $"0x{secondModeFlag:X8}"
+                : null,
+            modePointer = TryReadMainRam32(bus, modePointerAddress, out uint modePointer)
+                ? $"0x{modePointer:X8}"
+                : null,
+            modePointerValue = TryReadMainRam32(bus, modePointer + 0x0C, out uint modePointerValue)
+                ? $"0x{modePointerValue:X8}"
+                : null,
+        };
+    }
+
+    private static bool TryReadMainRam32(GameCubeBus bus, uint address, out uint value)
+    {
+        value = 0;
+        if (!bus.Memory.IsMainRamAddress(address, sizeof(uint)))
+        {
+            return false;
+        }
+
+        value = bus.Memory.Read32(address);
+        return true;
     }
 
     private static object BuildPcProfileWithoutExternalInterruptLeavesSummary(IReadOnlyDictionary<uint, ulong> profile, int topCount, int executedInstructions, GameCubeBus bus)
