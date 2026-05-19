@@ -2946,7 +2946,15 @@ public static class GxFifoSoftwareRenderer
                 bool tevEvaluated = false;
                 if (canEvaluateSingleTevStageFast)
                 {
-                    singleTevStageFast.Evaluate(state, memory, a, b, c, aWeight, bWeight, cWeight, rasterR, rasterG, rasterB, rasterA, out r, out g, out bValue, out sourceAlpha, out bool usedDirectTextureSampler);
+                    bool hasFastTexCoord = singleTevStageFast.Order.TextureEnabled && canSampleTexture;
+                    float fastTexS = 0;
+                    float fastTexT = 0;
+                    if (hasFastTexCoord && singleTevStageFast.TextureSampler.IsValid)
+                    {
+                        InterpolateTexCoordValues(a, b, c, aWeight, bWeight, cWeight, aTexS, aTexT, bTexS, bTexT, cTexS, cTexT, out fastTexS, out fastTexT);
+                    }
+
+                    singleTevStageFast.Evaluate(state, memory, a, b, c, aWeight, bWeight, cWeight, hasFastTexCoord, fastTexS, fastTexT, rasterR, rasterG, rasterB, rasterA, out r, out g, out bValue, out sourceAlpha, out bool usedDirectTextureSampler);
                     fastPathCounters?.RecordSingleStageTevFastPixel(usedDirectTextureSampler);
                     tevEvaluated = true;
                 }
@@ -2963,14 +2971,7 @@ public static class GxFifoSoftwareRenderer
                 if (!tevEvaluated && canSampleTexture)
                 {
                     fastPathCounters?.RecordLegacyTextureFallbackPixel();
-                    float perspectiveWeight = a.InvW * aWeight + b.InvW * bWeight + c.InvW * cWeight;
-                    float s = aTexS * aWeight + bTexS * bWeight + cTexS * cWeight;
-                    float t = aTexT * aWeight + bTexT * bWeight + cTexT * cWeight;
-                    if (MathF.Abs(perspectiveWeight) > 0.000001f)
-                    {
-                        s = (aTexS * a.InvW * aWeight + bTexS * b.InvW * bWeight + cTexS * c.InvW * cWeight) / perspectiveWeight;
-                        t = (aTexT * a.InvW * aWeight + bTexT * b.InvW * bWeight + cTexT * c.InvW * cWeight) / perspectiveWeight;
-                    }
+                    InterpolateTexCoordValues(a, b, c, aWeight, bWeight, cWeight, aTexS, aTexT, bTexS, bTexT, cTexS, cTexT, out float s, out float t);
 
                     if (state.TrySampleTexture(memory, textureMap, s, t, out byte sampledR, out byte sampledG, out byte sampledB, out byte sampledA))
                     {
@@ -3161,6 +3162,32 @@ public static class GxFifoSoftwareRenderer
         (byte)Math.Clamp((int)MathF.Round(Lerp(a, b, t)), 0, 255);
 
     private static float Lerp(float a, float b, float t) => a + (b - a) * t;
+
+    private static void InterpolateTexCoordValues(
+        GxVertex a,
+        GxVertex b,
+        GxVertex c,
+        float aWeight,
+        float bWeight,
+        float cWeight,
+        float aTexS,
+        float aTexT,
+        float bTexS,
+        float bTexT,
+        float cTexS,
+        float cTexT,
+        out float s,
+        out float t)
+    {
+        float perspectiveWeight = a.InvW * aWeight + b.InvW * bWeight + c.InvW * cWeight;
+        s = aTexS * aWeight + bTexS * bWeight + cTexS * cWeight;
+        t = aTexT * aWeight + bTexT * bWeight + cTexT * cWeight;
+        if (MathF.Abs(perspectiveWeight) > 0.000001f)
+        {
+            s = (aTexS * a.InvW * aWeight + bTexS * b.InvW * bWeight + cTexS * c.InvW * cWeight) / perspectiveWeight;
+            t = (aTexT * a.InvW * aWeight + bTexT * b.InvW * bWeight + cTexT * c.InvW * cWeight) / perspectiveWeight;
+        }
+    }
 
     private static void ApplyStage0Mode(GxTevStage0Mode mode, ref byte r, ref byte g, ref byte b, ref byte a, byte textureR, byte textureG, byte textureB, byte textureA)
     {
@@ -5830,6 +5857,9 @@ public static class GxFifoSoftwareRenderer
                 float aWeight,
                 float bWeight,
                 float cWeight,
+                bool hasTexCoord,
+                float texS,
+                float texT,
                 byte rasterR,
                 byte rasterG,
                 byte rasterB,
@@ -5844,15 +5874,14 @@ public static class GxFifoSoftwareRenderer
                 g = rasterG;
                 bValue = rasterB;
                 alpha = rasterA;
-                float s = 0;
-                float t = 0;
-                usedDirectTextureSampler = TextureSampler.IsValid && Order.TextureEnabled && TryInterpolateTexCoord(a, b, c, Order.TexCoord, aWeight, bWeight, cWeight, out s, out t);
+                usedDirectTextureSampler = TextureSampler.IsValid && Order.TextureEnabled && hasTexCoord;
 
                 GxTevColor previous = new(rasterR, rasterG, rasterB, rasterA);
                 IndirectOffsetState indirectOffset = default;
                 GxTevColor texture = usedDirectTextureSampler
-                    ? TextureSampler.Sample(memory, s, t)
+                    ? TextureSampler.Sample(memory, texS, texT)
                     : TextureFallbackIsOne
+                        || (Order.TextureEnabled && !hasTexCoord)
                         ? GxTevColor.One
                     : state.SampleTevTexture(memory, 0, Order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset);
                 GxTevColor raster = SelectTevRasterColor(0, Order, previous, indirectOffset);
