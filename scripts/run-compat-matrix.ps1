@@ -461,6 +461,12 @@ foreach ($target in $selectedTargets) {
         $regressions.Add("stopReason expected $expectedStopReason got $stopReason")
     }
 
+    $pc = "$(Get-Value $summary 'pc' '')"
+    $expectedPc = Get-Value $expected "pc" $null
+    if ($status -eq "ok" -and $null -ne $expectedPc -and "$expectedPc" -ne $pc) {
+        $regressions.Add("pc expected $expectedPc got $pc")
+    }
+
     $gx = Get-Value $summary "gx" $null
     $gxFifoBytes = Get-Value $gx "fifoBytesWritten" ""
     $expectedMinGxFifoBytes = Get-Value $expected "minGxFifoBytes" $null
@@ -501,7 +507,7 @@ foreach ($target in $selectedTargets) {
         elapsedSeconds = $processResult.elapsedSeconds
         exitCode = $exitCode
         stopReason = $stopReason
-        pc = "$(Get-Value $summary 'pc' '')"
+        pc = $pc
         executedInstructions = Get-Value $summary "executedInstructions" ""
         gxFifoBytes = $gxFifoBytes
         renderedTriangles = $renderedTriangles

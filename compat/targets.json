@@ -21,7 +21,8 @@
       "timeoutSeconds": 15,
       "expected": {
         "status": "ok",
-        "stopReason": "halted"
+        "stopReason": "halted",
+        "pc": "0x8000310C"
       }
     },
     {
@@ -42,6 +43,7 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
+        "pc": "0x80003254",
         "frameSha256": "f5936788ea8fb2ec08688a5e2e87c3804af5bcb85b4aa66603ed83bdf40773b8"
       }
     },
@@ -62,6 +64,7 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
+        "pc": "0x80005BF4",
         "minGxFifoBytes": 1,
         "minRenderedTriangles": 12,
         "frameSha256": "53d72e2558aada66e9f6ba11e2bf28dfa3fed66e19b2ce50c23de3dee05d65ae"
@@ -77,7 +80,9 @@
       "maxInstructions": 2000000,
       "timeoutSeconds": 60,
       "expected": {
-        "status": "ok"
+        "status": "ok",
+        "stopReason": "max-instructions",
+        "pc": "0x8000463C"
       }
     },
     {
@@ -90,7 +95,9 @@
       "maxInstructions": 2000000,
       "timeoutSeconds": 60,
       "expected": {
-        "status": "ok"
+        "status": "ok",
+        "stopReason": "max-instructions",
+        "pc": "0x8000599C"
       }
     },
     {
@@ -103,7 +110,9 @@
       "maxInstructions": 2000000,
       "timeoutSeconds": 60,
       "expected": {
-        "status": "ok"
+        "status": "ok",
+        "stopReason": "max-instructions",
+        "pc": "0x800109B4"
       }
     },
     {
@@ -122,7 +131,10 @@
       },
       "expected": {
         "status": "ok",
-        "minGxFifoBytes": 1
+        "stopReason": "max-instructions",
+        "pc": "0x80004BDC",
+        "minGxFifoBytes": 1,
+        "frameSha256": "dde7891c8fdef100c06f1e92597ff7a4f4fbad522cea0195ed134e167b9262a2"
       }
     },
     {
@@ -141,7 +153,10 @@
       },
       "expected": {
         "status": "ok",
-        "minGxFifoBytes": 1
+        "stopReason": "max-instructions",
+        "pc": "0x80003A1C",
+        "minGxFifoBytes": 1,
+        "frameSha256": "2aa475040888a37f1fad680e624c2c8db7c50b40ff3ed6b5c9a61330109d6cfc"
       }
     },
     {
@@ -160,7 +175,11 @@
       },
       "expected": {
         "status": "ok",
-        "minGxFifoBytes": 1
+        "stopReason": "max-instructions",
+        "pc": "0x8000525C",
+        "minGxFifoBytes": 1,
+        "minRenderedTriangles": 58,
+        "frameSha256": "88d650b492b1fb4c6814f43c0edeed5b40fa045ba33b7a5c5a8803b2bde31976"
       }
     },
     {
@@ -174,7 +193,9 @@
       "timeoutSeconds": 90,
       "extraArgs": [ "--memory-card-a" ],
       "expected": {
-        "status": "ok"
+        "status": "ok",
+        "stopReason": "max-instructions",
+        "pc": "0x8002DC5C"
       }
     },
     {
@@ -188,7 +209,9 @@
       "timeoutSeconds": 90,
       "extraArgs": [ "--memory-card-a" ],
       "expected": {
-        "status": "ok"
+        "status": "ok",
+        "stopReason": "halted",
+        "pc": "0x00272594"
       }
     },
     {
@@ -196,13 +219,15 @@
       "name": "Visual Boy Advance GX GameCube utility",
       "type": "dol",
       "path": "artifacts/demo-dols/downloaded/vbagx/vbagx-gc.dol",
-      "suites": [ "homebrew", "utility", "known-failing" ],
+      "suites": [ "homebrew", "utility" ],
       "tags": [ "large-homebrew", "memory-map", "stress" ],
       "maxInstructions": 2000000,
       "timeoutSeconds": 90,
       "expected": {
-        "status": "known-failing",
-        "note": "Currently reaches an unmapped 0x81800000 access in the demo sweep."
+        "status": "ok",
+        "stopReason": "max-instructions",
+        "pc": "0x800341CC",
+        "note": "Earlier sweeps reached an unmapped 0x81800000 access; the current 2M matrix window now runs to its instruction budget."
       }
     },
     {
@@ -218,7 +243,8 @@
       "extraArgs": [ "--memory-card-a", "--controller-button", "a", "--fast-forward-write-watch" ],
       "expected": {
         "status": "ok",
-        "stopReason": "max-instructions"
+        "stopReason": "max-instructions",
+        "pc": "0x80136D2C"
       }
     },
     {
@@ -240,7 +266,10 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "minGxFifoBytes": 1
+        "pc": "0x81230FF8",
+        "minGxFifoBytes": 1,
+        "minRenderedTriangles": 320,
+        "frameSha256": "15928246409e9cb5f50ccca1dd4c287541d0529ea7b0cb15c8e15c50a857ae13"
       }
     },
     {
@@ -260,7 +289,9 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "minGxFifoBytes": 1
+        "pc": "0x800257F4",
+        "minGxFifoBytes": 1,
+        "frameSha256": "524364c83aa128e9ff5a1c265ae4932aaff1cbd08ce9cb009d70081adc5cf5d3"
       }
     },
     {
@@ -295,7 +326,8 @@
       "extraArgs": [ "--memory-card-a", "--controller-button", "a", "--fast-forward-write-watch" ],
       "expected": {
         "status": "ok",
-        "stopReason": "max-instructions"
+        "stopReason": "max-instructions",
+        "pc": "0x801059A8"
       }
     }
   ]
