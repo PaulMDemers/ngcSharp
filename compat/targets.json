@@ -341,7 +341,8 @@
         "topPc": "0x800E78AC",
         "minTopPcCount": 80000,
         "minPrsDecompressInstructions": 86000000,
-        "minResourceLookupInstructions": 600000
+        "minResourceLookupInstructions": 600000,
+        "minExternalInterruptLeafInstructions": 1180000
       }
     },
     {

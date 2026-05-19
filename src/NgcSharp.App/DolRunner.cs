@@ -122,6 +122,7 @@ public sealed class DolRunner
         ulong bulkFastForwardInstructions = 0;
         ulong cacheFastForwardInstructions = 0;
         ulong leafFastForwardInstructions = 0;
+        ulong externalInterruptLeafFastForwardInstructions = 0;
         ulong memoryCopyFastForwardInstructions = 0;
         ulong textureSampleFastForwardInstructions = 0;
         ulong stringCopyFastForwardInstructions = 0;
@@ -595,6 +596,7 @@ public sealed class DolRunner
                         bulkMemoryInstructions = bulkFastForwardInstructions,
                         cacheInstructions = cacheFastForwardInstructions,
                         leafHelperInstructions = leafFastForwardInstructions,
+                        externalInterruptLeafInstructions = externalInterruptLeafFastForwardInstructions,
                         memoryCopyInstructions = memoryCopyFastForwardInstructions,
                         textureSampleInstructions = textureSampleFastForwardInstructions,
                         stringCopyInstructions = stringCopyFastForwardInstructions,
@@ -763,6 +765,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardCtrCacheBlockLoop(state, bus, out skippedInstructions))
                 {
                     cacheFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardExternalInterruptLeafHelper(state, bus, out skippedInstructions))
+                {
+                    externalInterruptLeafFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1210,6 +1219,11 @@ public sealed class DolRunner
             if (leafFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {leafFastForwardInstructions} small leaf helper instruction(s).");
+            }
+
+            if (externalInterruptLeafFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {externalInterruptLeafFastForwardInstructions} external interrupt leaf instruction(s).");
             }
 
             if (memoryCopyFastForwardInstructions != 0)
@@ -2496,6 +2510,28 @@ public sealed class DolRunner
         }
 
         return false;
+    }
+
+    private static bool TryFastForwardExternalInterruptLeafHelper(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        uint first = bus.Read32(pc);
+        if (first == 0x7C60_00A6)
+        {
+            if (TryFastForwardDisableExternalInterruptLeaf(state, bus, pc, out skippedInstructions))
+            {
+                return true;
+            }
+
+            if (TryFastForwardEnableExternalInterruptLeaf(state, bus, pc, out skippedInstructions))
+            {
+                return true;
+            }
+        }
+
+        return first == 0x2C03_0000
+            && TryFastForwardRestoreExternalInterruptLeaf(state, bus, pc, out skippedInstructions);
     }
 
     private static bool TryFastForwardReturnZeroLeaf(PowerPcState state, GameCubeBus bus, uint pc, out int skippedInstructions)

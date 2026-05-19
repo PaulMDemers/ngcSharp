@@ -342,6 +342,7 @@ foreach ($target in $selectedTargets) {
             maxDisplayNonblack = ""
             prsDecompressInstructions = ""
             resourceLookupInstructions = ""
+            externalInterruptLeafInstructions = ""
             topPc = ""
             topPcCount = ""
             frameSource = ""
@@ -527,6 +528,7 @@ foreach ($target in $selectedTargets) {
     $fastForward = Get-Value $summary "fastForward" $null
     $prsDecompressInstructions = Get-Value $fastForward "prsDecompressInstructions" ""
     $resourceLookupInstructions = Get-Value $fastForward "resourceLookupInstructions" ""
+    $externalInterruptLeafInstructions = Get-Value $fastForward "externalInterruptLeafInstructions" ""
 
     $expectedMinPrsDecompressInstructions = Get-Value $expected "minPrsDecompressInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinPrsDecompressInstructions -and [long]$prsDecompressInstructions -lt [long]$expectedMinPrsDecompressInstructions) {
@@ -536,6 +538,11 @@ foreach ($target in $selectedTargets) {
     $expectedMinResourceLookupInstructions = Get-Value $expected "minResourceLookupInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinResourceLookupInstructions -and [long]$resourceLookupInstructions -lt [long]$expectedMinResourceLookupInstructions) {
         $regressions.Add("resourceLookupInstructions expected >= $expectedMinResourceLookupInstructions got $resourceLookupInstructions")
+    }
+
+    $expectedMinExternalInterruptLeafInstructions = Get-Value $expected "minExternalInterruptLeafInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinExternalInterruptLeafInstructions -and [long]$externalInterruptLeafInstructions -lt [long]$expectedMinExternalInterruptLeafInstructions) {
+        $regressions.Add("externalInterruptLeafInstructions expected >= $expectedMinExternalInterruptLeafInstructions got $externalInterruptLeafInstructions")
     }
 
     $pcProfile = Get-Value $summary "pcProfile" $null
@@ -631,6 +638,7 @@ foreach ($target in $selectedTargets) {
         maxDisplayNonblack = $maxDisplayNonblack
         prsDecompressInstructions = $prsDecompressInstructions
         resourceLookupInstructions = $resourceLookupInstructions
+        externalInterruptLeafInstructions = $externalInterruptLeafInstructions
         topPc = $topPc
         topPcCount = $topPcCount
         renderedQuads = $renderedQuads
