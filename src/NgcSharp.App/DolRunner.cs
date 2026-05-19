@@ -511,6 +511,9 @@ public sealed class DolRunner
                     pcProfile = options.PcProfileTop is int pcProfileTop && pcProfile is not null
                         ? BuildPcProfileSummary(pcProfile, pcProfileTop, executed)
                         : null,
+                    pcProfileWithoutExternalInterruptLeaves = options.PcProfileTop is int filteredPcProfileTop && pcProfile is not null
+                        ? BuildPcProfileWithoutExternalInterruptLeavesSummary(pcProfile, filteredPcProfileTop, executed, bus)
+                        : null,
                     indirectCallSiteProfile = options.IndirectCallSiteProfileAddress is uint profiledCallSiteSummary
                         && options.IndirectCallSiteProfileTop is int indirectCallSiteProfileTopSummary
                         && indirectCallSiteProfile is not null
@@ -5521,6 +5524,65 @@ public sealed class DolRunner
                 })
                 .ToArray(),
         };
+    }
+
+    private static object BuildPcProfileWithoutExternalInterruptLeavesSummary(IReadOnlyDictionary<uint, ulong> profile, int topCount, int executedInstructions, GameCubeBus bus)
+    {
+        List<KeyValuePair<uint, ulong>> included = [];
+        ulong totalSamples = 0;
+        ulong excludedSamples = 0;
+
+        foreach (KeyValuePair<uint, ulong> entry in profile)
+        {
+            if (IsExternalInterruptLeafHelperEntry(bus, entry.Key))
+            {
+                excludedSamples += entry.Value;
+                continue;
+            }
+
+            included.Add(entry);
+            totalSamples += entry.Value;
+        }
+
+        return new
+        {
+            uniqueAddresses = included.Count,
+            totalSamples,
+            excludedSamples,
+            entries = included
+                .OrderByDescending(entry => entry.Value)
+                .ThenBy(entry => entry.Key)
+                .Take(topCount)
+                .Select(entry => new
+                {
+                    pc = $"0x{entry.Key:X8}",
+                    count = entry.Value,
+                    percent = executedInstructions == 0 ? 0 : Math.Round((double)entry.Value * 100 / executedInstructions, 3),
+                })
+                .ToArray(),
+        };
+    }
+
+    private static bool IsExternalInterruptLeafHelperEntry(GameCubeBus bus, uint pc)
+    {
+        uint first = bus.Read32(pc);
+        if (first == 0x7C60_00A6)
+        {
+            return bus.Read32(pc + 4) is 0x5464_045E or 0x6064_8000
+                && bus.Read32(pc + 8) == 0x7C80_0124
+                && bus.Read32(pc + 12) == 0x5463_8FFE
+                && bus.Read32(pc + 16) == 0x4E80_0020;
+        }
+
+        return first == 0x2C03_0000
+            && bus.Read32(pc + 4) == 0x7C80_00A6
+            && bus.Read32(pc + 8) == 0x4182_000C
+            && bus.Read32(pc + 12) == 0x6085_8000
+            && bus.Read32(pc + 16) == 0x4800_0008
+            && bus.Read32(pc + 20) == 0x5485_045E
+            && bus.Read32(pc + 24) == 0x7CA0_0124
+            && bus.Read32(pc + 28) == 0x5484_8FFE
+            && bus.Read32(pc + 32) == 0x4E80_0020;
     }
 
     private static object BuildIndirectCallSiteProfileSummary(uint callSite, IReadOnlyDictionary<uint, ulong> profile, int topCount)

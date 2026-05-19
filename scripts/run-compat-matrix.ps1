@@ -345,6 +345,8 @@ foreach ($target in $selectedTargets) {
             externalInterruptLeafInstructions = ""
             topPc = ""
             topPcCount = ""
+            nonExternalInterruptTopPc = ""
+            nonExternalInterruptTopPcCount = ""
             frameSource = ""
             frameSourceAddress = ""
             frameSourceCopyIndex = ""
@@ -551,6 +553,12 @@ foreach ($target in $selectedTargets) {
     $topPc = Get-Value $topPcEntry "pc" ""
     $topPcCount = Get-Value $topPcEntry "count" ""
 
+    $filteredPcProfile = Get-Value $summary "pcProfileWithoutExternalInterruptLeaves" $null
+    $filteredPcProfileEntries = @((Get-Value $filteredPcProfile "entries" @()))
+    $filteredTopPcEntry = if ($filteredPcProfileEntries.Count -gt 0) { $filteredPcProfileEntries[0] } else { $null }
+    $nonExternalInterruptTopPc = Get-Value $filteredTopPcEntry "pc" ""
+    $nonExternalInterruptTopPcCount = Get-Value $filteredTopPcEntry "count" ""
+
     $expectedTopPc = Get-Value $expected "topPc" $null
     if ($status -eq "ok" -and $null -ne $expectedTopPc -and "$expectedTopPc" -ne "$topPc") {
         $regressions.Add("topPc expected $expectedTopPc got $topPc")
@@ -559,6 +567,16 @@ foreach ($target in $selectedTargets) {
     $expectedMinTopPcCount = Get-Value $expected "minTopPcCount" $null
     if ($status -eq "ok" -and $null -ne $expectedMinTopPcCount -and [long]$topPcCount -lt [long]$expectedMinTopPcCount) {
         $regressions.Add("topPcCount expected >= $expectedMinTopPcCount got $topPcCount")
+    }
+
+    $expectedNonExternalInterruptTopPc = Get-Value $expected "nonExternalInterruptTopPc" $null
+    if ($status -eq "ok" -and $null -ne $expectedNonExternalInterruptTopPc -and "$expectedNonExternalInterruptTopPc" -ne "$nonExternalInterruptTopPc") {
+        $regressions.Add("nonExternalInterruptTopPc expected $expectedNonExternalInterruptTopPc got $nonExternalInterruptTopPc")
+    }
+
+    $expectedMinNonExternalInterruptTopPcCount = Get-Value $expected "minNonExternalInterruptTopPcCount" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinNonExternalInterruptTopPcCount -and [long]$nonExternalInterruptTopPcCount -lt [long]$expectedMinNonExternalInterruptTopPcCount) {
+        $regressions.Add("nonExternalInterruptTopPcCount expected >= $expectedMinNonExternalInterruptTopPcCount got $nonExternalInterruptTopPcCount")
     }
 
     $displayCopies = Get-Value $gxCopySummary "displayCopies" ""
@@ -641,6 +659,8 @@ foreach ($target in $selectedTargets) {
         externalInterruptLeafInstructions = $externalInterruptLeafInstructions
         topPc = $topPc
         topPcCount = $topPcCount
+        nonExternalInterruptTopPc = $nonExternalInterruptTopPc
+        nonExternalInterruptTopPcCount = $nonExternalInterruptTopPcCount
         renderedQuads = $renderedQuads
         renderedTriangles = $renderedTriangles
         frameSource = $frameSource

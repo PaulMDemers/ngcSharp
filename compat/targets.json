@@ -340,6 +340,8 @@
         "pc": "0x81230FF8",
         "topPc": "0x800E78AC",
         "minTopPcCount": 80000,
+        "nonExternalInterruptTopPc": "0x800F1438",
+        "minNonExternalInterruptTopPcCount": 50000,
         "minPrsDecompressInstructions": 86000000,
         "minResourceLookupInstructions": 600000,
         "minExternalInterruptLeafInstructions": 1180000
