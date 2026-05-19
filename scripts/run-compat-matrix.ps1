@@ -347,6 +347,9 @@ foreach ($target in $selectedTargets) {
             topPcCount = ""
             nonExternalInterruptTopPc = ""
             nonExternalInterruptTopPcCount = ""
+            branchSite = ""
+            branchSiteTopTarget = ""
+            branchSiteTopTargetCount = ""
             frameSource = ""
             frameSourceAddress = ""
             frameSourceCopyIndex = ""
@@ -579,6 +582,29 @@ foreach ($target in $selectedTargets) {
         $regressions.Add("nonExternalInterruptTopPcCount expected >= $expectedMinNonExternalInterruptTopPcCount got $nonExternalInterruptTopPcCount")
     }
 
+    $branchSiteProfiles = @((Get-Value $summary "branchSiteProfiles" @()))
+    $firstBranchSiteProfile = if ($branchSiteProfiles.Count -gt 0) { $branchSiteProfiles[0] } else { $null }
+    $firstBranchSiteEntries = @((Get-Value $firstBranchSiteProfile "entries" @()))
+    $firstBranchSiteTopEntry = if ($firstBranchSiteEntries.Count -gt 0) { $firstBranchSiteEntries[0] } else { $null }
+    $branchSite = Get-Value $firstBranchSiteProfile "branchSite" ""
+    $branchSiteTopTarget = Get-Value $firstBranchSiteTopEntry "target" ""
+    $branchSiteTopTargetCount = Get-Value $firstBranchSiteTopEntry "count" ""
+
+    $expectedBranchSite = Get-Value $expected "branchSite" $null
+    if ($status -eq "ok" -and $null -ne $expectedBranchSite -and "$expectedBranchSite" -ne "$branchSite") {
+        $regressions.Add("branchSite expected $expectedBranchSite got $branchSite")
+    }
+
+    $expectedBranchSiteTopTarget = Get-Value $expected "branchSiteTopTarget" $null
+    if ($status -eq "ok" -and $null -ne $expectedBranchSiteTopTarget -and "$expectedBranchSiteTopTarget" -ne "$branchSiteTopTarget") {
+        $regressions.Add("branchSiteTopTarget expected $expectedBranchSiteTopTarget got $branchSiteTopTarget")
+    }
+
+    $expectedMinBranchSiteTopTargetCount = Get-Value $expected "minBranchSiteTopTargetCount" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinBranchSiteTopTargetCount -and [long]$branchSiteTopTargetCount -lt [long]$expectedMinBranchSiteTopTargetCount) {
+        $regressions.Add("branchSiteTopTargetCount expected >= $expectedMinBranchSiteTopTargetCount got $branchSiteTopTargetCount")
+    }
+
     $displayCopies = Get-Value $gxCopySummary "displayCopies" ""
     $textureCopies = Get-Value $gxCopySummary "textureCopies" ""
     $nonblackDisplayCopies = Get-Value $gxCopySummary "nonblackDisplayCopies" ""
@@ -661,6 +687,9 @@ foreach ($target in $selectedTargets) {
         topPcCount = $topPcCount
         nonExternalInterruptTopPc = $nonExternalInterruptTopPc
         nonExternalInterruptTopPcCount = $nonExternalInterruptTopPcCount
+        branchSite = $branchSite
+        branchSiteTopTarget = $branchSiteTopTarget
+        branchSiteTopTargetCount = $branchSiteTopTargetCount
         renderedQuads = $renderedQuads
         renderedTriangles = $renderedTriangles
         frameSource = $frameSource

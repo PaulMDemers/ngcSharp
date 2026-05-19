@@ -106,6 +106,7 @@ public sealed class DolRunner
         Dictionary<uint, ulong>? pcProfile = options.PcProfileTop is not null || options.StopOnHotPc is not null ? [] : null;
         Dictionary<uint, ulong>? hotPcProfile = options.StopOnHotPc is not null ? [] : null;
         Dictionary<uint, ulong>? indirectCallSiteProfile = options.IndirectCallSiteProfileAddress is not null ? [] : null;
+        Dictionary<uint, Dictionary<uint, ulong>>? branchSiteProfiles = BuildBranchSiteProfileDictionaries(options);
         bool stoppedOnPc = false;
         uint? stoppedOnHotPc = null;
         ulong stoppedOnHotPcCount = 0;
@@ -519,6 +520,9 @@ public sealed class DolRunner
                         && indirectCallSiteProfile is not null
                             ? BuildIndirectCallSiteProfileSummary(profiledCallSiteSummary, indirectCallSiteProfile, indirectCallSiteProfileTopSummary)
                             : null,
+                    branchSiteProfiles = branchSiteProfiles is not null
+                        ? BuildBranchSiteProfilesSummary(options.BranchSiteProfiles, branchSiteProfiles)
+                        : null,
                     gx = new
                     {
                         fifoBytesWritten = gxFifoBytesWritten,
@@ -666,6 +670,14 @@ public sealed class DolRunner
 
                 currentPc = pc;
                 currentInstruction = bus.Read32(pc);
+                if (branchSiteProfiles is not null
+                    && branchSiteProfiles.TryGetValue(pc, out Dictionary<uint, ulong>? branchSiteProfile)
+                    && TryGetBranchSiteTarget(currentInstruction, pc, state, out uint branchSiteTarget))
+                {
+                    branchSiteProfile.TryGetValue(branchSiteTarget, out ulong branchSiteTargetCount);
+                    branchSiteProfile[branchSiteTarget] = branchSiteTargetCount + 1;
+                }
+
                 if (tracedPcSet?.Contains(pc) == true && executed >= options.TracePcAfter.GetValueOrDefault())
                 {
                     if (options.WatchLimit is null || emittedPcTraceChanges < options.WatchLimit)
@@ -1540,6 +1552,17 @@ public sealed class DolRunner
             Stopwatch indirectCallProfileStopwatch = Stopwatch.StartNew();
             WriteIndirectCallSiteProfile(_output, profiledCallSite, indirectCallSiteProfile, indirectCallSiteProfileTop);
             indirectCallProfileMilliseconds += StopAndGetMilliseconds(indirectCallProfileStopwatch);
+        }
+
+        if (branchSiteProfiles is not null)
+        {
+            foreach (BranchSiteProfileRequest request in options.BranchSiteProfiles ?? [])
+            {
+                if (branchSiteProfiles.TryGetValue(request.Address, out Dictionary<uint, ulong>? profile))
+                {
+                    WriteBranchSiteProfile(_output, request.Address, profile, request.TopCount);
+                }
+            }
         }
 
         Stopwatch finalMemoryDumpStopwatch = Stopwatch.StartNew();
@@ -5241,6 +5264,19 @@ public sealed class DolRunner
     private static uint[] BuildWatchCallTargets(RunDolOptions options) =>
         options.WatchCallTargets is { Count: > 0 } ? options.WatchCallTargets.Distinct().ToArray() : [];
 
+    private static Dictionary<uint, Dictionary<uint, ulong>>? BuildBranchSiteProfileDictionaries(RunDolOptions options)
+    {
+        if (options.BranchSiteProfiles is not { Count: > 0 } requests)
+        {
+            return null;
+        }
+
+        return requests
+            .Select(request => request.Address)
+            .Distinct()
+            .ToDictionary(static address => address, static _ => new Dictionary<uint, ulong>());
+    }
+
     private static GxMemoryCheckpointState[] BuildGxMemoryCheckpointStates(RunDolOptions options) =>
         options.GxMemoryCheckpoints is { Count: > 0 }
             ? options.GxMemoryCheckpoints.Select(request => new GxMemoryCheckpointState(request)).ToArray()
@@ -5470,6 +5506,66 @@ public sealed class DolRunner
         return true;
     }
 
+    private static bool TryGetBranchSiteTarget(uint instruction, uint pc, PowerPcState state, out uint target)
+    {
+        target = 0;
+        int opcode = (int)(instruction >> 26);
+        switch (opcode)
+        {
+            case 18:
+                target = DecodeBranchTarget(instruction, pc);
+                return true;
+            case 16:
+                target = WouldBranch(state, (int)((instruction >> 21) & 0x1F), (int)((instruction >> 16) & 0x1F))
+                    ? DecodeConditionalBranchTarget(instruction, pc)
+                    : pc + sizeof(uint);
+                return true;
+            case 19:
+                return TryGetConditionalBranchToRegisterTarget(instruction, pc, state, out target);
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryGetConditionalBranchToRegisterTarget(uint instruction, uint pc, PowerPcState state, out uint target)
+    {
+        target = 0;
+        int extendedOpcode = (int)((instruction >> 1) & 0x3FF);
+        uint registerTarget = extendedOpcode switch
+        {
+            16 => state.Lr & 0xFFFF_FFFC,
+            528 => state.Ctr & 0xFFFF_FFFC,
+            _ => 0,
+        };
+
+        if (registerTarget == 0 && extendedOpcode is not 16 and not 528)
+        {
+            return false;
+        }
+
+        target = WouldBranch(state, (int)((instruction >> 21) & 0x1F), (int)((instruction >> 16) & 0x1F))
+            ? registerTarget
+            : pc + sizeof(uint);
+        return true;
+    }
+
+    private static uint DecodeBranchTarget(uint instruction, uint pc)
+    {
+        uint offset = instruction & 0x03FF_FFFC;
+        if ((offset & 0x0200_0000) != 0)
+        {
+            offset |= 0xFC00_0000;
+        }
+
+        return (instruction & 0x2) != 0 ? offset : unchecked(pc + offset);
+    }
+
+    private static uint DecodeConditionalBranchTarget(uint instruction, uint pc)
+    {
+        uint offset = unchecked((uint)(short)(instruction & 0xFFFC));
+        return (instruction & 0x2) != 0 ? offset : unchecked(pc + offset);
+    }
+
     private static bool WouldBranch(PowerPcState state, int bo, int bi)
     {
         bool ctrOk = true;
@@ -5499,6 +5595,17 @@ public sealed class DolRunner
         }
 
         output.WriteLine($"Indirect call-site profile 0x{callSite:X8}: {profile.Count} unique target(s), {total} call(s)");
+        foreach (KeyValuePair<uint, ulong> entry in profile.OrderByDescending(entry => entry.Value).ThenBy(entry => entry.Key).Take(topCount))
+        {
+            double percent = total == 0 ? 0 : (double)entry.Value * 100 / total;
+            output.WriteLine($"0x{entry.Key:X8}  {entry.Value,10}  {percent,6:F2}%");
+        }
+    }
+
+    private static void WriteBranchSiteProfile(TextWriter output, uint branchSite, IReadOnlyDictionary<uint, ulong> profile, int topCount)
+    {
+        ulong total = profile.Values.Aggregate(0UL, static (sum, count) => sum + count);
+        output.WriteLine($"Branch-site profile 0x{branchSite:X8}: {profile.Count} unique target(s), {total} branch(es)");
         foreach (KeyValuePair<uint, ulong> entry in profile.OrderByDescending(entry => entry.Value).ThenBy(entry => entry.Key).Take(topCount))
         {
             double percent = total == 0 ? 0 : (double)entry.Value * 100 / total;
@@ -5605,6 +5712,41 @@ public sealed class DolRunner
                 })
                 .ToArray(),
         };
+    }
+
+    private static object[] BuildBranchSiteProfilesSummary(IReadOnlyList<BranchSiteProfileRequest>? requests, IReadOnlyDictionary<uint, Dictionary<uint, ulong>> profiles)
+    {
+        if (requests is not { Count: > 0 })
+        {
+            return [];
+        }
+
+        return requests
+            .GroupBy(static request => request.Address)
+            .Select(group =>
+            {
+                BranchSiteProfileRequest request = group.First();
+                Dictionary<uint, ulong> profile = profiles[request.Address];
+                ulong totalBranches = profile.Values.Aggregate(0UL, static (total, count) => total + count);
+                return new
+                {
+                    branchSite = $"0x{request.Address:X8}",
+                    uniqueTargets = profile.Count,
+                    totalBranches,
+                    entries = profile
+                        .OrderByDescending(entry => entry.Value)
+                        .ThenBy(entry => entry.Key)
+                        .Take(group.Max(static request => request.TopCount))
+                        .Select(entry => new
+                        {
+                            target = $"0x{entry.Key:X8}",
+                            count = entry.Value,
+                            percent = totalBranches == 0 ? 0 : Math.Round((double)entry.Value * 100 / totalBranches, 3),
+                        })
+                        .ToArray(),
+                };
+            })
+            .ToArray();
     }
 
     private static string FormatGxFrameSource(GxFrameDumpSource source) =>

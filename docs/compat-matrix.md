@@ -21,7 +21,7 @@ Each target records:
 - `tags`: subsystem coverage such as `cpu`, `vi`, `xfb`, `gx`, `tev`, `exi-card`, `si`, `di`, or `dsp`.
 - `maxInstructions` and `timeoutSeconds`: bounded run controls.
 - Optional `gxFrame`, `xfbFrame`, `trace`, and `extraArgs` sections.
-- Optional `expected` milestones such as `stopReason`, final `pc`, `topPc`, `minTopPcCount`, `nonExternalInterruptTopPc`, `minNonExternalInterruptTopPcCount`, `minPrsDecompressInstructions`, `minResourceLookupInstructions`, `minExternalInterruptLeafInstructions`, `minGxFifoBytes`, `minRenderedQuads`, `minRenderedTriangles`, `frameSource`, `frameSourceAddress`, `frameSourceCopyIndex`, `minDisplayCopies`, `minTextureCopies`, `minNonblackDisplayCopies`, `minMaxDisplayNonblack`, or `frameSha256`.
+- Optional `expected` milestones such as `stopReason`, final `pc`, `topPc`, `minTopPcCount`, `nonExternalInterruptTopPc`, `minNonExternalInterruptTopPcCount`, `branchSite`, `branchSiteTopTarget`, `minBranchSiteTopTargetCount`, `minPrsDecompressInstructions`, `minResourceLookupInstructions`, `minExternalInterruptLeafInstructions`, `minGxFifoBytes`, `minRenderedQuads`, `minRenderedTriangles`, `frameSource`, `frameSourceAddress`, `frameSourceCopyIndex`, `minDisplayCopies`, `minTextureCopies`, `minNonblackDisplayCopies`, `minMaxDisplayNonblack`, or `frameSha256`.
 
 ## Inventory Local Binaries
 
@@ -72,7 +72,7 @@ Each run writes:
 - `summary.json`: full machine-readable run detail.
 - Per-target `stdout.txt`, `stderr.txt`, and `run-summary.json`.
 - Optional PNGs, traces, `gx-copies.csv`, and `gx-copies.summary.json` when requested by the target manifest.
-- Profile targets surface structured `topPc`, `topPcCount`, filtered non-external-interrupt top PCs, PRS decompression, resource-lookup, and external-interrupt leaf counters in `summary.csv`.
+- Profile targets surface structured `topPc`, `topPcCount`, filtered non-external-interrupt top PCs, branch-site top targets, PRS decompression, resource-lookup, and external-interrupt leaf counters in `summary.csv`.
 
 ## Interpreting Status
 

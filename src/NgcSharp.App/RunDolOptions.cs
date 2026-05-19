@@ -51,6 +51,7 @@ public sealed record RunDolOptions(
     int? PcProfileTop = null,
     uint? IndirectCallSiteProfileAddress = null,
     int? IndirectCallSiteProfileTop = null,
+    IReadOnlyList<BranchSiteProfileRequest>? BranchSiteProfiles = null,
     uint? StopOnPc = null,
     int? StopOnPcAfter = null,
     IReadOnlyList<uint>? TracePcAddresses = null,
@@ -143,6 +144,7 @@ public sealed record RunDolOptions(
         int? pcProfileTop = null;
         uint? indirectCallSiteProfileAddress = null;
         int? indirectCallSiteProfileTop = null;
+        List<BranchSiteProfileRequest> branchSiteProfiles = [];
         uint? stopOnPc = null;
         int? stopOnPcAfter = null;
         List<uint> tracePcAddresses = [];
@@ -535,6 +537,15 @@ public sealed record RunDolOptions(
                     indirectCallSiteProfileAddress = parsedIndirectCallSite;
                     indirectCallSiteProfileTop = parsedIndirectCallSiteTop;
                     break;
+                case "--profile-branch-site":
+                    if (index + 2 >= args.Length || !TryParseUInt32(args[++index], out uint parsedBranchSite) || !TryParsePositiveInt32(args[++index], out int parsedBranchSiteTop))
+                    {
+                        error.WriteLine("--profile-branch-site requires a branch-site address and positive top count.");
+                        return false;
+                    }
+
+                    branchSiteProfiles.Add(new BranchSiteProfileRequest(parsedBranchSite, parsedBranchSiteTop));
+                    break;
                 case "--stop-on-pc":
                     if (index + 1 >= args.Length || !TryParseUInt32(args[++index], out uint parsedStopOnPc))
                     {
@@ -796,7 +807,7 @@ public sealed record RunDolOptions(
             return false;
         }
 
-        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, pcProfileTop, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath);
+        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, pcProfileTop, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, branchSiteProfiles, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath);
         return true;
     }
 
