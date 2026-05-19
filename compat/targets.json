@@ -134,6 +134,7 @@
         "stopReason": "max-instructions",
         "pc": "0x80004BDC",
         "minGxFifoBytes": 1,
+        "minRenderedQuads": 22,
         "frameSha256": "dde7891c8fdef100c06f1e92597ff7a4f4fbad522cea0195ed134e167b9262a2"
       }
     },
@@ -156,6 +157,7 @@
         "stopReason": "max-instructions",
         "pc": "0x80003A1C",
         "minGxFifoBytes": 1,
+        "minRenderedQuads": 160,
         "frameSha256": "2aa475040888a37f1fad680e624c2c8db7c50b40ff3ed6b5c9a61330109d6cfc"
       }
     },

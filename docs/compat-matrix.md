@@ -21,7 +21,7 @@ Each target records:
 - `tags`: subsystem coverage such as `cpu`, `vi`, `xfb`, `gx`, `tev`, `exi-card`, `si`, `di`, or `dsp`.
 - `maxInstructions` and `timeoutSeconds`: bounded run controls.
 - Optional `gxFrame`, `xfbFrame`, `trace`, and `extraArgs` sections.
-- Optional `expected` milestones such as `stopReason`, final `pc`, `minGxFifoBytes`, `minRenderedTriangles`, or `frameSha256`.
+- Optional `expected` milestones such as `stopReason`, final `pc`, `minGxFifoBytes`, `minRenderedQuads`, `minRenderedTriangles`, or `frameSha256`.
 
 ## Inventory Local Binaries
 

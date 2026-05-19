@@ -475,7 +475,13 @@ foreach ($target in $selectedTargets) {
     }
 
     $frameDump = Get-Value $gx "frameDump" $null
+    $renderedQuads = Get-Value $frameDump "renderedQuads" ""
     $renderedTriangles = Get-Value $frameDump "renderedTriangles" ""
+    $expectedMinRenderedQuads = Get-Value $expected "minRenderedQuads" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinRenderedQuads -and [long]$renderedQuads -lt [long]$expectedMinRenderedQuads) {
+        $regressions.Add("renderedQuads expected >= $expectedMinRenderedQuads got $renderedQuads")
+    }
+
     $expectedMinRenderedTriangles = Get-Value $expected "minRenderedTriangles" $null
     if ($status -eq "ok" -and $null -ne $expectedMinRenderedTriangles -and [long]$renderedTriangles -lt [long]$expectedMinRenderedTriangles) {
         $regressions.Add("renderedTriangles expected >= $expectedMinRenderedTriangles got $renderedTriangles")
@@ -510,6 +516,7 @@ foreach ($target in $selectedTargets) {
         pc = $pc
         executedInstructions = Get-Value $summary "executedInstructions" ""
         gxFifoBytes = $gxFifoBytes
+        renderedQuads = $renderedQuads
         renderedTriangles = $renderedTriangles
         frameSha256 = if ($null -ne $frameSummary) { $frameSummary.sha256 } else { "" }
         regressions = $regressions -join "; "
