@@ -141,6 +141,7 @@ public sealed class DolRunner
         ulong byteTableLookupFastForwardInstructions = 0;
         ulong gxVertexEmitFastForwardInstructions = 0;
         ulong normalizedStringScanFastForwardInstructions = 0;
+        ulong sonicResourceModeQueryFastForwardInstructions = 0;
         uint currentPc = state.Pc;
         uint currentInstruction = 0;
         Action<uint, uint>? previousWriteObserver = bus.MainRamWrite32Observer;
@@ -621,6 +622,7 @@ public sealed class DolRunner
                         byteTableLookupInstructions = byteTableLookupFastForwardInstructions,
                         gxVertexEmitInstructions = gxVertexEmitFastForwardInstructions,
                         normalizedStringScanInstructions = normalizedStringScanFastForwardInstructions,
+                        sonicResourceModeQueryInstructions = sonicResourceModeQueryFastForwardInstructions,
                     },
                 };
 
@@ -950,6 +952,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicNormalizedStringScan(state, bus, out skippedInstructions))
                 {
                     normalizedStringScanFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicResourceModeQuery(state, bus, out skippedInstructions))
+                {
+                    sonicResourceModeQueryFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1324,6 +1333,11 @@ public sealed class DolRunner
             if (normalizedStringScanFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {normalizedStringScanFastForwardInstructions} normalized string scan instruction(s).");
+            }
+
+            if (sonicResourceModeQueryFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {sonicResourceModeQueryFastForwardInstructions} Sonic resource mode query instruction(s).");
             }
 
             if (gxMemoryCheckpoints.Length != 0)
@@ -4808,6 +4822,102 @@ public sealed class DolRunner
         uint skipped = checked(iterations * 32);
         AdvanceFastForwardedInstructions(state, bus, skipped);
         skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+    private static bool TryFastForwardSonicResourceModeQuery(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        if (bus.Read32(pc) != 0x7C08_02A6
+            || bus.Read32(pc + 0x04) != 0x9001_0004
+            || bus.Read32(pc + 0x08) != 0x9421_FFE8
+            || bus.Read32(pc + 0x0C) != 0x93E1_0014
+            || bus.Read32(pc + 0x10) != 0x93C1_0010
+            || bus.Read32(pc + 0x14) != 0x4BFF_64F1
+            || bus.Read32(pc + 0x18) != 0x800D_8AC0
+            || bus.Read32(pc + 0x20) != 0x2C00_0000
+            || bus.Read32(pc + 0x24) != 0x4182_000C
+            || bus.Read32(pc + 0x30) != 0x800D_8AB8
+            || bus.Read32(pc + 0x38) != 0x4182_000C
+            || bus.Read32(pc + 0x44) != 0x83ED_8AA8
+            || bus.Read32(pc + 0x48) != 0x281F_0000
+            || bus.Read32(pc + 0x4C) != 0x4082_000C
+            || bus.Read32(pc + 0x70) != 0x4BFF_6495
+            || bus.Read32(pc + 0x84) != 0x4BFF_64A9
+            || bus.Read32(pc + 0x88) != 0x7FC3_F378
+            || bus.Read32(pc + 0x8C) != 0x4BFF_64A1
+            || bus.Read32(pc + 0x90) != 0x8001_001C
+            || bus.Read32(pc + 0x94) != 0x7FE3_FB78
+            || bus.Read32(pc + 0x98) != 0x83E1_0014
+            || bus.Read32(pc + 0x9C) != 0x83C1_0010
+            || bus.Read32(pc + 0xA0) != 0x7C08_03A6
+            || bus.Read32(pc + 0xA4) != 0x3821_0018
+            || bus.Read32(pc + 0xA8) != 0x4E80_0020)
+        {
+            return false;
+        }
+
+        uint globalBase = state.Gpr[13];
+        uint firstFlagAddress = unchecked(globalBase - 30016u);
+        uint secondFlagAddress = unchecked(globalBase - 30024u);
+        uint modePointerAddress = unchecked(globalBase - 30040u);
+        if (!bus.Memory.IsMainRamAddress(firstFlagAddress, sizeof(uint))
+            || !bus.Memory.IsMainRamAddress(secondFlagAddress, sizeof(uint))
+            || !bus.Memory.IsMainRamAddress(modePointerAddress, sizeof(uint)))
+        {
+            return false;
+        }
+
+        uint result;
+        uint skipped;
+        if (bus.Memory.Read32(firstFlagAddress) != 0)
+        {
+            result = 0xFFFF_FFFF;
+            skipped = 27;
+        }
+        else if (bus.Memory.Read32(secondFlagAddress) != 0)
+        {
+            result = 8;
+            skipped = 31;
+        }
+        else
+        {
+            uint modePointer = bus.Memory.Read32(modePointerAddress);
+            if (modePointer == 0 || modePointer == 0x802B_B700)
+            {
+                result = 0;
+                skipped = 41;
+            }
+            else
+            {
+                if (!bus.Memory.IsMainRamAddress(modePointer + 0x0C, sizeof(uint)))
+                {
+                    return false;
+                }
+
+                uint rawMode = bus.Memory.Read32(modePointer + 0x0C);
+                result = rawMode == 3 ? 1u : rawMode;
+                skipped = 55;
+            }
+        }
+
+        if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: skipped, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        uint oldMsr = state.Msr;
+        uint oldInterruptEnable = (oldMsr >> 15) & 1;
+        state.Gpr[0] = state.Lr;
+        state.Gpr[3] = result;
+        state.Gpr[4] = 0;
+        state.Gpr[5] = oldMsr;
+        state.Msr = oldMsr;
+        SetCr0ForSignedCompareImmediate(state, oldInterruptEnable, 0);
+        state.Pc = state.Lr;
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = (int)skipped;
         return true;
     }
 

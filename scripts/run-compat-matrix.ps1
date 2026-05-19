@@ -343,6 +343,7 @@ foreach ($target in $selectedTargets) {
             prsDecompressInstructions = ""
             resourceLookupInstructions = ""
             externalInterruptLeafInstructions = ""
+            sonicResourceModeQueryInstructions = ""
             topPc = ""
             topPcCount = ""
             nonExternalInterruptTopPc = ""
@@ -350,6 +351,7 @@ foreach ($target in $selectedTargets) {
             branchSite = ""
             branchSiteTopTarget = ""
             branchSiteTopTargetCount = ""
+            branchSiteTargets = ""
             frameSource = ""
             frameSourceAddress = ""
             frameSourceCopyIndex = ""
@@ -534,6 +536,7 @@ foreach ($target in $selectedTargets) {
     $prsDecompressInstructions = Get-Value $fastForward "prsDecompressInstructions" ""
     $resourceLookupInstructions = Get-Value $fastForward "resourceLookupInstructions" ""
     $externalInterruptLeafInstructions = Get-Value $fastForward "externalInterruptLeafInstructions" ""
+    $sonicResourceModeQueryInstructions = Get-Value $fastForward "sonicResourceModeQueryInstructions" ""
 
     $expectedMinPrsDecompressInstructions = Get-Value $expected "minPrsDecompressInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinPrsDecompressInstructions -and [long]$prsDecompressInstructions -lt [long]$expectedMinPrsDecompressInstructions) {
@@ -548,6 +551,11 @@ foreach ($target in $selectedTargets) {
     $expectedMinExternalInterruptLeafInstructions = Get-Value $expected "minExternalInterruptLeafInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinExternalInterruptLeafInstructions -and [long]$externalInterruptLeafInstructions -lt [long]$expectedMinExternalInterruptLeafInstructions) {
         $regressions.Add("externalInterruptLeafInstructions expected >= $expectedMinExternalInterruptLeafInstructions got $externalInterruptLeafInstructions")
+    }
+
+    $expectedMinSonicResourceModeQueryInstructions = Get-Value $expected "minSonicResourceModeQueryInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinSonicResourceModeQueryInstructions -and [long]$sonicResourceModeQueryInstructions -lt [long]$expectedMinSonicResourceModeQueryInstructions) {
+        $regressions.Add("sonicResourceModeQueryInstructions expected >= $expectedMinSonicResourceModeQueryInstructions got $sonicResourceModeQueryInstructions")
     }
 
     $pcProfile = Get-Value $summary "pcProfile" $null
@@ -589,6 +597,20 @@ foreach ($target in $selectedTargets) {
     $branchSite = Get-Value $firstBranchSiteProfile "branchSite" ""
     $branchSiteTopTarget = Get-Value $firstBranchSiteTopEntry "target" ""
     $branchSiteTopTargetCount = Get-Value $firstBranchSiteTopEntry "count" ""
+    $branchSiteTargets = ($branchSiteProfiles | ForEach-Object {
+            $site = Get-Value $_ "branchSite" ""
+            $entries = @((Get-Value $_ "entries" @()))
+            if ([string]::IsNullOrWhiteSpace($site) -or $entries.Count -eq 0) {
+                return
+            }
+
+            $entry = $entries[0]
+            $target = Get-Value $entry "target" ""
+            $count = Get-Value $entry "count" ""
+            if (-not [string]::IsNullOrWhiteSpace($target)) {
+                "${site}->${target}:${count}"
+            }
+        }) -join "; "
 
     $expectedBranchSite = Get-Value $expected "branchSite" $null
     if ($status -eq "ok" -and $null -ne $expectedBranchSite -and "$expectedBranchSite" -ne "$branchSite") {
@@ -683,6 +705,7 @@ foreach ($target in $selectedTargets) {
         prsDecompressInstructions = $prsDecompressInstructions
         resourceLookupInstructions = $resourceLookupInstructions
         externalInterruptLeafInstructions = $externalInterruptLeafInstructions
+        sonicResourceModeQueryInstructions = $sonicResourceModeQueryInstructions
         topPc = $topPc
         topPcCount = $topPcCount
         nonExternalInterruptTopPc = $nonExternalInterruptTopPc
@@ -690,6 +713,7 @@ foreach ($target in $selectedTargets) {
         branchSite = $branchSite
         branchSiteTopTarget = $branchSiteTopTarget
         branchSiteTopTargetCount = $branchSiteTopTargetCount
+        branchSiteTargets = $branchSiteTargets
         renderedQuads = $renderedQuads
         renderedTriangles = $renderedTriangles
         frameSource = $frameSource
