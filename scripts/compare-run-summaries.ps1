@@ -211,6 +211,7 @@ Add-Change $rows "di" "command0" (Get-Value $beforeDi "command0") (Get-Value $af
 Add-Change $rows "di" "dmaAddress" (Get-Value $beforeDi "dmaAddress") (Get-Value $afterDi "dmaAddress")
 Add-Change $rows "di" "dmaLength" (Get-Value $beforeDi "dmaLength") (Get-Value $afterDi "dmaLength")
 Add-Change $rows "di" "commandLatencyCycles" (Get-Value $beforeDi "commandLatencyCycles") (Get-Value $afterDi "commandLatencyCycles")
+Add-Change $rows "di" "commandLatencyOverrideCycles" (Get-Value $beforeDi "commandLatencyOverrideCycles") (Get-Value $afterDi "commandLatencyOverrideCycles")
 Add-Change $rows "di" "hasPendingCommand" (Get-Value $beforeDi "hasPendingCommand") (Get-Value $afterDi "hasPendingCommand")
 Add-Change $rows "di" "pendingCommandCycles" (Get-Value $beforeDi "pendingCommandCycles") (Get-Value $afterDi "pendingCommandCycles")
 Add-Change $rows "di" "commandHistory" (Format-DiCommandHistory (Get-Value $beforeDi "commandHistory" @())) (Format-DiCommandHistory (Get-Value $afterDi "commandHistory" @()))

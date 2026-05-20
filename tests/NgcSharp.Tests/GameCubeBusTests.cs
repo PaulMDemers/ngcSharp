@@ -1145,6 +1145,43 @@ public sealed class GameCubeBusTests
     }
 
     [Fact]
+    public void DiscInterfaceDefaultLatencyScalesWithTransferLength()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.iso");
+        try
+        {
+            byte[] image = new byte[0x90000];
+            File.WriteAllBytes(path, image);
+
+            using DiscImageReader disc = DiscImageReader.Open(path);
+            GameCubeBus bus = new(disc);
+            bus.Write32(0xCC00_6008, 0xA800_0000);
+            bus.Write32(0xCC00_600C, 0);
+            bus.Write32(0xCC00_6010, 0x80000);
+            bus.Write32(0xCC00_6014, 0x8000_2000);
+            bus.Write32(0xCC00_6018, 0x80000);
+
+            bus.Write32(0xCC00_601C, 1);
+            bus.Advance(0x7FFF);
+
+            DiscInterfaceDebugSnapshot pending = bus.GetDiscInterfaceDebugSnapshot();
+            Assert.True(pending.HasPendingCommand);
+            Assert.Empty(pending.CommandHistory);
+
+            bus.Advance(1);
+
+            DiscInterfaceCommandDebugSnapshot command = Assert.Single(bus.GetDiscInterfaceDebugSnapshot().CommandHistory);
+            Assert.Equal(0x8000ul, command.LatencyCycles);
+            Assert.Equal(0x8000ul, command.CompleteCycle - command.StartCycle);
+            Assert.Equal(0x80000u, command.CommandLength);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void DiscInterfaceCoverRegisterReportsClosedCoverAndPreservesMask()
     {
         GameCubeBus bus = new();

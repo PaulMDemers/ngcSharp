@@ -61,7 +61,7 @@ public sealed class DolRunner
         dol.LoadInto(bus.Memory);
         if (options.DiscCommandLatencyCycles is ulong discCommandLatencyCycles)
         {
-            bus.DiscInterfaceCommandLatencyCycles = discCommandLatencyCycles;
+            bus.DiscInterfaceCommandLatencyOverrideCycles = discCommandLatencyCycles;
         }
 
         bus.ExternalInterfaceMemoryCardSlotAInserted = options.MemoryCardSlotAInserted;
@@ -6121,6 +6121,7 @@ public sealed class DolRunner
             immediateData = $"0x{snapshot.ImmediateData:X8}",
             configuration = $"0x{snapshot.Configuration:X8}",
             commandLatencyCycles = bus.DiscInterfaceCommandLatencyCycles,
+            commandLatencyOverrideCycles = bus.DiscInterfaceCommandLatencyOverrideCycles,
             hasPendingCommand = snapshot.HasPendingCommand,
             pendingCommandCycles = snapshot.PendingCommandCycles,
             lastError = $"0x{snapshot.LastError:X8}",

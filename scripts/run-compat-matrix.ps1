@@ -373,6 +373,7 @@ foreach ($target in $selectedTargets) {
             diDmaAddress = ""
             diDmaLength = ""
             diCommandLatencyCycles = ""
+            diCommandLatencyOverrideCycles = ""
             diPendingCommand = ""
             diPendingCommandCycles = ""
             diCommandHistory = ""
@@ -735,6 +736,7 @@ foreach ($target in $selectedTargets) {
     $diDmaAddress = Get-Value $discInterface "dmaAddress" ""
     $diDmaLength = Get-Value $discInterface "dmaLength" ""
     $diCommandLatencyCycles = Get-Value $discInterface "commandLatencyCycles" ""
+    $diCommandLatencyOverrideCycles = Get-Value $discInterface "commandLatencyOverrideCycles" ""
     $diPendingCommand = Get-Value $discInterface "hasPendingCommand" ""
     $diPendingCommandCycles = Get-Value $discInterface "pendingCommandCycles" ""
     $diCommandHistory = @((Get-Value $discInterface "commandHistory" @()) | Select-Object -Last 6 | ForEach-Object {
@@ -859,6 +861,7 @@ foreach ($target in $selectedTargets) {
         diDmaAddress = $diDmaAddress
         diDmaLength = $diDmaLength
         diCommandLatencyCycles = $diCommandLatencyCycles
+        diCommandLatencyOverrideCycles = $diCommandLatencyOverrideCycles
         diPendingCommand = $diPendingCommand
         diPendingCommandCycles = $diPendingCommandCycles
         diCommandHistory = $diCommandHistory

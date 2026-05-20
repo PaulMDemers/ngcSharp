@@ -16,7 +16,9 @@ public sealed class GameCubeBus : IMemoryBus
     private const uint ArqRequestMagic = 0x1234_5678;
     private const ulong ArqRequestLatencyCycles = 512;
     private const ulong DirectAramDmaBaseLatencyCycles = 512;
-    private const ulong DefaultDiscInterfaceCommandLatencyCycles = 10_000;
+    private const ulong DiscInterfaceBaseLatencyCycles = 4_096;
+    private const uint DiscInterfaceLatencyChunkBytes = 0x8000;
+    private const ulong DiscInterfaceLatencyCyclesPerChunk = 1_792;
     private const int DiscInterfaceCommandHistoryLimit = 24;
     private const uint DiscInterfaceErrorOk = 0x0000_0000;
     private const uint DiscInterfaceErrorNoDisc = 0x0302_3A00;
@@ -240,7 +242,13 @@ public sealed class GameCubeBus : IMemoryBus
 
     public uint PendingProcessorInterrupts => ProcessorInterruptCause & ProcessorInterruptMask;
 
-    public ulong DiscInterfaceCommandLatencyCycles { get; set; } = DefaultDiscInterfaceCommandLatencyCycles;
+    public ulong? DiscInterfaceCommandLatencyOverrideCycles { get; set; }
+
+    public ulong DiscInterfaceCommandLatencyCycles
+    {
+        get => DiscInterfaceCommandLatencyOverrideCycles ?? DiscInterfaceBaseLatencyCycles;
+        set => DiscInterfaceCommandLatencyOverrideCycles = value;
+    }
 
     public bool HasPendingExternalInterrupt
     {
@@ -2130,7 +2138,7 @@ public sealed class GameCubeBus : IMemoryBus
         _mmioValues.TryGetValue(0xCC00_6014, out uint dmaAddress);
         _mmioValues.TryGetValue(0xCC00_6018, out uint dmaLength);
 
-        ulong latency = DiscInterfaceCommandLatencyCycles;
+        ulong latency = CalculateDiscInterfaceCommandLatency(command0, command2, dmaLength);
         _pendingDiscCommand = new PendingDiscCommand(
             command0,
             command1,
@@ -2433,6 +2441,23 @@ public sealed class GameCubeBus : IMemoryBus
             0xE1 => command2,
             _ => 0,
         };
+    }
+
+    private ulong CalculateDiscInterfaceCommandLatency(uint command0, uint command2, uint dmaLength)
+    {
+        if (DiscInterfaceCommandLatencyOverrideCycles is ulong overrideCycles)
+        {
+            return overrideCycles;
+        }
+
+        uint commandLength = DecodeDiscInterfaceCommandLength(command0, command2, dmaLength);
+        if (commandLength == 0)
+        {
+            return DiscInterfaceBaseLatencyCycles;
+        }
+
+        ulong chunks = ((ulong)commandLength + DiscInterfaceLatencyChunkBytes - 1) / DiscInterfaceLatencyChunkBytes;
+        return DiscInterfaceBaseLatencyCycles + (chunks * DiscInterfaceLatencyCyclesPerChunk);
     }
 
     private bool EnsureDiscAvailable()
