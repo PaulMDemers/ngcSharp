@@ -350,6 +350,7 @@ foreach ($target in $selectedTargets) {
             sonicModeWrapperInstructions = ""
             sonicResourceFixupInstructions = ""
             sonicOverlayInactiveSlotScanInstructions = ""
+            sonicPathRecordScanInstructions = ""
             topPc = ""
             topPcCount = ""
             nonExternalInterruptTopPc = ""
@@ -582,6 +583,7 @@ foreach ($target in $selectedTargets) {
     $sonicModeWrapperInstructions = Get-Value $fastForward "sonicModeWrapperInstructions" ""
     $sonicResourceFixupInstructions = Get-Value $fastForward "sonicResourceFixupInstructions" ""
     $sonicOverlayInactiveSlotScanInstructions = Get-Value $fastForward "sonicOverlayInactiveSlotScanInstructions" ""
+    $sonicPathRecordScanInstructions = Get-Value $fastForward "sonicPathRecordScanInstructions" ""
 
     $expectedMinPrsDecompressInstructions = Get-Value $expected "minPrsDecompressInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinPrsDecompressInstructions -and [long]$prsDecompressInstructions -lt [long]$expectedMinPrsDecompressInstructions) {
@@ -631,6 +633,11 @@ foreach ($target in $selectedTargets) {
     $expectedMinSonicOverlayInactiveSlotScanInstructions = Get-Value $expected "minSonicOverlayInactiveSlotScanInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinSonicOverlayInactiveSlotScanInstructions -and [long]$sonicOverlayInactiveSlotScanInstructions -lt [long]$expectedMinSonicOverlayInactiveSlotScanInstructions) {
         $regressions.Add("sonicOverlayInactiveSlotScanInstructions expected >= $expectedMinSonicOverlayInactiveSlotScanInstructions got $sonicOverlayInactiveSlotScanInstructions")
+    }
+
+    $expectedMinSonicPathRecordScanInstructions = Get-Value $expected "minSonicPathRecordScanInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinSonicPathRecordScanInstructions -and [long]$sonicPathRecordScanInstructions -lt [long]$expectedMinSonicPathRecordScanInstructions) {
+        $regressions.Add("sonicPathRecordScanInstructions expected >= $expectedMinSonicPathRecordScanInstructions got $sonicPathRecordScanInstructions")
     }
 
     $pcProfile = Get-Value $summary "pcProfile" $null
@@ -876,6 +883,7 @@ foreach ($target in $selectedTargets) {
         sonicModeWrapperInstructions = $sonicModeWrapperInstructions
         sonicResourceFixupInstructions = $sonicResourceFixupInstructions
         sonicOverlayInactiveSlotScanInstructions = $sonicOverlayInactiveSlotScanInstructions
+        sonicPathRecordScanInstructions = $sonicPathRecordScanInstructions
         topPc = $topPc
         topPcCount = $topPcCount
         nonExternalInterruptTopPc = $nonExternalInterruptTopPc

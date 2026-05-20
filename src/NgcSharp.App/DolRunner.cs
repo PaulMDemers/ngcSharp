@@ -19,6 +19,7 @@ public sealed class DolRunner
     private const uint SonicPathLookupEntryPc = 0x800E_ECFC;
     private const uint SonicPathLookupByteTablePc = 0x8010_BA44;
     private const int SonicPathLookupStackWindowBytes = 0xA0;
+    private const uint SonicPathLookupRecordScanPc = 0x800E_EEC4;
     private const uint ExternalInterruptVector = 0x8000_0500;
 
     private static readonly uint[] VideoInterruptRegisters =
@@ -164,6 +165,7 @@ public sealed class DolRunner
         ulong sonicModeWrapperFastForwardInstructions = 0;
         ulong sonicResourceFixupFastForwardInstructions = 0;
         ulong sonicOverlayInactiveSlotScanFastForwardInstructions = 0;
+        ulong sonicPathRecordScanFastForwardInstructions = 0;
         uint currentPc = state.Pc;
         uint currentInstruction = 0;
         Action<uint, uint>? previousWriteObserver = bus.MainRamWrite32Observer;
@@ -718,6 +720,7 @@ public sealed class DolRunner
                         sonicModeWrapperInstructions = sonicModeWrapperFastForwardInstructions,
                         sonicResourceFixupInstructions = sonicResourceFixupFastForwardInstructions,
                         sonicOverlayInactiveSlotScanInstructions = sonicOverlayInactiveSlotScanFastForwardInstructions,
+                        sonicPathRecordScanInstructions = sonicPathRecordScanFastForwardInstructions,
                     },
                 };
 
@@ -1128,6 +1131,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicNormalizedStringScan(state, bus, out skippedInstructions))
                 {
                     normalizedStringScanFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicPathRecordScan(state, bus, out skippedInstructions))
+                {
+                    sonicPathRecordScanFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1577,6 +1587,11 @@ public sealed class DolRunner
             if (sonicOverlayInactiveSlotScanFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {sonicOverlayInactiveSlotScanFastForwardInstructions} Sonic overlay inactive slot scan instruction(s).");
+            }
+
+            if (sonicPathRecordScanFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {sonicPathRecordScanFastForwardInstructions} Sonic path record scan instruction(s).");
             }
 
             if (gxMemoryCheckpoints.Length != 0)
@@ -5692,6 +5707,130 @@ public sealed class DolRunner
         return true;
     }
 
+    private static bool TryFastForwardSonicPathRecordScan(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        if (!MatchesSonicPathRecordScan(bus, pc, out uint byteTableAddress)
+            || !bus.Memory.IsMainRamAddress(byteTableAddress, 0x100)
+            || state.Gpr[30] > 1)
+        {
+            return false;
+        }
+
+        GameCubeMemory memory = bus.Memory;
+        uint smallData = state.Gpr[13];
+        if (!TryReadMainRam32(memory, unchecked(smallData - 30068), out uint entryTable)
+            || !TryReadMainRam32(memory, unchecked(smallData - 30064), out uint nameTable))
+        {
+            return false;
+        }
+
+        uint parentOffset = state.Gpr[29];
+        if (parentOffset > 0x00C0_0000 || parentOffset % 12 != 0)
+        {
+            return false;
+        }
+
+        uint parentEndAddress = unchecked(entryTable + parentOffset + 8);
+        if (!memory.IsMainRamAddress(parentEndAddress, sizeof(uint)))
+        {
+            return false;
+        }
+
+        uint endIndex = memory.Read32(parentEndAddress);
+        uint candidateIndex = state.Gpr[26];
+        if (candidateIndex >= endIndex)
+        {
+            return false;
+        }
+
+        uint segmentStart = state.Gpr[23];
+        uint segmentLength = state.Gpr[27];
+        bool hasTrailingSlash = state.Gpr[30] == 1;
+        uint skippedCandidates = 0;
+        uint skippedInstructionEstimate = 0;
+        uint lastCandidateOffset = state.Gpr[28];
+        uint lastCandidateWord = state.Gpr[4];
+
+        while (candidateIndex < endIndex && skippedCandidates < 4096)
+        {
+            if (!TryReadSonicPathLookupEntry(memory, entryTable, candidateIndex, out SonicPathLookupEntry candidateEntry))
+            {
+                if (skippedCandidates == 0)
+                {
+                    return false;
+                }
+
+                break;
+            }
+
+            uint candidateOffset = checked(candidateIndex * 12);
+            bool shouldCompare = candidateEntry.HasChildren || !hasTrailingSlash;
+            uint nextIndex;
+            uint candidateCost;
+            if (shouldCompare)
+            {
+                uint nameAddress = unchecked(nameTable + candidateEntry.NameOffset);
+                if (!TrySonicPathSegmentMatches(memory, byteTableAddress, nameAddress, segmentStart, segmentLength, out bool segmentMatches, out bool nameWasPrefix, out uint comparedBytes))
+                {
+                    if (skippedCandidates == 0)
+                    {
+                        return false;
+                    }
+
+                    break;
+                }
+
+                if (segmentMatches)
+                {
+                    break;
+                }
+
+                nextIndex = nameWasPrefix && candidateEntry.HasChildren ? candidateEntry.EndIndex : candidateIndex + 1;
+                candidateCost = checked(40u + comparedBytes * 32u);
+            }
+            else
+            {
+                nextIndex = candidateIndex + 1;
+                candidateCost = 24;
+            }
+
+            if (nextIndex <= candidateIndex)
+            {
+                if (skippedCandidates == 0)
+                {
+                    return false;
+                }
+
+                break;
+            }
+
+            skippedCandidates++;
+            skippedInstructionEstimate = checked(skippedInstructionEstimate + candidateCost);
+            lastCandidateOffset = candidateOffset;
+            lastCandidateWord = candidateEntry.Word0;
+            candidateIndex = nextIndex;
+        }
+
+        if (skippedCandidates == 0
+            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: skippedInstructionEstimate, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        state.Gpr[0] = endIndex;
+        state.Gpr[3] = entryTable;
+        state.Gpr[4] = lastCandidateWord;
+        state.Gpr[26] = candidateIndex;
+        state.Gpr[28] = lastCandidateOffset;
+        SetCr0ForUnsignedCompareImmediate(state, candidateIndex, endIndex);
+        state.Pc = candidateIndex < endIndex ? pc : pc + 0xF4;
+        AdvanceFastForwardedInstructions(state, bus, skippedInstructionEstimate);
+        skippedInstructions = checked((int)skippedInstructionEstimate);
+        return true;
+    }
+
     private static bool TryFastForwardSonicResourceModeQuery(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         skippedInstructions = 0;
@@ -6240,6 +6379,36 @@ public sealed class DolRunner
 
         uint byteTablePc = pc + 0x1CB40;
         return TryMatchSonicByteTableLookup(bus, byteTablePc, out tableAddress);
+    }
+
+    private static bool MatchesSonicPathRecordScan(GameCubeBus bus, uint pc, out uint tableAddress)
+    {
+        tableAddress = 0;
+        if (pc != SonicPathLookupRecordScanPc
+            || bus.Read32(pc + 0x00) != 0x1F9A_000C
+            || bus.Read32(pc + 0x04) != 0x7C83_E02E
+            || bus.Read32(pc + 0x08) != 0x5480_000F
+            || bus.Read32(pc + 0x1C) != 0x2C00_0000
+            || bus.Read32(pc + 0x20) != 0x4082_000C
+            || bus.Read32(pc + 0x24) != 0x2C1E_0001
+            || bus.Read32(pc + 0x28) != 0x4182_0080
+            || bus.Read32(pc + 0x2C) != 0x806D_8A90
+            || bus.Read32(pc + 0x30) != 0x5480_023E
+            || bus.Read32(pc + 0x34) != 0x3AB7_0000
+            || bus.Read32(pc + 0x38) != 0x7E83_0214
+            || bus.Read32(pc + 0xA8) != 0x800D_8A8C
+            || bus.Read32(pc + 0xAC) != 0x7C60_E214
+            || bus.Read32(pc + 0xE0) != 0x806D_8A8C
+            || bus.Read32(pc + 0xE4) != 0x3803_0008
+            || bus.Read32(pc + 0xE8) != 0x7C1D_002E
+            || bus.Read32(pc + 0xEC) != 0x7C1A_0040
+            || bus.Read32(pc + 0xF0) != 0x4180_FF10
+            || bus.Read32(pc + 0xF4) != 0x3860_FFFF)
+        {
+            return false;
+        }
+
+        return MatchesSonicNormalizedStringScan(bus, pc + 0x40, out tableAddress);
     }
 
     private static uint MapSonicByteTable(GameCubeMemory memory, uint tableAddress, byte value)

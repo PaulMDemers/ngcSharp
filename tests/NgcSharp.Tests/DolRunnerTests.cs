@@ -2448,6 +2448,89 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicPathRecordScanFastForwardStopsBeforeMatchingCandidate()
+    {
+        const uint pc = 0x800E_EEC4;
+        const uint table = 0x8017_64B8;
+        const uint entryTable = 0x8018_0000;
+        const uint nameTable = 0x8019_0000;
+        const uint path = 0x801A_0000;
+        GameCubeBus bus = new();
+        WriteSonicPathRecordScan(bus.Memory, pc, table);
+        WriteIdentityByteTable(bus.Memory, table);
+        bus.Memory.Write32(0x803B_52C0u - 30068u, entryTable);
+        bus.Memory.Write32(0x803B_52C0u - 30064u, nameTable);
+        WriteSonicPathEntry(bus.Memory, entryTable, 0, 0, 0, 4);
+        WriteSonicPathEntry(bus.Memory, entryTable, 1, 0x0000_0100, 0, 2);
+        WriteSonicPathEntry(bus.Memory, entryTable, 2, 0x0000_0200, 0, 3);
+        WriteSonicPathEntry(bus.Memory, entryTable, 3, 0x0000_0300, 0, 4);
+        bus.Memory.Load(nameTable + 0x100, "apple\0"u8);
+        bus.Memory.Load(nameTable + 0x200, "banana\0"u8);
+        bus.Memory.Load(nameTable + 0x300, "target\0"u8);
+        bus.Memory.Load(path, "target\0"u8);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[13] = 0x803B_52C0;
+        state.Gpr[23] = path;
+        state.Gpr[26] = 1;
+        state.Gpr[27] = 6;
+        state.Gpr[29] = 0;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardSonicPathRecordScan(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(144, skippedInstructions);
+        Assert.Equal(pc, state.Pc);
+        Assert.Equal(3u, state.Gpr[26]);
+        Assert.Equal(4u, state.Gpr[0]);
+        Assert.Equal(entryTable, state.Gpr[3]);
+        Assert.Equal(24u, state.Gpr[28]);
+        Assert.Equal(0x8000_0000u, state.Cr & 0xF000_0000);
+    }
+
+    [Fact]
+    public void SonicPathRecordScanFastForwardExitsWhenNoCandidateMatches()
+    {
+        const uint pc = 0x800E_EEC4;
+        const uint table = 0x8017_64B8;
+        const uint entryTable = 0x8018_0000;
+        const uint nameTable = 0x8019_0000;
+        const uint path = 0x801A_0000;
+        GameCubeBus bus = new();
+        WriteSonicPathRecordScan(bus.Memory, pc, table);
+        WriteIdentityByteTable(bus.Memory, table);
+        bus.Memory.Write32(0x803B_52C0u - 30068u, entryTable);
+        bus.Memory.Write32(0x803B_52C0u - 30064u, nameTable);
+        WriteSonicPathEntry(bus.Memory, entryTable, 0, 0, 0, 3);
+        WriteSonicPathEntry(bus.Memory, entryTable, 1, 0x0000_0100, 0, 2);
+        WriteSonicPathEntry(bus.Memory, entryTable, 2, 0x0000_0200, 0, 3);
+        bus.Memory.Load(nameTable + 0x100, "apple\0"u8);
+        bus.Memory.Load(nameTable + 0x200, "banana\0"u8);
+        bus.Memory.Load(path, "target\0"u8);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[13] = 0x803B_52C0;
+        state.Gpr[23] = path;
+        state.Gpr[26] = 1;
+        state.Gpr[27] = 6;
+        state.Gpr[29] = 0;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardSonicPathRecordScan(state, bus, out _);
+
+        Assert.True(skipped);
+        Assert.Equal(pc + 0xF4, state.Pc);
+        Assert.Equal(3u, state.Gpr[26]);
+        Assert.Equal(3u, state.Gpr[0]);
+        Assert.Equal(0x2000_0000u, state.Cr & 0xF000_0000);
+    }
+
+    [Fact]
     public void IdleFastForwardStopsAtDecrementerInterruptEdge()
     {
         PowerPcState state = new()
@@ -2868,6 +2951,16 @@ public sealed class DolRunnerTests
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicNormalizedStringScan", BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("Could not find Sonic normalized string scan fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
+    private static bool InvokeFastForwardSonicPathRecordScan(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicPathRecordScan", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic path record scan fast-forward helper.");
         object?[] args = [state, bus, 0];
         bool result = (bool)method.Invoke(null, args)!;
         skippedInstructions = (int)args[2]!;
@@ -3531,6 +3624,39 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x34, 0x8814_0000);
         WriteInstruction(memory, pc + 0x38, 0x7C00_0775);
         WriteInstruction(memory, pc + 0x3C, 0x4082_FFC4);
+    }
+
+    private static void WriteSonicPathRecordScan(GameCubeMemory memory, uint pc, uint table)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x1F9A_000C);
+        WriteInstruction(memory, pc + 0x04, 0x7C83_E02E);
+        WriteInstruction(memory, pc + 0x08, 0x5480_000F);
+        WriteInstruction(memory, pc + 0x1C, 0x2C00_0000);
+        WriteInstruction(memory, pc + 0x20, 0x4082_000C);
+        WriteInstruction(memory, pc + 0x24, 0x2C1E_0001);
+        WriteInstruction(memory, pc + 0x28, 0x4182_0080);
+        WriteInstruction(memory, pc + 0x2C, 0x806D_8A90);
+        WriteInstruction(memory, pc + 0x30, 0x5480_023E);
+        WriteInstruction(memory, pc + 0x34, 0x3AB7_0000);
+        WriteInstruction(memory, pc + 0x38, 0x7E83_0214);
+        WriteSonicNormalizedStringScan(memory, pc + 0x40);
+        WriteInstruction(memory, pc + 0xA8, 0x800D_8A8C);
+        WriteInstruction(memory, pc + 0xAC, 0x7C60_E214);
+        WriteInstruction(memory, pc + 0xE0, 0x806D_8A8C);
+        WriteInstruction(memory, pc + 0xE4, 0x3803_0008);
+        WriteInstruction(memory, pc + 0xE8, 0x7C1D_002E);
+        WriteInstruction(memory, pc + 0xEC, 0x7C1A_0040);
+        WriteInstruction(memory, pc + 0xF0, 0x4180_FF10);
+        WriteInstruction(memory, pc + 0xF4, 0x3860_FFFF);
+        WriteSonicByteTableLookup(memory, pc + 0x1CB80, table);
+    }
+
+    private static void WriteSonicPathEntry(GameCubeMemory memory, uint entryTable, uint index, uint word0, uint parentIndex, uint endIndex)
+    {
+        uint address = entryTable + index * 12;
+        memory.Write32(address, word0);
+        memory.Write32(address + 4, parentIndex);
+        memory.Write32(address + 8, endIndex);
     }
 
     private static void WriteIdentityByteTable(GameCubeMemory memory, uint table)
