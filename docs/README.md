@@ -8,6 +8,7 @@ Start here if you are new to ngcSharp:
 - [Compatibility status](compatibility.md): current emulator capability and benchmark state.
 - [Compatibility matrix](compat-matrix.md): curated local target manifest, inventory, and unified regression runner.
 - [Legal and research guidelines](legal.md): asset rules and acceptable research practices.
+- [Next emulator project playbook](next-project/README.md): transferable process, tooling, and architecture lessons for future emulator projects.
 
 Subsystem and benchmark notes:
 
