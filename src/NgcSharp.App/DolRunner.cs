@@ -515,6 +515,14 @@ public sealed class DolRunner
                         r10 = $"0x{state.Gpr[10]:X8}",
                         r13 = $"0x{state.Gpr[13]:X8}",
                         r31 = $"0x{state.Gpr[31]:X8}",
+                        gqr0 = $"0x{state.Spr[912]:X8}",
+                        gqr1 = $"0x{state.Spr[913]:X8}",
+                        gqr2 = $"0x{state.Spr[914]:X8}",
+                        gqr3 = $"0x{state.Spr[915]:X8}",
+                        gqr4 = $"0x{state.Spr[916]:X8}",
+                        gqr5 = $"0x{state.Spr[917]:X8}",
+                        gqr6 = $"0x{state.Spr[918]:X8}",
+                        gqr7 = $"0x{state.Spr[919]:X8}",
                     },
                     stopped = new
                     {
@@ -1704,6 +1712,7 @@ public sealed class DolRunner
         }
 
         Stopwatch finalMemoryDumpStopwatch = Stopwatch.StartNew();
+        WriteRequestedDisassemblyDumps(options, bus, _output);
         WriteRequestedMemoryDumps(options, bus, _output);
         memoryDumpMilliseconds += StopAndGetMilliseconds(finalMemoryDumpStopwatch);
 
@@ -1898,6 +1907,19 @@ public sealed class DolRunner
         if (options.DumpMemoryAddress is uint dumpMemoryAddress && options.DumpMemoryLength is int dumpMemoryLength)
         {
             ConsoleFormatting.WriteMemoryDump(output, bus.Memory, dumpMemoryAddress, dumpMemoryLength);
+        }
+    }
+
+    private static void WriteRequestedDisassemblyDumps(RunDolOptions options, GameCubeBus bus, TextWriter output)
+    {
+        if (options.DumpDisassemblyRequests is not { Count: > 0 })
+        {
+            return;
+        }
+
+        foreach (DisassemblyDumpRequest request in options.DumpDisassemblyRequests.Distinct())
+        {
+            ConsoleFormatting.WriteDisassemblyDump(output, bus.Memory, request);
         }
     }
 

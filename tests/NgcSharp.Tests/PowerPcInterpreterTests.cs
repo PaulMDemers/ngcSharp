@@ -1167,6 +1167,93 @@ public sealed class PowerPcInterpreterTests
     }
 
     [Fact]
+    public void PairedSingleQuantizedLoadUsesGqrTypeScaleAndStride()
+    {
+        GameCubeMemory memory = new();
+        uint pc = 0x8000_3100;
+        memory.Write8(0x100, 0x80);
+        memory.Write8(0x101, 0x40);
+        WriteInstruction(memory, pc, PsqMemory(opcode: 56, fDOrS: 1, rA: 3, displacement: 0, w: 0, i: 1));
+
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[3] = 0x100;
+        state.Spr[913] = (1u << 24) | (6u << 16);
+
+        new PowerPcInterpreter().Step(state, memory);
+
+        Assert.Equal(-64.0d, state.Fpr[1]);
+        Assert.Equal(32.0d, state.FprPair1[1]);
+    }
+
+    [Fact]
+    public void PairedSingleQuantizedLoadSingleFillsSecondLaneWithOne()
+    {
+        GameCubeMemory memory = new();
+        uint pc = 0x8000_3100;
+        memory.Write16(0x100, 0x0040);
+        WriteInstruction(memory, pc, PsqMemory(opcode: 56, fDOrS: 1, rA: 3, displacement: 0, w: 1, i: 1));
+
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[3] = 0x100;
+        state.Spr[913] = (2u << 24) | (5u << 16);
+
+        new PowerPcInterpreter().Step(state, memory);
+
+        Assert.Equal(16.0d, state.Fpr[1]);
+        Assert.Equal(1.0d, state.FprPair1[1]);
+    }
+
+    [Fact]
+    public void PairedSingleQuantizedStoreUsesGqrTypeScaleClampAndStride()
+    {
+        GameCubeMemory memory = new();
+        uint pc = 0x8000_3100;
+        WriteInstruction(memory, pc, PsqMemory(opcode: 60, fDOrS: 1, rA: 3, displacement: 0, w: 0, i: 1));
+
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[3] = 0x100;
+        state.Fpr[1] = 100.0d;
+        state.FprPair1[1] = 200.0d;
+        state.Spr[913] = (1u << 8) | 4u;
+
+        new PowerPcInterpreter().Step(state, memory);
+
+        Assert.Equal(200, memory.Read8(0x100));
+        Assert.Equal(255, memory.Read8(0x101));
+    }
+
+    [Fact]
+    public void PairedSingleQuantizedStoreSignedIntegerRoundsTowardZero()
+    {
+        GameCubeMemory memory = new();
+        uint pc = 0x8000_3100;
+        WriteInstruction(memory, pc, PsqMemory(opcode: 60, fDOrS: 1, rA: 3, displacement: 0, w: 0, i: 1));
+
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[3] = 0x100;
+        state.Fpr[1] = -63.9d;
+        state.FprPair1[1] = 63.9d;
+        state.Spr[913] = (1u << 8) | 6u;
+
+        new PowerPcInterpreter().Step(state, memory);
+
+        Assert.Equal(0x81, memory.Read8(0x100));
+        Assert.Equal(0x7F, memory.Read8(0x101));
+    }
+
+    [Fact]
     public void PairedSingleMergeAndStorePreserveBothLanes()
     {
         GameCubeMemory memory = new();

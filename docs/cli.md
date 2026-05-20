@@ -70,6 +70,8 @@ dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "path\to\g
 
 `--run-summary <json-path>` writes a compact JSON ledger with the executed instruction count, final PC, stop reason, selected registers, GX FIFO byte count, and fast-forward counters. It is the preferred way to compare bounded probes without scraping console output.
 
+`--dump-disasm <addr> <count>` disassembles live emulated RAM after a bounded run or stop condition. This is useful for DVD-loaded overlays that are not visible through static `disc-disasm`.
+
 `--di-command-latency-cycles <n>` overrides the default scheduled DVD command latency for diagnostic runs. Without an override, DVD reads use transfer-size-aware latency; use the override with `--run-summary` or the compatibility matrix to sweep whether a retail title is sensitive to DI completion timing.
 
 `--profile-after <n>` scopes PC, branch-site, PC/LR, and indirect-call-site profile collection to a later instruction window. This is useful when an early hot loop otherwise dominates the profile for a longer compatibility probe.

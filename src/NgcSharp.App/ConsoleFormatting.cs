@@ -27,6 +27,7 @@ public static class ConsoleFormatting
     public static void WriteRegisters(TextWriter writer, PowerPcState state)
     {
         writer.WriteLine($"PC=0x{state.Pc:X8} LR=0x{state.Lr:X8} CTR=0x{state.Ctr:X8} CR=0x{state.Cr:X8} XER=0x{state.Xer:X8} MSR=0x{state.Msr:X8} DEC=0x{state.Spr[22]:X8} SRR0=0x{state.Spr[26]:X8} SRR1=0x{state.Spr[27]:X8}");
+        writer.WriteLine($"GQR0=0x{state.Spr[912]:X8} GQR1=0x{state.Spr[913]:X8} GQR2=0x{state.Spr[914]:X8} GQR3=0x{state.Spr[915]:X8} GQR4=0x{state.Spr[916]:X8} GQR5=0x{state.Spr[917]:X8} GQR6=0x{state.Spr[918]:X8} GQR7=0x{state.Spr[919]:X8}");
 
         for (int row = 0; row < 8; row++)
         {
@@ -877,6 +878,25 @@ public static class ConsoleFormatting
         }
 
         writer.WriteLine($"Pointer table summary: active={active} null={nullPointers} invalid={invalidPointers} printed={printed}");
+    }
+
+    public static void WriteDisassemblyDump(TextWriter writer, GameCubeMemory memory, DisassemblyDumpRequest request)
+    {
+        writer.WriteLine($"Disassembly dump 0x{request.Address:X8}, {request.InstructionCount} instruction(s):");
+        for (int index = 0; index < request.InstructionCount; index++)
+        {
+            uint address = request.Address + (uint)(index * sizeof(uint));
+            try
+            {
+                uint instruction = memory.Read32(address);
+                writer.WriteLine($"0x{address:X8}: 0x{instruction:X8}  {PowerPcDisassembler.Disassemble(instruction)}");
+            }
+            catch (AddressTranslationException)
+            {
+                writer.WriteLine($"0x{address:X8}: <unmapped>");
+                break;
+            }
+        }
     }
 
     private static string FormatEntryWords(GameCubeMemory memory, uint address, int words)

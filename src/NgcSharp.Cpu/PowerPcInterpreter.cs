@@ -802,12 +802,15 @@ public sealed class PowerPcInterpreter
     private static void PairedSingleQuantizedLoad(PowerPcState state, IMemoryBus memory, uint instruction, bool update)
     {
         uint address = PairedSingleQuantizedAddress(state, instruction);
-        uint value = memory.Read32(address);
         int fD = Rd(instruction);
-        state.Fpr[fD] = BitConverter.Int32BitsToSingle(unchecked((int)value));
+        int gqr = PairedSingleQuantizedRegister(instruction);
+        int loadType = GqrLoadType(state, gqr);
+        int loadScale = GqrLoadScale(state, gqr);
+        uint instructionAddress = state.Pc - sizeof(uint);
+        state.Fpr[fD] = ReadPairedSingleQuantizedOperand(memory, address, loadType, loadScale, instructionAddress, instruction, out int operandSize);
         state.FprPair1[fD] = PairedSingleQuantizedSingle(instruction)
             ? 1.0d
-            : BitConverter.Int32BitsToSingle(unchecked((int)memory.Read32(address + sizeof(uint))));
+            : ReadPairedSingleQuantizedOperand(memory, address + (uint)operandSize, loadType, loadScale, instructionAddress, instruction, out _);
 
         if (update)
         {
@@ -819,12 +822,14 @@ public sealed class PowerPcInterpreter
     {
         uint address = PairedSingleQuantizedAddress(state, instruction);
         int fS = Rs(instruction);
-        uint value = unchecked((uint)BitConverter.SingleToInt32Bits((float)state.Fpr[fS]));
-        memory.Write32(address, value);
+        int gqr = PairedSingleQuantizedRegister(instruction);
+        int storeType = GqrStoreType(state, gqr);
+        int storeScale = GqrStoreScale(state, gqr);
+        uint instructionAddress = state.Pc - sizeof(uint);
+        int operandSize = WritePairedSingleQuantizedOperand(memory, address, state.Fpr[fS], storeType, storeScale, instructionAddress, instruction);
         if (!PairedSingleQuantizedSingle(instruction))
         {
-            uint pairValue = unchecked((uint)BitConverter.SingleToInt32Bits((float)state.FprPair1[fS]));
-            memory.Write32(address + sizeof(uint), pairValue);
+            WritePairedSingleQuantizedOperand(memory, address + (uint)operandSize, state.FprPair1[fS], storeType, storeScale, instructionAddress, instruction);
         }
 
         if (update)
@@ -1700,6 +1705,94 @@ public sealed class PowerPcInterpreter
     }
 
     private static bool PairedSingleQuantizedSingle(uint instruction) => ((instruction >> 15) & 1) != 0;
+
+    private static int PairedSingleQuantizedRegister(uint instruction) => (int)((instruction >> 12) & 0x7);
+
+    private static int GqrLoadScale(PowerPcState state, int register) => SignExtend6((int)((state.Spr[912 + register] >> 24) & 0x3F));
+
+    private static int GqrLoadType(PowerPcState state, int register) => (int)((state.Spr[912 + register] >> 16) & 0x7);
+
+    private static int GqrStoreScale(PowerPcState state, int register) => SignExtend6((int)((state.Spr[912 + register] >> 8) & 0x3F));
+
+    private static int GqrStoreType(PowerPcState state, int register) => (int)(state.Spr[912 + register] & 0x7);
+
+    private static int SignExtend6(int value) => (value & 0x20) != 0 ? value - 0x40 : value;
+
+    private static double ReadPairedSingleQuantizedOperand(IMemoryBus memory, uint address, int type, int scale, uint instructionAddress, uint instruction, out int size)
+    {
+        double value;
+        switch (type)
+        {
+            case 0:
+                size = sizeof(uint);
+                return BitConverter.Int32BitsToSingle(unchecked((int)memory.Read32(address)));
+            case 4:
+                size = sizeof(byte);
+                value = memory.Read8(address);
+                break;
+            case 5:
+                size = sizeof(ushort);
+                value = memory.Read16(address);
+                break;
+            case 6:
+                size = sizeof(byte);
+                value = unchecked((sbyte)memory.Read8(address));
+                break;
+            case 7:
+                size = sizeof(ushort);
+                value = unchecked((short)memory.Read16(address));
+                break;
+            default:
+                throw new UnsupportedInstructionException(instructionAddress, instruction);
+        }
+
+        return Math.ScaleB(value, -scale);
+    }
+
+    private static int WritePairedSingleQuantizedOperand(IMemoryBus memory, uint address, double value, int type, int scale, uint instructionAddress, uint instruction)
+    {
+        switch (type)
+        {
+            case 0:
+                memory.Write32(address, unchecked((uint)BitConverter.SingleToInt32Bits((float)value)));
+                return sizeof(uint);
+            case 4:
+                memory.Write8(address, (byte)ClampQuantizedInteger(value, scale, 0, byte.MaxValue));
+                return sizeof(byte);
+            case 5:
+                memory.Write16(address, (ushort)ClampQuantizedInteger(value, scale, 0, ushort.MaxValue));
+                return sizeof(ushort);
+            case 6:
+                memory.Write8(address, unchecked((byte)(sbyte)ClampQuantizedInteger(value, scale, sbyte.MinValue, sbyte.MaxValue)));
+                return sizeof(byte);
+            case 7:
+                memory.Write16(address, unchecked((ushort)(short)ClampQuantizedInteger(value, scale, short.MinValue, short.MaxValue)));
+                return sizeof(ushort);
+            default:
+                throw new UnsupportedInstructionException(instructionAddress, instruction);
+        }
+    }
+
+    private static int ClampQuantizedInteger(double value, int scale, int min, int max)
+    {
+        if (double.IsNaN(value))
+        {
+            return 0;
+        }
+
+        double scaled = Math.Truncate(Math.ScaleB(value, scale));
+        if (scaled <= min)
+        {
+            return min;
+        }
+
+        if (scaled >= max)
+        {
+            return max;
+        }
+
+        return (int)scaled;
+    }
 
     private static void SetFloatingScalar(PowerPcState state, int register, double value)
     {

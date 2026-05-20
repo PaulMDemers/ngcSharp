@@ -48,6 +48,7 @@ public sealed record RunDolOptions(
     int? DumpMemoryLength = null,
     IReadOnlyList<MemoryDumpRequest>? DumpMemoryRequests = null,
     IReadOnlyList<PointerTableDumpRequest>? PointerTableDumpRequests = null,
+    IReadOnlyList<DisassemblyDumpRequest>? DumpDisassemblyRequests = null,
     int? PcProfileTop = null,
     int? ProfileAfter = null,
     uint? IndirectCallSiteProfileAddress = null,
@@ -144,6 +145,7 @@ public sealed record RunDolOptions(
         int? dumpMemoryLength = null;
         List<MemoryDumpRequest> dumpMemoryRequests = [];
         List<PointerTableDumpRequest> pointerTableDumpRequests = [];
+        List<DisassemblyDumpRequest> dumpDisassemblyRequests = [];
         int? pcProfileTop = null;
         int? profileAfter = null;
         uint? indirectCallSiteProfileAddress = null;
@@ -524,6 +526,15 @@ public sealed record RunDolOptions(
 
                     pointerTableDumpRequests.Add(new PointerTableDumpRequest(parsedPointerTableAddress, parsedPointerTableCount, parsedPointerTableStride, parsedPointerTablePointerOffset, parsedPointerTableTargetWords));
                     break;
+                case "--dump-disasm":
+                    if (index + 2 >= args.Length || !TryParseUInt32(args[++index], out uint parsedDisasmAddress) || !TryParsePositiveInt32(args[++index], out int parsedDisasmInstructionCount))
+                    {
+                        error.WriteLine("--dump-disasm requires an address and positive instruction count.");
+                        return false;
+                    }
+
+                    dumpDisassemblyRequests.Add(new DisassemblyDumpRequest(parsedDisasmAddress, parsedDisasmInstructionCount));
+                    break;
                 case "--profile-pc":
                     if (index + 1 >= args.Length || !int.TryParse(args[++index], out int parsedPcProfileTop))
                     {
@@ -840,7 +851,7 @@ public sealed record RunDolOptions(
             return false;
         }
 
-        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, pcProfileTop, profileAfter, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, branchSiteProfiles, pcLrProfiles, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath, discCommandLatencyCycles);
+        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, dumpDisassemblyRequests, pcProfileTop, profileAfter, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, branchSiteProfiles, pcLrProfiles, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath, discCommandLatencyCycles);
         return true;
     }
 
