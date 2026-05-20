@@ -372,9 +372,10 @@ public sealed class DolRunner
         int sonicPathLookupInterruptEntries = 0;
         ulong sonicPathLookupPredictedCycles = 0;
         ulong sonicPathLookupMaxCycleErrorMagnitude = 0;
+        int sonicPathLookupEligibleFastForwards = 0;
         if (sonicPathLookupTrace is not null)
         {
-            sonicPathLookupTrace.WriteLine("instruction,entry_pc,lr,path,predicted_status,predicted_result,actual_result,match,reason,path_text,actual_instruction_count,elapsed_cycles,decrementer_delta,predicted_cycles,cycle_delta,candidate_entries,segment_comparisons,compare_bytes,interrupt_entries,entry_r0,entry_r4,entry_r5,entry_r6,entry_cr,actual_r0,actual_r4,actual_r5,actual_r6,actual_cr,actual_lr,actual_ctr,actual_xer,entry_gprs,actual_gprs,stack_base,entry_stack,actual_stack,stack_changed");
+            sonicPathLookupTrace.WriteLine("instruction,entry_pc,lr,path,predicted_status,predicted_result,actual_result,match,reason,path_text,actual_instruction_count,elapsed_cycles,decrementer_delta,predicted_cycles,cycle_delta,candidate_entries,segment_comparisons,compare_bytes,fast_forward_eligible,interrupt_entries,entry_r0,entry_r4,entry_r5,entry_r6,entry_cr,actual_r0,actual_r4,actual_r5,actual_r6,actual_cr,actual_lr,actual_ctr,actual_xer,entry_gprs,actual_gprs,stack_base,entry_stack,actual_stack,stack_changed");
         }
 
         string GetStopReason(string? overrideReason = null)
@@ -591,6 +592,7 @@ public sealed class DolRunner
                         predictedCycles = sonicPathLookupPredictedCycles,
                         cycleDelta = unchecked((long)sonicPathLookupElapsedCycles - (long)sonicPathLookupPredictedCycles),
                         maxCycleErrorMagnitude = sonicPathLookupMaxCycleErrorMagnitude,
+                        eligibleFastForwards = sonicPathLookupEligibleFastForwards,
                         interruptEntries = sonicPathLookupInterruptEntries,
                         pending = sonicPathLookupPending is not null,
                     },
@@ -807,7 +809,12 @@ public sealed class DolRunner
                         sonicPathLookupPredictedCycles += pending.Prediction.EstimatedCycles;
                         sonicPathLookupMaxCycleErrorMagnitude = Math.Max(sonicPathLookupMaxCycleErrorMagnitude, (ulong)Math.Abs(cycleDelta));
                         string actualStackWindow = CaptureMemoryWindowHex(bus.Memory, pending.StackBase, SonicPathLookupStackWindowBytes);
-                        sonicPathLookupTrace.WriteLine($"{pending.EntryInstruction},0x{pending.EntryPc:X8},0x{pending.Lr:X8},0x{pending.Path:X8},{(pending.Prediction.Success ? "ok" : "model-failure")},0x{pending.Prediction.Result:X8},0x{actualResult:X8},{(pending.Prediction.Success ? modelMatched.ToString().ToLowerInvariant() : string.Empty)},\"{EscapeCsv(pending.Prediction.Reason)}\",\"{EscapeCsv(pending.Prediction.PathText)}\",{actualInstructionCount},{elapsedCycles},{decrementerDelta},{pending.Prediction.EstimatedCycles},{cycleDelta},{pending.Prediction.CandidateEntries},{pending.Prediction.SegmentComparisons},{pending.Prediction.CompareBytes},{pending.InterruptEntries},0x{pending.EntryR0:X8},0x{pending.EntryR4:X8},0x{pending.EntryR5:X8},0x{pending.EntryR6:X8},0x{pending.EntryCr:X8},0x{state.Gpr[0]:X8},0x{state.Gpr[4]:X8},0x{state.Gpr[5]:X8},0x{state.Gpr[6]:X8},0x{state.Cr:X8},0x{state.Lr:X8},0x{state.Ctr:X8},0x{state.Xer:X8},\"{FormatGprSnapshot(pending.EntryGpr)}\",\"{FormatGprSnapshot(state.Gpr)}\",0x{pending.StackBase:X8},\"{pending.EntryStackWindow}\",\"{actualStackWindow}\",{(!string.Equals(pending.EntryStackWindow, actualStackWindow, StringComparison.Ordinal)).ToString().ToLowerInvariant()}");
+                        if (pending.FastForwardEligible)
+                        {
+                            sonicPathLookupEligibleFastForwards++;
+                        }
+
+                        sonicPathLookupTrace.WriteLine($"{pending.EntryInstruction},0x{pending.EntryPc:X8},0x{pending.Lr:X8},0x{pending.Path:X8},{(pending.Prediction.Success ? "ok" : "model-failure")},0x{pending.Prediction.Result:X8},0x{actualResult:X8},{(pending.Prediction.Success ? modelMatched.ToString().ToLowerInvariant() : string.Empty)},\"{EscapeCsv(pending.Prediction.Reason)}\",\"{EscapeCsv(pending.Prediction.PathText)}\",{actualInstructionCount},{elapsedCycles},{decrementerDelta},{pending.Prediction.EstimatedCycles},{cycleDelta},{pending.Prediction.CandidateEntries},{pending.Prediction.SegmentComparisons},{pending.Prediction.CompareBytes},{pending.FastForwardEligible.ToString().ToLowerInvariant()},{pending.InterruptEntries},0x{pending.EntryR0:X8},0x{pending.EntryR4:X8},0x{pending.EntryR5:X8},0x{pending.EntryR6:X8},0x{pending.EntryCr:X8},0x{state.Gpr[0]:X8},0x{state.Gpr[4]:X8},0x{state.Gpr[5]:X8},0x{state.Gpr[6]:X8},0x{state.Cr:X8},0x{state.Lr:X8},0x{state.Ctr:X8},0x{state.Xer:X8},\"{FormatGprSnapshot(pending.EntryGpr)}\",\"{FormatGprSnapshot(state.Gpr)}\",0x{pending.StackBase:X8},\"{pending.EntryStackWindow}\",\"{actualStackWindow}\",{(!string.Equals(pending.EntryStackWindow, actualStackWindow, StringComparison.Ordinal)).ToString().ToLowerInvariant()}");
                         sonicPathLookupPending = null;
                     }
 
@@ -816,7 +823,8 @@ public sealed class DolRunner
                         sonicPathLookupCalls++;
                         SonicPathLookupPrediction prediction = PredictSonicPathLookup(bus, state);
                         uint stackBase = unchecked(state.Gpr[1] - 0x50);
-                        sonicPathLookupPending = new SonicPathLookupPending(executed + 1, pc, state.Lr, state.Gpr[3], prediction, state.Gpr[0], state.Gpr[4], state.Gpr[5], state.Gpr[6], state.Cr, [.. state.Gpr], stackBase, CaptureMemoryWindowHex(bus.Memory, stackBase, SonicPathLookupStackWindowBytes), state.TimeBase, state.Spr[22]);
+                        bool fastForwardEligible = prediction.Success && CanFastForwardSonicPathLookupCycles(state, bus, prediction.EstimatedCycles);
+                        sonicPathLookupPending = new SonicPathLookupPending(executed + 1, pc, state.Lr, state.Gpr[3], prediction, state.Gpr[0], state.Gpr[4], state.Gpr[5], state.Gpr[6], state.Cr, [.. state.Gpr], stackBase, CaptureMemoryWindowHex(bus.Memory, stackBase, SonicPathLookupStackWindowBytes), state.TimeBase, state.Spr[22], FastForwardEligible: fastForwardEligible);
                     }
                 }
 
@@ -5108,6 +5116,7 @@ public sealed class DolRunner
         string EntryStackWindow,
         ulong EntryTimeBase,
         uint EntryDecrementer,
+        bool FastForwardEligible = false,
         int InterruptEntries = 0);
 
     private sealed record SonicPathLookupPrediction(
@@ -5495,6 +5504,67 @@ public sealed class DolRunner
             }
         }
 
+        return true;
+    }
+
+    private static bool CanFastForwardSonicPathLookupCycles(PowerPcState state, GameCubeBus bus, ulong cycles)
+    {
+        if (cycles == 0
+            || cycles > 32_768
+            || bus.HasPendingExternalInterrupt
+            || !CanFastForwardInstructionCount(state, (uint)cycles, instructionsPerIteration: 1, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        DiscInterfaceDebugSnapshot disc = bus.GetDiscInterfaceDebugSnapshot();
+        if (disc.HasPendingCommand && disc.PendingCommandCycles <= cycles + 64)
+        {
+            return false;
+        }
+
+        if (TryGetCyclesUntilNextEnabledVideoInterrupt(bus, out ulong videoCycles) && videoCycles <= cycles + 64)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryGetCyclesUntilNextEnabledVideoInterrupt(GameCubeBus bus, out ulong cycles)
+    {
+        cycles = 0;
+        ulong best = ulong.MaxValue;
+        foreach (uint address in VideoInterruptRegisters)
+        {
+            if (!bus.TryGetMmioValue(address, out uint value)
+                || (value & GameCubeBus.VideoInterruptEnable) == 0)
+            {
+                continue;
+            }
+
+            uint targetLine = value & GameCubeBus.VideoInterruptLineMask;
+            ulong currentScanline = bus.VideoCycleCounter / GameCubeBus.VideoCyclesPerScanline;
+            ulong currentLine = currentScanline % GameCubeBus.VideoScanlinesPerFrame;
+            ulong linesUntil = targetLine > currentLine
+                ? targetLine - currentLine
+                : targetLine + (ulong)GameCubeBus.VideoScanlinesPerFrame - currentLine;
+            ulong cycleOffset = bus.VideoCycleCounter % GameCubeBus.VideoCyclesPerScanline;
+            ulong candidate = checked(linesUntil * (ulong)GameCubeBus.VideoCyclesPerScanline - cycleOffset);
+            if (candidate == 0)
+            {
+                candidate = (ulong)GameCubeBus.VideoScanlinesPerFrame * GameCubeBus.VideoCyclesPerScanline;
+            }
+
+            best = Math.Min(best, candidate);
+        }
+
+        if (best == ulong.MaxValue)
+        {
+            return false;
+        }
+
+        cycles = best;
         return true;
     }
 

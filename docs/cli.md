@@ -109,7 +109,7 @@ Sonic path lookup differential trace:
 dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz" --max-instructions 20000000 --memory-card-a --controller-button a --fast-forward-idle --fast-forward-write-watch --trace-sonic-path-lookup artifacts/sonic-path-lookup.csv --run-summary artifacts/sonic-path-lookup-summary.json --no-registers
 ```
 
-`--trace-sonic-path-lookup <csv-path>` observes Sonic Adventure 2 Battle's live `0x800EECFC` resource pathname lookup without skipping it. The CSV compares the C# table-walk model against the PPC routine's real return value, records volatile register/CR side effects, captures full GPR and caller-stack snapshots, reports interpreter-loop and elapsed timebase counts, estimates lookup cycles from table-walk metrics, and counts interrupt entries during the call. Use this before enabling any routine-level skip so scheduler timing stays explainable.
+`--trace-sonic-path-lookup <csv-path>` observes Sonic Adventure 2 Battle's live `0x800EECFC` resource pathname lookup without skipping it. The CSV compares the C# table-walk model against the PPC routine's real return value, records volatile register/CR side effects, captures full GPR and caller-stack snapshots, reports interpreter-loop and elapsed timebase counts, estimates lookup cycles from table-walk metrics, counts interrupt entries during the call, and marks whether the current guard would consider the call fast-forward eligible. Use this before enabling any routine-level skip so scheduler timing stays explainable.
 
 Stop and watch examples:
 
