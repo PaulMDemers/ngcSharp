@@ -374,6 +374,7 @@ foreach ($target in $selectedTargets) {
             diDmaLength = ""
             diPendingCommand = ""
             diPendingCommandCycles = ""
+            diRecentAccesses = ""
             exiPending = ""
             exi0Parameter = ""
             exi0SelectedDevice = ""
@@ -733,6 +734,9 @@ foreach ($target in $selectedTargets) {
     $diDmaLength = Get-Value $discInterface "dmaLength" ""
     $diPendingCommand = Get-Value $discInterface "hasPendingCommand" ""
     $diPendingCommandCycles = Get-Value $discInterface "pendingCommandCycles" ""
+    $diRecentAccesses = @((Get-Value $discInterface "recentAccesses" @()) | ForEach-Object {
+        "$(Get-Value $_ "kind") $(Get-Value $_ "device") $(Get-Value $_ "address")=$(Get-Value $_ "value")"
+    }) -join "; "
     $exiPending = Get-Value $externalInterface "hasPendingExternalInterrupt" ""
     $exiChannels = @((Get-Value $externalInterface "channels" @()))
     $exi0 = if ($exiChannels.Count -gt 0) { $exiChannels[0] } else { $null }
@@ -850,6 +854,7 @@ foreach ($target in $selectedTargets) {
         diDmaLength = $diDmaLength
         diPendingCommand = $diPendingCommand
         diPendingCommandCycles = $diPendingCommandCycles
+        diRecentAccesses = $diRecentAccesses
         exiPending = $exiPending
         exi0Parameter = $exi0Parameter
         exi0SelectedDevice = $exi0SelectedDevice

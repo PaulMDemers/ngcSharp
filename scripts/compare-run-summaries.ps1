@@ -175,6 +175,18 @@ function Format-ExiChannel {
     return "param=$(Get-Value $entry "parameter") dev=$(Get-Value $entry "selectedDevice") cmd=$(Get-Value $entry "memoryCardCommand") status=$(Get-Value $entry "memoryCardStatus") irq=$(Get-Value $entry "transferCompleteStatus")/$(Get-Value $entry "transferCompleteMask")"
 }
 
+function Format-MmioAccesses {
+    param($Accesses)
+
+    if ($null -eq $Accesses) {
+        return ""
+    }
+
+    return @($Accesses | ForEach-Object {
+        "$(Get-Value $_ "kind") $(Get-Value $_ "device") $(Get-Value $_ "address")=$(Get-Value $_ "value")"
+    }) -join "; "
+}
+
 $beforeExi = Get-Value $beforeData "externalInterface" $null
 $afterExi = Get-Value $afterData "externalInterface" $null
 Add-Change $rows "interrupts" "processorInterruptCause" (Get-Value $beforeExi "processorInterruptCause") (Get-Value $afterExi "processorInterruptCause")
@@ -188,6 +200,7 @@ Add-Change $rows "di" "dmaAddress" (Get-Value $beforeDi "dmaAddress") (Get-Value
 Add-Change $rows "di" "dmaLength" (Get-Value $beforeDi "dmaLength") (Get-Value $afterDi "dmaLength")
 Add-Change $rows "di" "hasPendingCommand" (Get-Value $beforeDi "hasPendingCommand") (Get-Value $afterDi "hasPendingCommand")
 Add-Change $rows "di" "pendingCommandCycles" (Get-Value $beforeDi "pendingCommandCycles") (Get-Value $afterDi "pendingCommandCycles")
+Add-Change $rows "di" "recentAccesses" (Format-MmioAccesses (Get-Value $beforeDi "recentAccesses" @())) (Format-MmioAccesses (Get-Value $afterDi "recentAccesses" @()))
 
 Add-Change $rows "exi" "hasPendingExternalInterrupt" (Get-Value $beforeExi "hasPendingExternalInterrupt") (Get-Value $afterExi "hasPendingExternalInterrupt")
 Add-Change $rows "exi" "channel0" (Format-ExiChannel $beforeExi 0) (Format-ExiChannel $afterExi 0)

@@ -6124,7 +6124,32 @@ public sealed class DolRunner
             transferCompleteMask = snapshot.TransferCompleteMask,
             breakStatus = snapshot.BreakStatus,
             breakMask = snapshot.BreakMask,
+            recentAccesses = BuildRecentMmioAccessSummary(
+                bus.MmioAccesses,
+                static access => access.DeviceName == "DI" || (access.DeviceName == "PI" && (access.Address == 0xCC00_3000 || access.Address == 0xCC00_3004)),
+                24),
         };
+    }
+
+    private static object[] BuildRecentMmioAccessSummary(
+        IReadOnlyList<MmioAccess> accesses,
+        Func<MmioAccess, bool> predicate,
+        int maxCount)
+    {
+        return accesses
+            .Select((access, index) => new { access, index })
+            .Where(entry => predicate(entry.access))
+            .TakeLast(maxCount)
+            .Select(entry => new
+            {
+                index = entry.index,
+                kind = entry.access.Kind.ToString(),
+                device = entry.access.DeviceName,
+                address = $"0x{entry.access.Address:X8}",
+                width = entry.access.Width,
+                value = $"0x{entry.access.Value:X8}",
+            })
+            .ToArray();
     }
 
     private static bool TryReadMainRam32(GameCubeBus bus, uint address, out uint value)

@@ -2047,7 +2047,7 @@ public sealed class GameCubeBus : IMemoryBus
             }
 
             uint nextValue = interruptStatus | (value & DiscInterfaceInterruptMaskBits);
-            SetDiscProcessorInterrupt(DiscProcessorInterruptPending(nextValue));
+            RefreshDiscProcessorInterrupt(nextValue);
             return nextValue;
         }
 
@@ -2057,7 +2057,7 @@ public sealed class GameCubeBus : IMemoryBus
             uint interruptStatus = existing & DiscInterfaceCoverInterruptStatus;
             interruptStatus &= ~(value & DiscInterfaceCoverInterruptStatus);
             uint nextValue = interruptStatus | (value & DiscInterfaceCoverInterruptMask);
-            SetDiscProcessorInterrupt(DiscProcessorInterruptPending(ReadMmioValue(0xCC00_6000)) || DiscCoverProcessorInterruptPending(nextValue));
+            RefreshDiscProcessorInterrupt(coverStatus: nextValue);
             return nextValue;
         }
 
@@ -2337,7 +2337,7 @@ public sealed class GameCubeBus : IMemoryBus
         status = (status | DiscInterfaceTransferComplete) & DiscInterfaceStatusMask;
         _mmioValues[0xCC00_6000] = status;
 
-        SetDiscProcessorInterrupt(DiscProcessorInterruptPending(status));
+        RefreshDiscProcessorInterrupt(status);
     }
 
     private void SignalDiscInterfaceDeviceError(uint error)
@@ -2347,7 +2347,7 @@ public sealed class GameCubeBus : IMemoryBus
         _mmioValues.TryGetValue(0xCC00_6000, out uint status);
         status = (status | DiscInterfaceDeviceErrorInterruptStatus) & DiscInterfaceStatusMask;
         _mmioValues[0xCC00_6000] = status;
-        SetDiscProcessorInterrupt(DiscProcessorInterruptPending(status));
+        RefreshDiscProcessorInterrupt(status);
     }
 
     private bool EnsureDiscAvailable()
@@ -2404,6 +2404,13 @@ public sealed class GameCubeBus : IMemoryBus
         {
             _processorInterruptCause &= ~ProcessorInterfaceDiscInterrupt;
         }
+    }
+
+    private void RefreshDiscProcessorInterrupt(uint? commandStatus = null, uint? coverStatus = null)
+    {
+        uint status = commandStatus ?? ReadMmioValue(0xCC00_6000);
+        uint cover = coverStatus ?? DiscInterfaceCoverRegister();
+        SetDiscProcessorInterrupt(DiscProcessorInterruptPending(status) || DiscCoverProcessorInterruptPending(cover));
     }
 
     private static bool DiscProcessorInterruptPending(uint status) =>
