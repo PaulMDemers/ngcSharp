@@ -94,7 +94,8 @@ public sealed record RunDolOptions(
     bool TracePrsDecompress = false,
     string? SchedulerTracePath = null,
     string? RunSummaryPath = null,
-    ulong? DiscCommandLatencyCycles = null)
+    ulong? DiscCommandLatencyCycles = null,
+    string? SonicPathLookupTracePath = null)
 {
     public const int DefaultGxFrameMaxDraws = 500;
     public const int DefaultGxFrameMaxRasterPixels = 8_000_000;
@@ -190,6 +191,7 @@ public sealed record RunDolOptions(
         string? gxTextureDumpPath = null;
         bool tracePrsDecompress = false;
         ulong? discCommandLatencyCycles = null;
+        string? sonicPathLookupTracePath = null;
 
         for (int index = 2; index < args.Length; index++)
         {
@@ -737,6 +739,15 @@ public sealed record RunDolOptions(
                 case "--trace-prs-decompress":
                     tracePrsDecompress = true;
                     break;
+                case "--trace-sonic-path-lookup":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-sonic-path-lookup requires a CSV path.");
+                        return false;
+                    }
+
+                    sonicPathLookupTracePath = args[++index];
+                    break;
                 case "--di-command-latency-cycles":
                     if (index + 1 >= args.Length || !TryParseUInt64(args[++index], out ulong parsedDiscCommandLatencyCycles))
                     {
@@ -851,7 +862,7 @@ public sealed record RunDolOptions(
             return false;
         }
 
-        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, dumpDisassemblyRequests, pcProfileTop, profileAfter, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, branchSiteProfiles, pcLrProfiles, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath, discCommandLatencyCycles);
+        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, dumpDisassemblyRequests, pcProfileTop, profileAfter, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, branchSiteProfiles, pcLrProfiles, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath, discCommandLatencyCycles, sonicPathLookupTracePath);
         return true;
     }
 

@@ -16,6 +16,8 @@ public sealed class DolRunner
     private const uint SonicTrigTableInstructionsPerEntry = 180;
     private const uint SonicBitUnpackInstructionsPerRow = 400;
     private const uint SonicGxVertexEmitInstructionsPerVertex = 24;
+    private const uint SonicPathLookupEntryPc = 0x800E_ECFC;
+    private const uint SonicPathLookupByteTablePc = 0x8010_BA44;
 
     private static readonly uint[] VideoInterruptRegisters =
     [
@@ -353,6 +355,17 @@ public sealed class DolRunner
             };
         }
 
+        using TextWriter? sonicPathLookupTrace = OpenTraceFile(options.SonicPathLookupTracePath);
+        SonicPathLookupPending? sonicPathLookupPending = null;
+        int sonicPathLookupCalls = 0;
+        int sonicPathLookupMatches = 0;
+        int sonicPathLookupMismatches = 0;
+        int sonicPathLookupModelFailures = 0;
+        if (sonicPathLookupTrace is not null)
+        {
+            sonicPathLookupTrace.WriteLine("instruction,entry_pc,lr,path,predicted_status,predicted_result,actual_result,match,reason,path_text,entry_r0,entry_r4,entry_r5,entry_r6,entry_cr,actual_r0,actual_r4,actual_r5,actual_r6,actual_cr,actual_lr,actual_ctr,actual_xer");
+        }
+
         string GetStopReason(string? overrideReason = null)
         {
             if (overrideReason is not null)
@@ -552,6 +565,14 @@ public sealed class DolRunner
                     discInterface = BuildDiscInterfaceSummary(bus),
                     externalInterface = BuildExternalInterfaceSummary(bus),
                     sonicResourceState = BuildSonicResourceStateSummary(bus, state),
+                    sonicPathLookup = sonicPathLookupTrace is null ? null : new
+                    {
+                        calls = sonicPathLookupCalls,
+                        matches = sonicPathLookupMatches,
+                        mismatches = sonicPathLookupMismatches,
+                        modelFailures = sonicPathLookupModelFailures,
+                        pending = sonicPathLookupPending is not null,
+                    },
                     pcProfile = options.PcProfileTop is int pcProfileTop && pcProfile is not null
                         ? BuildPcProfileSummary(pcProfile, pcProfileTop, executed, options.ProfileAfter.GetValueOrDefault())
                         : null,
@@ -724,6 +745,40 @@ public sealed class DolRunner
 
                 currentPc = pc;
                 currentInstruction = bus.Read32(pc);
+                if (sonicPathLookupTrace is not null)
+                {
+                    if (sonicPathLookupPending is SonicPathLookupPending pending && pc == pending.Lr)
+                    {
+                        uint actualResult = state.Gpr[3];
+                        bool modelMatched = pending.Prediction.Success && actualResult == pending.Prediction.Result;
+                        if (pending.Prediction.Success)
+                        {
+                            if (modelMatched)
+                            {
+                                sonicPathLookupMatches++;
+                            }
+                            else
+                            {
+                                sonicPathLookupMismatches++;
+                            }
+                        }
+                        else
+                        {
+                            sonicPathLookupModelFailures++;
+                        }
+
+                        sonicPathLookupTrace.WriteLine($"{pending.EntryInstruction},0x{pending.EntryPc:X8},0x{pending.Lr:X8},0x{pending.Path:X8},{(pending.Prediction.Success ? "ok" : "model-failure")},0x{pending.Prediction.Result:X8},0x{actualResult:X8},{(pending.Prediction.Success ? modelMatched.ToString().ToLowerInvariant() : string.Empty)},\"{EscapeCsv(pending.Prediction.Reason)}\",\"{EscapeCsv(pending.Prediction.PathText)}\",0x{pending.EntryR0:X8},0x{pending.EntryR4:X8},0x{pending.EntryR5:X8},0x{pending.EntryR6:X8},0x{pending.EntryCr:X8},0x{state.Gpr[0]:X8},0x{state.Gpr[4]:X8},0x{state.Gpr[5]:X8},0x{state.Gpr[6]:X8},0x{state.Cr:X8},0x{state.Lr:X8},0x{state.Ctr:X8},0x{state.Xer:X8}");
+                        sonicPathLookupPending = null;
+                    }
+
+                    if (pc == SonicPathLookupEntryPc)
+                    {
+                        sonicPathLookupCalls++;
+                        SonicPathLookupPrediction prediction = PredictSonicPathLookup(bus, state);
+                        sonicPathLookupPending = new SonicPathLookupPending(executed + 1, pc, state.Lr, state.Gpr[3], prediction, state.Gpr[0], state.Gpr[4], state.Gpr[5], state.Gpr[6], state.Cr);
+                    }
+                }
+
                 if (profileThisInstruction && pcLrProfiles is not null && pcLrProfiles.TryGetValue(pc, out Dictionary<uint, ulong>? pcLrProfile))
                 {
                     pcLrProfile.TryGetValue(state.Lr, out ulong pcLrCount);
@@ -4995,6 +5050,343 @@ public sealed class DolRunner
         && bus.Read32(pc + 0x274) == 0x83E1_0024
         && bus.Read32(pc + 0x278) == 0x3821_0028
         && bus.Read32(pc + 0x27C) == 0x4E80_0020;
+
+    private sealed record SonicPathLookupPending(
+        int EntryInstruction,
+        uint EntryPc,
+        uint Lr,
+        uint Path,
+        SonicPathLookupPrediction Prediction,
+        uint EntryR0,
+        uint EntryR4,
+        uint EntryR5,
+        uint EntryR6,
+        uint EntryCr);
+
+    private sealed record SonicPathLookupPrediction(bool Success, uint Result, string Reason, string PathText);
+
+    private readonly record struct SonicPathLookupEntry(uint Word0, uint ParentIndex, uint EndIndex)
+    {
+        public bool HasChildren => (Word0 & 0xFF00_0000) != 0;
+
+        public uint NameOffset => Word0 & 0x00FF_FFFF;
+    }
+
+    private static SonicPathLookupPrediction PredictSonicPathLookup(GameCubeBus bus, PowerPcState state)
+    {
+        GameCubeMemory memory = bus.Memory;
+        if (!TryMatchSonicByteTableLookup(bus, SonicPathLookupByteTablePc, out uint byteTableAddress)
+            || !memory.IsMainRamAddress(byteTableAddress, 0x100))
+        {
+            return new SonicPathLookupPrediction(false, 0, "byte-table-signature", string.Empty);
+        }
+
+        uint pathAddress = state.Gpr[3];
+        if (!TryReadNullTerminatedAscii(memory, pathAddress, out string pathText))
+        {
+            return new SonicPathLookupPrediction(false, 0, "path-string", string.Empty);
+        }
+
+        uint smallData = state.Gpr[13];
+        if (!TryReadMainRam32(memory, unchecked(smallData - 30068), out uint entryTable)
+            || !TryReadMainRam32(memory, unchecked(smallData - 30064), out uint nameTable)
+            || !TryReadMainRam32(memory, unchecked(smallData - 30056), out uint currentIndex)
+            || !TryReadMainRam32(memory, unchecked(smallData - 30052), out uint warningFlag))
+        {
+            return new SonicPathLookupPrediction(false, 0, "globals", pathText);
+        }
+
+        uint pathCursor = pathAddress;
+        for (uint iterations = 0; iterations < MaxFastForwardStringLengthBytes; iterations++)
+        {
+            if (!memory.IsMainRamAddress(pathCursor, 1))
+            {
+                return new SonicPathLookupPrediction(false, 0, "path-cursor", pathText);
+            }
+
+            byte first = memory.Read8(pathCursor);
+            if (first == 0)
+            {
+                return new SonicPathLookupPrediction(true, currentIndex, "empty-or-complete", pathText);
+            }
+
+            if (first == (byte)'/')
+            {
+                currentIndex = 0;
+                pathCursor++;
+                continue;
+            }
+
+            if (first == (byte)'.')
+            {
+                if (!memory.IsMainRamAddress(pathCursor + 1, 1))
+                {
+                    return new SonicPathLookupPrediction(false, 0, "dot-peek", pathText);
+                }
+
+                byte second = memory.Read8(pathCursor + 1);
+                if (second == (byte)'.')
+                {
+                    if (!memory.IsMainRamAddress(pathCursor + 2, 1))
+                    {
+                        return new SonicPathLookupPrediction(false, 0, "dotdot-peek", pathText);
+                    }
+
+                    byte third = memory.Read8(pathCursor + 2);
+                    if (third == (byte)'/')
+                    {
+                        if (!TryReadSonicPathLookupEntry(memory, entryTable, currentIndex, out SonicPathLookupEntry parentEntry))
+                        {
+                            return new SonicPathLookupPrediction(false, 0, "parent-entry", pathText);
+                        }
+
+                        currentIndex = parentEntry.ParentIndex;
+                        pathCursor += 3;
+                        continue;
+                    }
+
+                    if (third == 0)
+                    {
+                        if (!TryReadSonicPathLookupEntry(memory, entryTable, currentIndex, out SonicPathLookupEntry parentEntry))
+                        {
+                            return new SonicPathLookupPrediction(false, 0, "parent-entry", pathText);
+                        }
+
+                        return new SonicPathLookupPrediction(true, parentEntry.ParentIndex, "terminal-parent", pathText);
+                    }
+                }
+                else if (second == (byte)'/')
+                {
+                    pathCursor += 2;
+                    continue;
+                }
+                else if (second == 0)
+                {
+                    return new SonicPathLookupPrediction(true, currentIndex, "terminal-self", pathText);
+                }
+            }
+
+            if (!TryFindSonicPathSegmentEnd(memory, pathCursor, out uint segmentEnd, out bool hasTrailingSlash))
+            {
+                return new SonicPathLookupPrediction(false, 0, "segment-end", pathText);
+            }
+
+            if (warningFlag == 0 && !SonicPathSegmentAvoidsWarning(memory, pathCursor, segmentEnd))
+            {
+                return new SonicPathLookupPrediction(false, 0, "warning-path", pathText);
+            }
+
+            if (!TryReadSonicPathLookupEntry(memory, entryTable, currentIndex, out SonicPathLookupEntry currentEntry))
+            {
+                return new SonicPathLookupPrediction(false, 0, "current-entry", pathText);
+            }
+
+            uint segmentLength = unchecked(segmentEnd - pathCursor);
+            uint candidateIndex = currentIndex + 1;
+            bool matched = false;
+            while (candidateIndex < currentEntry.EndIndex)
+            {
+                if (!TryReadSonicPathLookupEntry(memory, entryTable, candidateIndex, out SonicPathLookupEntry candidateEntry))
+                {
+                    return new SonicPathLookupPrediction(false, 0, "candidate-entry", pathText);
+                }
+
+                if (candidateEntry.HasChildren || !hasTrailingSlash)
+                {
+                    uint nameAddress = unchecked(nameTable + candidateEntry.NameOffset);
+                    if (!TrySonicPathSegmentMatches(memory, byteTableAddress, nameAddress, pathCursor, segmentLength, out bool segmentMatches, out bool nameWasPrefix))
+                    {
+                        return new SonicPathLookupPrediction(false, 0, "segment-compare", pathText);
+                    }
+
+                    if (segmentMatches)
+                    {
+                        currentIndex = candidateIndex;
+                        matched = true;
+                        break;
+                    }
+
+                    if (nameWasPrefix)
+                    {
+                        candidateIndex = candidateEntry.HasChildren ? candidateEntry.EndIndex : candidateIndex + 1;
+                        continue;
+                    }
+                }
+
+                candidateIndex++;
+            }
+
+            if (!matched)
+            {
+                return new SonicPathLookupPrediction(true, 0xFFFF_FFFF, "not-found", pathText);
+            }
+
+            if (!hasTrailingSlash)
+            {
+                return new SonicPathLookupPrediction(true, currentIndex, "found", pathText);
+            }
+
+            pathCursor = segmentEnd + 1;
+        }
+
+        return new SonicPathLookupPrediction(false, 0, "iteration-limit", pathText);
+    }
+
+    private static bool TryReadMainRam32(GameCubeMemory memory, uint address, out uint value)
+    {
+        value = 0;
+        if (!memory.IsMainRamAddress(address, sizeof(uint)))
+        {
+            return false;
+        }
+
+        value = memory.Read32(address);
+        return true;
+    }
+
+    private static bool TryReadSonicPathLookupEntry(GameCubeMemory memory, uint entryTable, uint index, out SonicPathLookupEntry entry)
+    {
+        entry = default;
+        if (index > 0x0010_0000)
+        {
+            return false;
+        }
+
+        uint address = unchecked(entryTable + index * 12);
+        if (!memory.IsMainRamAddress(address, 12))
+        {
+            return false;
+        }
+
+        entry = new SonicPathLookupEntry(memory.Read32(address), memory.Read32(address + 4), memory.Read32(address + 8));
+        return true;
+    }
+
+    private static bool TryReadNullTerminatedAscii(GameCubeMemory memory, uint address, out string text)
+    {
+        text = string.Empty;
+        List<char> chars = [];
+        for (uint offset = 0; offset < MaxFastForwardStringLengthBytes; offset++)
+        {
+            uint current = unchecked(address + offset);
+            if (!memory.IsMainRamAddress(current, 1))
+            {
+                return false;
+            }
+
+            byte value = memory.Read8(current);
+            if (value == 0)
+            {
+                text = new string([.. chars]);
+                return true;
+            }
+
+            chars.Add(value is >= 0x20 and <= 0x7E ? (char)value : '.');
+        }
+
+        return false;
+    }
+
+    private static bool TryFindSonicPathSegmentEnd(GameCubeMemory memory, uint segmentStart, out uint segmentEnd, out bool hasTrailingSlash)
+    {
+        segmentEnd = segmentStart;
+        hasTrailingSlash = false;
+        for (uint offset = 0; offset < MaxFastForwardStringLengthBytes; offset++)
+        {
+            uint current = unchecked(segmentStart + offset);
+            if (!memory.IsMainRamAddress(current, 1))
+            {
+                return false;
+            }
+
+            byte value = memory.Read8(current);
+            if (value == 0)
+            {
+                segmentEnd = current;
+                return true;
+            }
+
+            if (value == (byte)'/')
+            {
+                segmentEnd = current;
+                hasTrailingSlash = true;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool SonicPathSegmentAvoidsWarning(GameCubeMemory memory, uint segmentStart, uint segmentEnd)
+    {
+        bool sawDot = false;
+        uint suffixStart = 0;
+        for (uint current = segmentStart; current < segmentEnd; current++)
+        {
+            byte value = memory.Read8(current);
+            if (value == (byte)'.')
+            {
+                uint offset = unchecked(current - segmentStart);
+                if (offset <= 8 && sawDot)
+                {
+                    return false;
+                }
+
+                if (!sawDot)
+                {
+                    suffixStart = current + 1;
+                    sawDot = true;
+                }
+            }
+            else if (value == (byte)' ')
+            {
+                return false;
+            }
+        }
+
+        return !sawDot || unchecked(segmentEnd - suffixStart) <= 3;
+    }
+
+    private static bool TrySonicPathSegmentMatches(GameCubeMemory memory, uint byteTableAddress, uint nameAddress, uint segmentStart, uint segmentLength, out bool matches, out bool nameWasPrefix)
+    {
+        matches = false;
+        nameWasPrefix = false;
+        for (uint offset = 0; offset <= segmentLength; offset++)
+        {
+            uint nameCurrent = unchecked(nameAddress + offset);
+            if (!memory.IsMainRamAddress(nameCurrent, 1))
+            {
+                return false;
+            }
+
+            byte nameByte = memory.Read8(nameCurrent);
+            if (nameByte == 0)
+            {
+                matches = offset == segmentLength;
+                nameWasPrefix = offset < segmentLength;
+                return true;
+            }
+
+            if (offset >= segmentLength)
+            {
+                return true;
+            }
+
+            uint segmentCurrent = unchecked(segmentStart + offset);
+            if (!memory.IsMainRamAddress(segmentCurrent, 1))
+            {
+                return false;
+            }
+
+            byte segmentByte = memory.Read8(segmentCurrent);
+            if (MapSonicByteTable(memory, byteTableAddress, nameByte) != MapSonicByteTable(memory, byteTableAddress, segmentByte))
+            {
+                return true;
+            }
+        }
+
+        return true;
+    }
 
     private static bool TryFastForwardSonicByteTableLookup(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {

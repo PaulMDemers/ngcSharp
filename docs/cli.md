@@ -103,6 +103,14 @@ SI and EXI MMIO traces:
 dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "path\to\game.rvz" --max-instructions 12000000 --trace-si artifacts/si.csv --trace-exi artifacts/exi.csv --quiet --no-registers
 ```
 
+Sonic path lookup differential trace:
+
+```powershell
+dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz" --max-instructions 20000000 --memory-card-a --controller-button a --fast-forward-idle --fast-forward-write-watch --trace-sonic-path-lookup artifacts/sonic-path-lookup.csv --run-summary artifacts/sonic-path-lookup-summary.json --no-registers
+```
+
+`--trace-sonic-path-lookup <csv-path>` observes Sonic Adventure 2 Battle's live `0x800EECFC` resource pathname lookup without skipping it. The CSV compares the C# table-walk model against the PPC routine's real return value and records volatile register/CR side effects for future fast-forward validation.
+
 Stop and watch examples:
 
 ```powershell
