@@ -124,6 +124,7 @@ public sealed class DolRunner
         ulong bulkFastForwardInstructions = 0;
         ulong cacheFastForwardInstructions = 0;
         ulong leafFastForwardInstructions = 0;
+        ulong timeBaseReadFastForwardInstructions = 0;
         ulong externalInterruptLeafFastForwardInstructions = 0;
         ulong memoryCopyFastForwardInstructions = 0;
         ulong textureSampleFastForwardInstructions = 0;
@@ -611,6 +612,7 @@ public sealed class DolRunner
                         bulkMemoryInstructions = bulkFastForwardInstructions,
                         cacheInstructions = cacheFastForwardInstructions,
                         leafHelperInstructions = leafFastForwardInstructions,
+                        timeBaseReadInstructions = timeBaseReadFastForwardInstructions,
                         externalInterruptLeafInstructions = externalInterruptLeafFastForwardInstructions,
                         memoryCopyInstructions = memoryCopyFastForwardInstructions,
                         textureSampleInstructions = textureSampleFastForwardInstructions,
@@ -804,6 +806,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardExternalInterruptLeafHelper(state, bus, out skippedInstructions))
                 {
                     externalInterruptLeafFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardTimeBaseReadLeaf(state, bus, pc, out skippedInstructions))
+                {
+                    timeBaseReadFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1272,6 +1281,11 @@ public sealed class DolRunner
             if (leafFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {leafFastForwardInstructions} small leaf helper instruction(s).");
+            }
+
+            if (timeBaseReadFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {timeBaseReadFastForwardInstructions} timebase read instruction(s).");
             }
 
             if (externalInterruptLeafFastForwardInstructions != 0)
