@@ -18,6 +18,7 @@ public sealed class DolRunner
     private const uint SonicGxVertexEmitInstructionsPerVertex = 24;
     private const uint SonicPathLookupEntryPc = 0x800E_ECFC;
     private const uint SonicPathLookupByteTablePc = 0x8010_BA44;
+    private const int SonicPathLookupStackWindowBytes = 0xA0;
 
     private static readonly uint[] VideoInterruptRegisters =
     [
@@ -361,9 +362,12 @@ public sealed class DolRunner
         int sonicPathLookupMatches = 0;
         int sonicPathLookupMismatches = 0;
         int sonicPathLookupModelFailures = 0;
+        long sonicPathLookupActualInstructions = 0;
+        int sonicPathLookupMinActualInstructions = int.MaxValue;
+        int sonicPathLookupMaxActualInstructions = 0;
         if (sonicPathLookupTrace is not null)
         {
-            sonicPathLookupTrace.WriteLine("instruction,entry_pc,lr,path,predicted_status,predicted_result,actual_result,match,reason,path_text,entry_r0,entry_r4,entry_r5,entry_r6,entry_cr,actual_r0,actual_r4,actual_r5,actual_r6,actual_cr,actual_lr,actual_ctr,actual_xer");
+            sonicPathLookupTrace.WriteLine("instruction,entry_pc,lr,path,predicted_status,predicted_result,actual_result,match,reason,path_text,actual_instruction_count,entry_r0,entry_r4,entry_r5,entry_r6,entry_cr,actual_r0,actual_r4,actual_r5,actual_r6,actual_cr,actual_lr,actual_ctr,actual_xer,entry_gprs,actual_gprs,stack_base,entry_stack,actual_stack,stack_changed");
         }
 
         string GetStopReason(string? overrideReason = null)
@@ -571,6 +575,9 @@ public sealed class DolRunner
                         matches = sonicPathLookupMatches,
                         mismatches = sonicPathLookupMismatches,
                         modelFailures = sonicPathLookupModelFailures,
+                        actualInstructions = sonicPathLookupActualInstructions,
+                        minActualInstructions = sonicPathLookupMinActualInstructions == int.MaxValue ? 0 : sonicPathLookupMinActualInstructions,
+                        maxActualInstructions = sonicPathLookupMaxActualInstructions,
                         pending = sonicPathLookupPending is not null,
                     },
                     pcProfile = options.PcProfileTop is int pcProfileTop && pcProfile is not null
@@ -767,7 +774,12 @@ public sealed class DolRunner
                             sonicPathLookupModelFailures++;
                         }
 
-                        sonicPathLookupTrace.WriteLine($"{pending.EntryInstruction},0x{pending.EntryPc:X8},0x{pending.Lr:X8},0x{pending.Path:X8},{(pending.Prediction.Success ? "ok" : "model-failure")},0x{pending.Prediction.Result:X8},0x{actualResult:X8},{(pending.Prediction.Success ? modelMatched.ToString().ToLowerInvariant() : string.Empty)},\"{EscapeCsv(pending.Prediction.Reason)}\",\"{EscapeCsv(pending.Prediction.PathText)}\",0x{pending.EntryR0:X8},0x{pending.EntryR4:X8},0x{pending.EntryR5:X8},0x{pending.EntryR6:X8},0x{pending.EntryCr:X8},0x{state.Gpr[0]:X8},0x{state.Gpr[4]:X8},0x{state.Gpr[5]:X8},0x{state.Gpr[6]:X8},0x{state.Cr:X8},0x{state.Lr:X8},0x{state.Ctr:X8},0x{state.Xer:X8}");
+                        int actualInstructionCount = executed - pending.EntryInstruction + 1;
+                        sonicPathLookupActualInstructions += actualInstructionCount;
+                        sonicPathLookupMinActualInstructions = Math.Min(sonicPathLookupMinActualInstructions, actualInstructionCount);
+                        sonicPathLookupMaxActualInstructions = Math.Max(sonicPathLookupMaxActualInstructions, actualInstructionCount);
+                        string actualStackWindow = CaptureMemoryWindowHex(bus.Memory, pending.StackBase, SonicPathLookupStackWindowBytes);
+                        sonicPathLookupTrace.WriteLine($"{pending.EntryInstruction},0x{pending.EntryPc:X8},0x{pending.Lr:X8},0x{pending.Path:X8},{(pending.Prediction.Success ? "ok" : "model-failure")},0x{pending.Prediction.Result:X8},0x{actualResult:X8},{(pending.Prediction.Success ? modelMatched.ToString().ToLowerInvariant() : string.Empty)},\"{EscapeCsv(pending.Prediction.Reason)}\",\"{EscapeCsv(pending.Prediction.PathText)}\",{actualInstructionCount},0x{pending.EntryR0:X8},0x{pending.EntryR4:X8},0x{pending.EntryR5:X8},0x{pending.EntryR6:X8},0x{pending.EntryCr:X8},0x{state.Gpr[0]:X8},0x{state.Gpr[4]:X8},0x{state.Gpr[5]:X8},0x{state.Gpr[6]:X8},0x{state.Cr:X8},0x{state.Lr:X8},0x{state.Ctr:X8},0x{state.Xer:X8},\"{FormatGprSnapshot(pending.EntryGpr)}\",\"{FormatGprSnapshot(state.Gpr)}\",0x{pending.StackBase:X8},\"{pending.EntryStackWindow}\",\"{actualStackWindow}\",{(!string.Equals(pending.EntryStackWindow, actualStackWindow, StringComparison.Ordinal)).ToString().ToLowerInvariant()}");
                         sonicPathLookupPending = null;
                     }
 
@@ -775,7 +787,8 @@ public sealed class DolRunner
                     {
                         sonicPathLookupCalls++;
                         SonicPathLookupPrediction prediction = PredictSonicPathLookup(bus, state);
-                        sonicPathLookupPending = new SonicPathLookupPending(executed + 1, pc, state.Lr, state.Gpr[3], prediction, state.Gpr[0], state.Gpr[4], state.Gpr[5], state.Gpr[6], state.Cr);
+                        uint stackBase = unchecked(state.Gpr[1] - 0x50);
+                        sonicPathLookupPending = new SonicPathLookupPending(executed + 1, pc, state.Lr, state.Gpr[3], prediction, state.Gpr[0], state.Gpr[4], state.Gpr[5], state.Gpr[6], state.Cr, [.. state.Gpr], stackBase, CaptureMemoryWindowHex(bus.Memory, stackBase, SonicPathLookupStackWindowBytes));
                     }
                 }
 
@@ -5061,7 +5074,10 @@ public sealed class DolRunner
         uint EntryR4,
         uint EntryR5,
         uint EntryR6,
-        uint EntryCr);
+        uint EntryCr,
+        uint[] EntryGpr,
+        uint StackBase,
+        string EntryStackWindow);
 
     private sealed record SonicPathLookupPrediction(bool Success, uint Result, string Reason, string PathText);
 
@@ -5070,6 +5086,36 @@ public sealed class DolRunner
         public bool HasChildren => (Word0 & 0xFF00_0000) != 0;
 
         public uint NameOffset => Word0 & 0x00FF_FFFF;
+    }
+
+    private static string FormatGprSnapshot(IReadOnlyList<uint> gpr)
+    {
+        string[] fields = new string[32];
+        for (int index = 0; index < fields.Length; index++)
+        {
+            fields[index] = $"r{index}=0x{gpr[index]:X8}";
+        }
+
+        return string.Join(';', fields);
+    }
+
+    private static string CaptureMemoryWindowHex(GameCubeMemory memory, uint address, int length)
+    {
+        if (!memory.IsMainRamAddress(address, length))
+        {
+            return string.Empty;
+        }
+
+        char[] chars = new char[length * 2];
+        const string hex = "0123456789ABCDEF";
+        for (int offset = 0; offset < length; offset++)
+        {
+            byte value = memory.Read8(address + (uint)offset);
+            chars[offset * 2] = hex[value >> 4];
+            chars[offset * 2 + 1] = hex[value & 0x0F];
+        }
+
+        return new string(chars);
     }
 
     private static SonicPathLookupPrediction PredictSonicPathLookup(GameCubeBus bus, PowerPcState state)
