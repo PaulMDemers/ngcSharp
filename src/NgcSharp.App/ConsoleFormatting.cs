@@ -1,3 +1,4 @@
+using System.Globalization;
 using NgcSharp.Core;
 using NgcSharp.Cpu;
 
@@ -26,7 +27,7 @@ public static class ConsoleFormatting
 
     public static void WriteRegisters(TextWriter writer, PowerPcState state)
     {
-        writer.WriteLine($"PC=0x{state.Pc:X8} LR=0x{state.Lr:X8} CTR=0x{state.Ctr:X8} CR=0x{state.Cr:X8} XER=0x{state.Xer:X8} MSR=0x{state.Msr:X8} DEC=0x{state.Spr[22]:X8} SRR0=0x{state.Spr[26]:X8} SRR1=0x{state.Spr[27]:X8}");
+        writer.WriteLine($"PC=0x{state.Pc:X8} LR=0x{state.Lr:X8} CTR=0x{state.Ctr:X8} CR=0x{state.Cr:X8} XER=0x{state.Xer:X8} FPSCR=0x{state.Fpscr:X8} MSR=0x{state.Msr:X8} DEC=0x{state.Spr[22]:X8} SRR0=0x{state.Spr[26]:X8} SRR1=0x{state.Spr[27]:X8}");
         writer.WriteLine($"GQR0=0x{state.Spr[912]:X8} GQR1=0x{state.Spr[913]:X8} GQR2=0x{state.Spr[914]:X8} GQR3=0x{state.Spr[915]:X8} GQR4=0x{state.Spr[916]:X8} GQR5=0x{state.Spr[917]:X8} GQR6=0x{state.Spr[918]:X8} GQR7=0x{state.Spr[919]:X8}");
 
         for (int row = 0; row < 8; row++)
@@ -38,7 +39,23 @@ public static class ConsoleFormatting
                 $"r{baseRegister + 2:D2}=0x{state.Gpr[baseRegister + 2]:X8} " +
                 $"r{baseRegister + 3:D2}=0x{state.Gpr[baseRegister + 3]:X8}");
         }
+
+        for (int row = 0; row < 8; row++)
+        {
+            int baseRegister = row * 4;
+            writer.WriteLine(
+                $"f{baseRegister:D2}={FormatPairedSingle(state, baseRegister)} " +
+                $"f{baseRegister + 1:D2}={FormatPairedSingle(state, baseRegister + 1)} " +
+                $"f{baseRegister + 2:D2}={FormatPairedSingle(state, baseRegister + 2)} " +
+                $"f{baseRegister + 3:D2}={FormatPairedSingle(state, baseRegister + 3)}");
+        }
     }
+
+    private static string FormatPairedSingle(PowerPcState state, int register) =>
+        $"({FormatDouble(state.Fpr[register])},{FormatDouble(state.FprPair1[register])})";
+
+    private static string FormatDouble(double value) =>
+        value.ToString("R", CultureInfo.InvariantCulture);
 
     public static void WriteMmioSummary(TextWriter writer, IReadOnlyList<MmioAccess> accesses)
     {

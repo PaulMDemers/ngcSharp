@@ -68,7 +68,7 @@ Run a bounded disc probe:
 dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "path\to\game.rvz" --max-instructions 3000000 --fast-forward-idle --run-summary artifacts/run-summary.json --no-registers --quiet
 ```
 
-`--run-summary <json-path>` writes a compact JSON ledger with the executed instruction count, final PC, stop reason, selected registers, GX FIFO byte count, and fast-forward counters. It is the preferred way to compare bounded probes without scraping console output.
+`--run-summary <json-path>` writes a compact JSON ledger with the executed instruction count, final PC, stop reason, selected scalar registers, full GPR values, paired-single FPR lanes, GX FIFO byte count, and fast-forward counters. It is the preferred way to compare bounded probes without scraping console output.
 
 `--dump-disasm <addr> <count>` disassembles live emulated RAM after a bounded run or stop condition. This is useful for DVD-loaded overlays that are not visible through static `disc-disasm`.
 

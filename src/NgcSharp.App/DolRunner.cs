@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using NgcSharp.Core;
 using NgcSharp.Cpu;
@@ -528,30 +529,7 @@ public sealed class DolRunner
                         indirectCallProfileMs = RoundMilliseconds(indirectCallProfileMilliseconds),
                         memoryDumpMs = RoundMilliseconds(memoryDumpMilliseconds),
                     },
-                    registers = new
-                    {
-                        lr = $"0x{state.Lr:X8}",
-                        ctr = $"0x{state.Ctr:X8}",
-                        cr = $"0x{state.Cr:X8}",
-                        r0 = $"0x{state.Gpr[0]:X8}",
-                        r1 = $"0x{state.Gpr[1]:X8}",
-                        r2 = $"0x{state.Gpr[2]:X8}",
-                        r3 = $"0x{state.Gpr[3]:X8}",
-                        r4 = $"0x{state.Gpr[4]:X8}",
-                        r5 = $"0x{state.Gpr[5]:X8}",
-                        r6 = $"0x{state.Gpr[6]:X8}",
-                        r10 = $"0x{state.Gpr[10]:X8}",
-                        r13 = $"0x{state.Gpr[13]:X8}",
-                        r31 = $"0x{state.Gpr[31]:X8}",
-                        gqr0 = $"0x{state.Spr[912]:X8}",
-                        gqr1 = $"0x{state.Spr[913]:X8}",
-                        gqr2 = $"0x{state.Spr[914]:X8}",
-                        gqr3 = $"0x{state.Spr[915]:X8}",
-                        gqr4 = $"0x{state.Spr[916]:X8}",
-                        gqr5 = $"0x{state.Spr[917]:X8}",
-                        gqr6 = $"0x{state.Spr[918]:X8}",
-                        gqr7 = $"0x{state.Spr[919]:X8}",
-                    },
+                    registers = BuildRegisterSummary(state),
                     stopped = new
                     {
                         onPc = stoppedOnPc,
@@ -1880,6 +1858,51 @@ public sealed class DolRunner
     {
         return Math.Round(milliseconds, 3);
     }
+
+    private static object BuildRegisterSummary(PowerPcState state) => new
+    {
+        lr = $"0x{state.Lr:X8}",
+        ctr = $"0x{state.Ctr:X8}",
+        cr = $"0x{state.Cr:X8}",
+        xer = $"0x{state.Xer:X8}",
+        fpscr = $"0x{state.Fpscr:X8}",
+        msr = $"0x{state.Msr:X8}",
+        dec = $"0x{state.Spr[22]:X8}",
+        srr0 = $"0x{state.Spr[26]:X8}",
+        srr1 = $"0x{state.Spr[27]:X8}",
+        r0 = $"0x{state.Gpr[0]:X8}",
+        r1 = $"0x{state.Gpr[1]:X8}",
+        r2 = $"0x{state.Gpr[2]:X8}",
+        r3 = $"0x{state.Gpr[3]:X8}",
+        r4 = $"0x{state.Gpr[4]:X8}",
+        r5 = $"0x{state.Gpr[5]:X8}",
+        r6 = $"0x{state.Gpr[6]:X8}",
+        r10 = $"0x{state.Gpr[10]:X8}",
+        r13 = $"0x{state.Gpr[13]:X8}",
+        r31 = $"0x{state.Gpr[31]:X8}",
+        gqr0 = $"0x{state.Spr[912]:X8}",
+        gqr1 = $"0x{state.Spr[913]:X8}",
+        gqr2 = $"0x{state.Spr[914]:X8}",
+        gqr3 = $"0x{state.Spr[915]:X8}",
+        gqr4 = $"0x{state.Spr[916]:X8}",
+        gqr5 = $"0x{state.Spr[917]:X8}",
+        gqr6 = $"0x{state.Spr[918]:X8}",
+        gqr7 = $"0x{state.Spr[919]:X8}",
+        gpr = state.Gpr.Select(value => $"0x{value:X8}").ToArray(),
+        fpr = Enumerable.Range(0, state.Fpr.Length)
+            .Select(index => new
+            {
+                index,
+                value = FormatDouble(state.Fpr[index]),
+                pair1 = FormatDouble(state.FprPair1[index]),
+                bits = $"0x{unchecked((ulong)BitConverter.DoubleToInt64Bits(state.Fpr[index])):X16}",
+                pair1Bits = $"0x{unchecked((ulong)BitConverter.DoubleToInt64Bits(state.FprPair1[index])):X16}",
+            })
+            .ToArray(),
+    };
+
+    private static string FormatDouble(double value) =>
+        value.ToString("R", CultureInfo.InvariantCulture);
 
     private int WriteGxFrameSweep(GameCubeBus bus, RunDolOptions options, GxMemorySnapshotSet? gxMemorySnapshots)
     {
