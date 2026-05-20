@@ -313,6 +313,9 @@ public sealed class GameCubeBus : IMemoryBus
         uint status = NormalizeDiscInterfaceRead(0xCC00_6000, ReadMmioValue(0xCC00_6000));
         uint cover = NormalizeDiscInterfaceRead(0xCC00_6004, ReadMmioValue(0xCC00_6004));
         uint control = NormalizeDiscInterfaceRead(0xCC00_601C, ReadMmioValue(0xCC00_601C));
+        DiscInterfacePendingCommandDebugSnapshot? pendingCommand = _pendingDiscCommand is PendingDiscCommand pending
+            ? BuildPendingDiscInterfaceCommandSnapshot(pending)
+            : null;
         return new DiscInterfaceDebugSnapshot(
             ProcessorInterruptCause,
             ProcessorInterruptMask,
@@ -336,6 +339,7 @@ public sealed class GameCubeBus : IMemoryBus
             (status & DiscInterfaceInterruptMask) != 0,
             (status & DiscInterfaceBreakInterruptStatus) != 0,
             (status & DiscInterfaceBreakInterruptMask) != 0,
+            pendingCommand,
             _discInterfaceCommandHistory.ToArray());
     }
 
@@ -2404,6 +2408,25 @@ public sealed class GameCubeBus : IMemoryBus
         }
     }
 
+    private DiscInterfacePendingCommandDebugSnapshot BuildPendingDiscInterfaceCommandSnapshot(PendingDiscCommand command)
+    {
+        ulong elapsedCycles = _videoCycles >= command.StartCycle ? _videoCycles - command.StartCycle : 0;
+        return new DiscInterfacePendingCommandDebugSnapshot(
+            command.Sequence,
+            command.StartCycle,
+            elapsedCycles,
+            _pendingDiscCommandCycles,
+            command.LatencyCycles,
+            command.Command0,
+            command.Command1,
+            command.Command2,
+            command.DmaAddress,
+            command.DmaLength,
+            DecodeDiscInterfaceCommandName(command.Command0),
+            DecodeDiscInterfaceDiscOffset(command.Command0, command.Command1),
+            DecodeDiscInterfaceCommandLength(command.Command0, command.Command2, command.DmaLength));
+    }
+
     private static string DecodeDiscInterfaceCommandName(uint command0)
     {
         return (byte)(command0 >> 24) switch
@@ -4201,7 +4224,23 @@ public sealed record DiscInterfaceDebugSnapshot(
     bool TransferCompleteMask,
     bool BreakStatus,
     bool BreakMask,
+    DiscInterfacePendingCommandDebugSnapshot? PendingCommand,
     DiscInterfaceCommandDebugSnapshot[] CommandHistory);
+
+public sealed record DiscInterfacePendingCommandDebugSnapshot(
+    ulong Sequence,
+    ulong StartCycle,
+    ulong ElapsedCycles,
+    ulong RemainingCycles,
+    ulong LatencyCycles,
+    uint Command0,
+    uint Command1,
+    uint Command2,
+    uint DmaAddress,
+    uint DmaLength,
+    string CommandName,
+    uint DiscOffset,
+    uint CommandLength);
 
 public sealed record DiscInterfaceCommandDebugSnapshot(
     ulong Sequence,

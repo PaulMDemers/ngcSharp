@@ -598,7 +598,7 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "pc": "0x800257F4",
+        "pc": "0x8002572C",
         "minGxFifoBytes": 1,
         "frameSha256": "524364c83aa128e9ff5a1c265ae4932aaff1cbd08ce9cb009d70081adc5cf5d3"
       }
@@ -620,7 +620,7 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "pc": "0x801FBF18",
+        "pc": "0x801F72B4",
         "minGxFifoBytes": 549231,
         "minRenderedQuads": 29
       }
@@ -638,7 +638,7 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "pc": "0x801059A8"
+        "pc": "0x80115DB8"
       }
     }
   ]

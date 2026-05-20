@@ -376,6 +376,7 @@ foreach ($target in $selectedTargets) {
             diCommandLatencyOverrideCycles = ""
             diPendingCommand = ""
             diPendingCommandCycles = ""
+            diPendingCommandSummary = ""
             diCommandHistory = ""
             diRecentAccesses = ""
             exiPending = ""
@@ -739,6 +740,12 @@ foreach ($target in $selectedTargets) {
     $diCommandLatencyOverrideCycles = Get-Value $discInterface "commandLatencyOverrideCycles" ""
     $diPendingCommand = Get-Value $discInterface "hasPendingCommand" ""
     $diPendingCommandCycles = Get-Value $discInterface "pendingCommandCycles" ""
+    $diPendingCommandObject = Get-Value $discInterface "pendingCommand" $null
+    $diPendingCommandSummary = if ($null -ne $diPendingCommandObject) {
+        "#$(Get-Value $diPendingCommandObject "sequence") $(Get-Value $diPendingCommandObject "commandName") off=$(Get-Value $diPendingCommandObject "discOffset") len=$(Get-Value $diPendingCommandObject "commandLength") dma=$(Get-Value $diPendingCommandObject "dmaAddress")/$(Get-Value $diPendingCommandObject "dmaLength") elapsed=$(Get-Value $diPendingCommandObject "elapsedCycles") remaining=$(Get-Value $diPendingCommandObject "remainingCycles") latency=$(Get-Value $diPendingCommandObject "latencyCycles")"
+    } else {
+        ""
+    }
     $diCommandHistory = @((Get-Value $discInterface "commandHistory" @()) | Select-Object -Last 6 | ForEach-Object {
         "#$(Get-Value $_ "sequence") $(Get-Value $_ "commandName") off=$(Get-Value $_ "discOffset") len=$(Get-Value $_ "commandLength") dma=$(Get-Value $_ "dmaAddress")/$(Get-Value $_ "dmaLength") elapsed=$(Get-Value $_ "elapsedCycles") status=$(Get-Value $_ "status") irq=$(Get-Value $_ "processorInterruptPending")"
     }) -join "; "
@@ -864,6 +871,7 @@ foreach ($target in $selectedTargets) {
         diCommandLatencyOverrideCycles = $diCommandLatencyOverrideCycles
         diPendingCommand = $diPendingCommand
         diPendingCommandCycles = $diPendingCommandCycles
+        diPendingCommandSummary = $diPendingCommandSummary
         diCommandHistory = $diCommandHistory
         diRecentAccesses = $diRecentAccesses
         exiPending = $exiPending

@@ -6124,6 +6124,24 @@ public sealed class DolRunner
             commandLatencyOverrideCycles = bus.DiscInterfaceCommandLatencyOverrideCycles,
             hasPendingCommand = snapshot.HasPendingCommand,
             pendingCommandCycles = snapshot.PendingCommandCycles,
+            pendingCommand = snapshot.PendingCommand is DiscInterfacePendingCommandDebugSnapshot pendingCommand
+                ? new
+                {
+                    sequence = pendingCommand.Sequence,
+                    startCycle = pendingCommand.StartCycle,
+                    elapsedCycles = pendingCommand.ElapsedCycles,
+                    remainingCycles = pendingCommand.RemainingCycles,
+                    latencyCycles = pendingCommand.LatencyCycles,
+                    command0 = $"0x{pendingCommand.Command0:X8}",
+                    command1 = $"0x{pendingCommand.Command1:X8}",
+                    command2 = $"0x{pendingCommand.Command2:X8}",
+                    dmaAddress = $"0x{pendingCommand.DmaAddress:X8}",
+                    dmaLength = $"0x{pendingCommand.DmaLength:X8}",
+                    commandName = pendingCommand.CommandName,
+                    discOffset = $"0x{pendingCommand.DiscOffset:X8}",
+                    commandLength = $"0x{pendingCommand.CommandLength:X8}",
+                }
+                : null,
             lastError = $"0x{snapshot.LastError:X8}",
             deviceErrorStatus = snapshot.DeviceErrorStatus,
             deviceErrorMask = snapshot.DeviceErrorMask,

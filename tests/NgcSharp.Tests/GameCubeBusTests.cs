@@ -1167,6 +1167,12 @@ public sealed class GameCubeBusTests
             DiscInterfaceDebugSnapshot pending = bus.GetDiscInterfaceDebugSnapshot();
             Assert.True(pending.HasPendingCommand);
             Assert.Empty(pending.CommandHistory);
+            Assert.NotNull(pending.PendingCommand);
+            Assert.Equal("Read", pending.PendingCommand.CommandName);
+            Assert.Equal(0x80000u, pending.PendingCommand.CommandLength);
+            Assert.Equal(0x8000ul, pending.PendingCommand.LatencyCycles);
+            Assert.Equal(0x7FFFul, pending.PendingCommand.ElapsedCycles);
+            Assert.Equal(1ul, pending.PendingCommand.RemainingCycles);
 
             bus.Advance(1);
 

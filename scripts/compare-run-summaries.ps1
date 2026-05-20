@@ -199,6 +199,16 @@ function Format-DiCommandHistory {
     }) -join "; "
 }
 
+function Format-DiPendingCommand {
+    param($Command)
+
+    if ($null -eq $Command) {
+        return ""
+    }
+
+    return "#$(Get-Value $Command "sequence") $(Get-Value $Command "commandName") off=$(Get-Value $Command "discOffset") len=$(Get-Value $Command "commandLength") dma=$(Get-Value $Command "dmaAddress")/$(Get-Value $Command "dmaLength") elapsed=$(Get-Value $Command "elapsedCycles") remaining=$(Get-Value $Command "remainingCycles") latency=$(Get-Value $Command "latencyCycles")"
+}
+
 $beforeExi = Get-Value $beforeData "externalInterface" $null
 $afterExi = Get-Value $afterData "externalInterface" $null
 Add-Change $rows "interrupts" "processorInterruptCause" (Get-Value $beforeExi "processorInterruptCause") (Get-Value $afterExi "processorInterruptCause")
@@ -214,6 +224,7 @@ Add-Change $rows "di" "commandLatencyCycles" (Get-Value $beforeDi "commandLatenc
 Add-Change $rows "di" "commandLatencyOverrideCycles" (Get-Value $beforeDi "commandLatencyOverrideCycles") (Get-Value $afterDi "commandLatencyOverrideCycles")
 Add-Change $rows "di" "hasPendingCommand" (Get-Value $beforeDi "hasPendingCommand") (Get-Value $afterDi "hasPendingCommand")
 Add-Change $rows "di" "pendingCommandCycles" (Get-Value $beforeDi "pendingCommandCycles") (Get-Value $afterDi "pendingCommandCycles")
+Add-Change $rows "di" "pendingCommand" (Format-DiPendingCommand (Get-Value $beforeDi "pendingCommand" $null)) (Format-DiPendingCommand (Get-Value $afterDi "pendingCommand" $null))
 Add-Change $rows "di" "commandHistory" (Format-DiCommandHistory (Get-Value $beforeDi "commandHistory" @())) (Format-DiCommandHistory (Get-Value $afterDi "commandHistory" @()))
 Add-Change $rows "di" "recentAccesses" (Format-MmioAccesses (Get-Value $beforeDi "recentAccesses" @())) (Format-MmioAccesses (Get-Value $afterDi "recentAccesses" @()))
 
