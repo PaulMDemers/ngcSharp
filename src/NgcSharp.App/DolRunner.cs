@@ -157,6 +157,7 @@ public sealed class DolRunner
         ulong sonicResourceModeQueryFastForwardInstructions = 0;
         ulong sonicResourceStatePollFastForwardInstructions = 0;
         ulong sonicModeWrapperFastForwardInstructions = 0;
+        ulong sonicResourceFixupFastForwardInstructions = 0;
         uint currentPc = state.Pc;
         uint currentInstruction = 0;
         Action<uint, uint>? previousWriteObserver = bus.MainRamWrite32Observer;
@@ -660,6 +661,7 @@ public sealed class DolRunner
                         sonicResourceModeQueryInstructions = sonicResourceModeQueryFastForwardInstructions,
                         sonicResourceStatePollInstructions = sonicResourceStatePollFastForwardInstructions,
                         sonicModeWrapperInstructions = sonicModeWrapperFastForwardInstructions,
+                        sonicResourceFixupInstructions = sonicResourceFixupFastForwardInstructions,
                     },
                 };
 
@@ -1026,6 +1028,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicResourceStatePoll(state, bus, out skippedInstructions))
                 {
                     sonicResourceStatePollFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicResourceFixupRecord(state, bus, out skippedInstructions))
+                {
+                    sonicResourceFixupFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1425,6 +1434,11 @@ public sealed class DolRunner
             if (sonicModeWrapperFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {sonicModeWrapperFastForwardInstructions} Sonic mode wrapper instruction(s).");
+            }
+
+            if (sonicResourceFixupFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {sonicResourceFixupFastForwardInstructions} Sonic resource fixup instruction(s).");
             }
 
             if (gxMemoryCheckpoints.Length != 0)
@@ -5142,6 +5156,210 @@ public sealed class DolRunner
         return true;
     }
 
+    private static bool TryFastForwardSonicResourceFixupRecord(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (!MatchesSonicResourceFixupLoop(bus, state.Pc))
+        {
+            return false;
+        }
+
+        for (int records = 0; records < 100_000 && state.Pc == 0x800E_81A8; records++)
+        {
+            if (!TryFastForwardSonicResourceFixupRecordOnce(state, bus, out int recordInstructions, out bool terminalRecord))
+            {
+                return skippedInstructions != 0;
+            }
+
+            skippedInstructions += recordInstructions;
+            if (terminalRecord)
+            {
+                return true;
+            }
+        }
+
+        return skippedInstructions != 0;
+    }
+
+    private static bool TryFastForwardSonicResourceFixupRecordOnce(PowerPcState state, GameCubeBus bus, out int skippedInstructions, out bool terminalRecord)
+    {
+        skippedInstructions = 0;
+        terminalRecord = false;
+        if (!MatchesSonicResourceFixupLoop(bus, state.Pc))
+        {
+            return false;
+        }
+
+        GameCubeMemory memory = bus.Memory;
+        uint record = state.Gpr[30];
+        if (!memory.IsMainRamAddress(record, 8))
+        {
+            return false;
+        }
+
+        ushort offset = memory.Read16(record);
+        byte opcode = memory.Read8(record + 2);
+        byte tableIndex = memory.Read8(record + 3);
+        uint addend = memory.Read32(record + 4);
+        uint destination = unchecked(state.Gpr[28] + offset);
+        uint baseValue = 0;
+        if (state.Gpr[31] != 0)
+        {
+            uint tableBaseAddress = unchecked(state.Gpr[26] + 0x10);
+            if (!memory.IsMainRamAddress(tableBaseAddress, sizeof(uint)))
+            {
+                return false;
+            }
+
+            uint tableBase = memory.Read32(tableBaseAddress);
+            uint entryAddress = unchecked(tableBase + (uint)tableIndex * 8);
+            if (!memory.IsMainRamAddress(entryAddress, sizeof(uint)))
+            {
+                return false;
+            }
+
+            baseValue = memory.Read32(entryAddress) & 0xFFFF_FFFEu;
+        }
+
+        int estimatedInstructions = EstimateSonicResourceFixupInstructions(opcode, state.Gpr[31] != 0, state.Gpr[29] != 0);
+        if (estimatedInstructions == 0 || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: (uint)estimatedInstructions, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        state.Gpr[5] = baseValue;
+        state.Gpr[28] = destination;
+        switch (opcode)
+        {
+            case 0x00:
+            case 0xC9:
+                break;
+            case 0x01:
+                if (!memory.IsMainRamAddress(destination, sizeof(uint)))
+                {
+                    return false;
+                }
+
+                state.Gpr[0] = unchecked(baseValue + addend);
+                memory.Write32(destination, state.Gpr[0]);
+                break;
+            case 0x02:
+                if (!memory.IsMainRamAddress(destination, sizeof(uint)))
+                {
+                    return false;
+                }
+
+                state.Gpr[0] = unchecked(baseValue + addend);
+                state.Gpr[3] = memory.Read32(destination) & 0xFC00_0003u;
+                memory.Write32(destination, state.Gpr[3] | (state.Gpr[0] & 0x03FF_FFFCu));
+                break;
+            case 0x03:
+            case 0x04:
+                if (!memory.IsMainRamAddress(destination, sizeof(ushort)))
+                {
+                    return false;
+                }
+
+                state.Gpr[0] = unchecked(baseValue + addend);
+                memory.Write16(destination, (ushort)state.Gpr[0]);
+                break;
+            case 0x05:
+                if (!memory.IsMainRamAddress(destination, sizeof(ushort)))
+                {
+                    return false;
+                }
+
+                state.Gpr[0] = unchecked(baseValue + addend);
+                memory.Write16(destination, (ushort)(state.Gpr[0] >> 16));
+                break;
+            case 0x06:
+                if (!memory.IsMainRamAddress(destination, sizeof(ushort)))
+                {
+                    return false;
+                }
+
+                state.Gpr[4] = unchecked(baseValue + addend);
+                uint high = state.Gpr[4] >> 16;
+                if ((state.Gpr[4] & 0x8000) != 0)
+                {
+                    high++;
+                }
+
+                state.Gpr[0] = high;
+                memory.Write16(destination, (ushort)high);
+                break;
+            case 0x0A:
+                if (!memory.IsMainRamAddress(destination, sizeof(uint)))
+                {
+                    return false;
+                }
+
+                state.Gpr[0] = unchecked(baseValue + addend - destination);
+                state.Gpr[3] = memory.Read32(destination) & 0xFC00_0003u;
+                memory.Write32(destination, state.Gpr[3] | (state.Gpr[0] & 0x03FF_FFFCu));
+                break;
+            case 0xCA:
+            case 0xCB:
+                uint resourceTableAddress = unchecked(state.Gpr[27] + 0x10);
+                if (!memory.IsMainRamAddress(resourceTableAddress, sizeof(uint)))
+                {
+                    return false;
+                }
+
+                uint resourceTable = memory.Read32(resourceTableAddress);
+                uint resourceEntry = unchecked(resourceTable + (uint)tableIndex * 8);
+                if (!memory.IsMainRamAddress(resourceEntry, sizeof(uint)))
+                {
+                    return false;
+                }
+
+                state.Gpr[23] = resourceEntry;
+                state.Gpr[0] = memory.Read32(resourceEntry);
+                state.Gpr[28] = state.Gpr[0] & 0xFFFF_FFFEu;
+                state.Gpr[29] = (state.Gpr[0] & 1) != 0 ? resourceEntry : 0;
+                break;
+            default:
+                return false;
+        }
+
+        state.Gpr[4] = opcode;
+        state.Gpr[30] = unchecked(record + 8);
+        SetCr0ForUnsignedCompareImmediate(state, opcode, 0xCB);
+        state.Pc = opcode == 0xCB ? 0x800E_835C : 0x800E_81A8;
+        terminalRecord = opcode == 0xCB;
+        skippedInstructions = estimatedInstructions;
+        AdvanceFastForwardedInstructions(state, bus, (uint)skippedInstructions);
+        return true;
+    }
+
+    private static bool MatchesSonicResourceFixupLoop(GameCubeBus bus, uint pc) =>
+        pc == 0x800E_81A8
+        && bus.Read32(0x800E_81A8) == 0xA01E_0000
+        && bus.Read32(0x800E_81AC) == 0x281F_0000
+        && bus.Read32(0x800E_81B0) == 0x7F9C_0214
+        && bus.Read32(0x800E_8350) == 0x889E_0002
+        && bus.Read32(0x800E_8354) == 0x2804_00CB
+        && bus.Read32(0x800E_8358) == 0x4082_FE50;
+
+    private static int EstimateSonicResourceFixupInstructions(byte opcode, bool hasBaseTable, bool hasPreviousResource)
+    {
+        int prefix = hasBaseTable ? 10 : 5;
+        return opcode switch
+        {
+            0x00 => prefix + 11,
+            0x01 => prefix + 17,
+            0x02 => prefix + 16,
+            0x03 => prefix + 18,
+            0x04 => prefix + 16,
+            0x05 => prefix + 18,
+            0x06 => prefix + 17,
+            0x0A => prefix + 20,
+            0xC9 => prefix + 9,
+            0xCA or 0xCB => prefix + 31 + (hasPreviousResource ? 28 : 0),
+            _ => 0,
+        };
+    }
+
     private static bool TryFastForwardSonicModeWrapper(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         skippedInstructions = 0;
@@ -5279,6 +5497,14 @@ public sealed class DolRunner
         uint field = signedLeft == signedRight
             ? 0x2000_0000u
             : signedLeft < signedRight ? 0x8000_0000u : 0x4000_0000u;
+        state.Cr = (state.Cr & 0x0FFF_FFFF) | field | (state.Xer & 0x8000_0000) >> 3;
+    }
+
+    private static void SetCr0ForUnsignedCompareImmediate(PowerPcState state, uint left, uint right)
+    {
+        uint field = left == right
+            ? 0x2000_0000u
+            : left < right ? 0x8000_0000u : 0x4000_0000u;
         state.Cr = (state.Cr & 0x0FFF_FFFF) | field | (state.Xer & 0x8000_0000) >> 3;
     }
 
@@ -6443,7 +6669,7 @@ public sealed class DolRunner
     }
 
     private static string FormatPcTraceRegisters(PowerPcState state) =>
-        $"[LR=0x{state.Lr:X8} CTR=0x{state.Ctr:X8} CR=0x{state.Cr:X8} r1=0x{state.Gpr[1]:X8} r2=0x{state.Gpr[2]:X8} r3=0x{state.Gpr[3]:X8} r4=0x{state.Gpr[4]:X8} r5=0x{state.Gpr[5]:X8} r6=0x{state.Gpr[6]:X8} r7=0x{state.Gpr[7]:X8} r8=0x{state.Gpr[8]:X8} r9=0x{state.Gpr[9]:X8} r10=0x{state.Gpr[10]:X8} r13=0x{state.Gpr[13]:X8} r31=0x{state.Gpr[31]:X8}]";
+        $"[LR=0x{state.Lr:X8} CTR=0x{state.Ctr:X8} CR=0x{state.Cr:X8} r1=0x{state.Gpr[1]:X8} r2=0x{state.Gpr[2]:X8} r3=0x{state.Gpr[3]:X8} r4=0x{state.Gpr[4]:X8} r5=0x{state.Gpr[5]:X8} r6=0x{state.Gpr[6]:X8} r7=0x{state.Gpr[7]:X8} r8=0x{state.Gpr[8]:X8} r9=0x{state.Gpr[9]:X8} r10=0x{state.Gpr[10]:X8} r13=0x{state.Gpr[13]:X8} r23=0x{state.Gpr[23]:X8} r24=0x{state.Gpr[24]:X8} r25=0x{state.Gpr[25]:X8} r26=0x{state.Gpr[26]:X8} r27=0x{state.Gpr[27]:X8} r28=0x{state.Gpr[28]:X8} r29=0x{state.Gpr[29]:X8} r30=0x{state.Gpr[30]:X8} r31=0x{state.Gpr[31]:X8}]";
 
     private readonly record struct WatchedLoad(uint EffectiveAddress, uint Value, int TargetRegister);
 
