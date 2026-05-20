@@ -366,6 +366,19 @@ foreach ($target in $selectedTargets) {
             sonicSmallDataState = ""
             sonicModePointer = ""
             sonicModePointerValue = ""
+            processorInterruptCause = ""
+            processorInterruptMask = ""
+            diStatus = ""
+            diCommand0 = ""
+            diDmaAddress = ""
+            diDmaLength = ""
+            diPendingCommand = ""
+            diPendingCommandCycles = ""
+            exiPending = ""
+            exi0Parameter = ""
+            exi0SelectedDevice = ""
+            exi0MemoryCardCommand = ""
+            exi0MemoryCardStatus = ""
             frameSource = ""
             frameSourceAddress = ""
             frameSourceCopyIndex = ""
@@ -710,6 +723,24 @@ foreach ($target in $selectedTargets) {
         $regressions.Add("sonicStateByte47 expected $expectedSonicStateByte47 got $sonicStateByte47")
     }
 
+    $externalInterface = Get-Value $summary "externalInterface" $null
+    $processorInterruptCause = Get-Value $externalInterface "processorInterruptCause" ""
+    $processorInterruptMask = Get-Value $externalInterface "processorInterruptMask" ""
+    $discInterface = Get-Value $summary "discInterface" $null
+    $diStatus = Get-Value $discInterface "status" ""
+    $diCommand0 = Get-Value $discInterface "command0" ""
+    $diDmaAddress = Get-Value $discInterface "dmaAddress" ""
+    $diDmaLength = Get-Value $discInterface "dmaLength" ""
+    $diPendingCommand = Get-Value $discInterface "hasPendingCommand" ""
+    $diPendingCommandCycles = Get-Value $discInterface "pendingCommandCycles" ""
+    $exiPending = Get-Value $externalInterface "hasPendingExternalInterrupt" ""
+    $exiChannels = @((Get-Value $externalInterface "channels" @()))
+    $exi0 = if ($exiChannels.Count -gt 0) { $exiChannels[0] } else { $null }
+    $exi0Parameter = Get-Value $exi0 "parameter" ""
+    $exi0SelectedDevice = Get-Value $exi0 "selectedDevice" ""
+    $exi0MemoryCardCommand = Get-Value $exi0 "memoryCardCommand" ""
+    $exi0MemoryCardStatus = Get-Value $exi0 "memoryCardStatus" ""
+
     $displayCopies = Get-Value $gxCopySummary "displayCopies" ""
     $textureCopies = Get-Value $gxCopySummary "textureCopies" ""
     $nonblackDisplayCopies = Get-Value $gxCopySummary "nonblackDisplayCopies" ""
@@ -811,6 +842,19 @@ foreach ($target in $selectedTargets) {
         sonicSmallDataState = $sonicSmallDataState
         sonicModePointer = $sonicModePointer
         sonicModePointerValue = $sonicModePointerValue
+        processorInterruptCause = $processorInterruptCause
+        processorInterruptMask = $processorInterruptMask
+        diStatus = $diStatus
+        diCommand0 = $diCommand0
+        diDmaAddress = $diDmaAddress
+        diDmaLength = $diDmaLength
+        diPendingCommand = $diPendingCommand
+        diPendingCommandCycles = $diPendingCommandCycles
+        exiPending = $exiPending
+        exi0Parameter = $exi0Parameter
+        exi0SelectedDevice = $exi0SelectedDevice
+        exi0MemoryCardCommand = $exi0MemoryCardCommand
+        exi0MemoryCardStatus = $exi0MemoryCardStatus
         renderedQuads = $renderedQuads
         renderedTriangles = $renderedTriangles
         frameSource = $frameSource

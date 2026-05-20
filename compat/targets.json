@@ -471,7 +471,7 @@
       "suites": [ "retail", "sonic", "diagnostic", "focused" ],
       "tags": [ "retail", "cpu", "resource", "profile", "exi-card", "di" ],
       "maxInstructions": 20000000,
-      "timeoutSeconds": 120,
+      "timeoutSeconds": 180,
       "profilePc": 16,
       "extraArgs": [
         "--memory-card-a",

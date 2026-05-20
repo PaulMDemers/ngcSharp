@@ -72,7 +72,7 @@ Each run writes:
 - `summary.json`: full machine-readable run detail.
 - Per-target `stdout.txt`, `stderr.txt`, and `run-summary.json`.
 - Optional PNGs, traces, `gx-copies.csv`, and `gx-copies.summary.json` when requested by the target manifest.
-- Profile targets surface structured `topPc`, `topPcCount`, filtered non-external-interrupt top PCs, the first branch-site top target, a compact all-branch-site target summary, PC-to-LR caller profiles, Sonic resource-state fields, PRS decompression, resource-lookup, timebase-read, external-interrupt leaf, Sonic resource mode-query, Sonic resource state-poll, and Sonic mode-wrapper counters in `summary.csv`.
+- Profile targets surface structured `topPc`, `topPcCount`, filtered non-external-interrupt top PCs, the first branch-site top target, a compact all-branch-site target summary, PC-to-LR caller profiles, processor interrupt cause/mask, DI status/command state, EXI channel state, Sonic resource-state fields, PRS decompression, resource-lookup, timebase-read, external-interrupt leaf, Sonic resource mode-query, Sonic resource state-poll, and Sonic mode-wrapper counters in `summary.csv`.
 
 Compare two target run summaries without rereading large logs:
 

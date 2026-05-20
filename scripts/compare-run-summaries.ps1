@@ -163,6 +163,36 @@ $afterPcLr = @((Get-Value $afterData "pcLrProfiles" @()) | ForEach-Object {
 }) -join "; "
 Add-Change $rows "profile" "pcLrTopCallers" $beforePcLr $afterPcLr
 
+function Format-ExiChannel {
+    param($ExternalInterface, [int]$Channel)
+
+    $channels = @((Get-Value $ExternalInterface "channels" @()))
+    if ($channels.Count -le $Channel) {
+        return ""
+    }
+
+    $entry = $channels[$Channel]
+    return "param=$(Get-Value $entry "parameter") dev=$(Get-Value $entry "selectedDevice") cmd=$(Get-Value $entry "memoryCardCommand") status=$(Get-Value $entry "memoryCardStatus") irq=$(Get-Value $entry "transferCompleteStatus")/$(Get-Value $entry "transferCompleteMask")"
+}
+
+$beforeExi = Get-Value $beforeData "externalInterface" $null
+$afterExi = Get-Value $afterData "externalInterface" $null
+Add-Change $rows "interrupts" "processorInterruptCause" (Get-Value $beforeExi "processorInterruptCause") (Get-Value $afterExi "processorInterruptCause")
+Add-Change $rows "interrupts" "processorInterruptMask" (Get-Value $beforeExi "processorInterruptMask") (Get-Value $afterExi "processorInterruptMask")
+
+$beforeDi = Get-Value $beforeData "discInterface" $null
+$afterDi = Get-Value $afterData "discInterface" $null
+Add-Change $rows "di" "status" (Get-Value $beforeDi "status") (Get-Value $afterDi "status")
+Add-Change $rows "di" "command0" (Get-Value $beforeDi "command0") (Get-Value $afterDi "command0")
+Add-Change $rows "di" "dmaAddress" (Get-Value $beforeDi "dmaAddress") (Get-Value $afterDi "dmaAddress")
+Add-Change $rows "di" "dmaLength" (Get-Value $beforeDi "dmaLength") (Get-Value $afterDi "dmaLength")
+Add-Change $rows "di" "hasPendingCommand" (Get-Value $beforeDi "hasPendingCommand") (Get-Value $afterDi "hasPendingCommand")
+Add-Change $rows "di" "pendingCommandCycles" (Get-Value $beforeDi "pendingCommandCycles") (Get-Value $afterDi "pendingCommandCycles")
+
+Add-Change $rows "exi" "hasPendingExternalInterrupt" (Get-Value $beforeExi "hasPendingExternalInterrupt") (Get-Value $afterExi "hasPendingExternalInterrupt")
+Add-Change $rows "exi" "channel0" (Format-ExiChannel $beforeExi 0) (Format-ExiChannel $afterExi 0)
+Add-Change $rows "exi" "channel1" (Format-ExiChannel $beforeExi 1) (Format-ExiChannel $afterExi 1)
+
 if ($rows.Count -eq 0) {
     Write-Host "No differences found."
 } else {

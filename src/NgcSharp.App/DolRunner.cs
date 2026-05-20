@@ -514,6 +514,8 @@ public sealed class DolRunner
                         onGxFifoOffset = stoppedOnGxFifoOffset,
                         gxFifoOffset = options.StopOnGxFifoOffset,
                     },
+                    discInterface = BuildDiscInterfaceSummary(bus),
+                    externalInterface = BuildExternalInterfaceSummary(bus),
                     sonicResourceState = BuildSonicResourceStateSummary(bus, state),
                     pcProfile = options.PcProfileTop is int pcProfileTop && pcProfile is not null
                         ? BuildPcProfileSummary(pcProfile, pcProfileTop, executed)
@@ -6051,6 +6053,77 @@ public sealed class DolRunner
             modePointerValue = TryReadMainRam32(bus, modePointer + 0x0C, out uint modePointerValue)
                 ? $"0x{modePointerValue:X8}"
                 : null,
+        };
+    }
+
+    private static object BuildExternalInterfaceSummary(GameCubeBus bus)
+    {
+        ExternalInterfaceDebugSnapshot snapshot = bus.GetExternalInterfaceDebugSnapshot();
+        return new
+        {
+            processorInterruptCause = $"0x{snapshot.ProcessorInterruptCause:X8}",
+            processorInterruptMask = $"0x{snapshot.ProcessorInterruptMask:X8}",
+            hasPendingExternalInterrupt = snapshot.HasPendingExternalInterrupt,
+            channels = snapshot.Channels.Select(channel => new
+            {
+                channel = channel.Channel,
+                parameter = $"0x{channel.Parameter:X8}",
+                dmaAddress = $"0x{channel.DmaAddress:X8}",
+                dmaLength = $"0x{channel.DmaLength:X8}",
+                control = $"0x{channel.Control:X8}",
+                data = $"0x{channel.Data:X8}",
+                selectedDevice = channel.SelectedDevice,
+                deviceConnected = channel.DeviceConnected,
+                transferCompleteStatus = channel.TransferCompleteStatus,
+                transferCompleteMask = channel.TransferCompleteMask,
+                interruptStatus = channel.InterruptStatus,
+                interruptMask = channel.InterruptMask,
+                externalInterruptStatus = channel.ExternalInterruptStatus,
+                externalInterruptMask = channel.ExternalInterruptMask,
+                command = $"0x{channel.Command:X8}",
+                hasCommand = channel.HasCommand,
+                pendingImmediateWrite = channel.PendingImmediateWrite,
+                pendingWriteOffset = $"0x{channel.PendingWriteOffset:X8}",
+                memoryCardCommand = channel.MemoryCardCommand,
+                memoryCardCommandStarted = channel.MemoryCardCommandStarted,
+                memoryCardCommandByteCount = channel.MemoryCardCommandByteCount,
+                memoryCardAddressBytesReceived = channel.MemoryCardAddressBytesReceived,
+                memoryCardAddress = $"0x{channel.MemoryCardAddress:X8}",
+                memoryCardOffset = $"0x{channel.MemoryCardOffset:X8}",
+                memoryCardDataBytesTransferred = channel.MemoryCardDataBytesTransferred,
+                memoryCardStatus = $"0x{channel.MemoryCardStatus:X2}",
+                memoryCardInterruptEnabled = channel.MemoryCardInterruptEnabled,
+            }).ToArray(),
+        };
+    }
+
+    private static object BuildDiscInterfaceSummary(GameCubeBus bus)
+    {
+        DiscInterfaceDebugSnapshot snapshot = bus.GetDiscInterfaceDebugSnapshot();
+        return new
+        {
+            processorInterruptCause = $"0x{snapshot.ProcessorInterruptCause:X8}",
+            processorInterruptMask = $"0x{snapshot.ProcessorInterruptMask:X8}",
+            hasPendingExternalInterrupt = snapshot.HasPendingExternalInterrupt,
+            status = $"0x{snapshot.Status:X8}",
+            cover = $"0x{snapshot.Cover:X8}",
+            command0 = $"0x{snapshot.Command0:X8}",
+            command1 = $"0x{snapshot.Command1:X8}",
+            command2 = $"0x{snapshot.Command2:X8}",
+            dmaAddress = $"0x{snapshot.DmaAddress:X8}",
+            dmaLength = $"0x{snapshot.DmaLength:X8}",
+            control = $"0x{snapshot.Control:X8}",
+            immediateData = $"0x{snapshot.ImmediateData:X8}",
+            configuration = $"0x{snapshot.Configuration:X8}",
+            hasPendingCommand = snapshot.HasPendingCommand,
+            pendingCommandCycles = snapshot.PendingCommandCycles,
+            lastError = $"0x{snapshot.LastError:X8}",
+            deviceErrorStatus = snapshot.DeviceErrorStatus,
+            deviceErrorMask = snapshot.DeviceErrorMask,
+            transferCompleteStatus = snapshot.TransferCompleteStatus,
+            transferCompleteMask = snapshot.TransferCompleteMask,
+            breakStatus = snapshot.BreakStatus,
+            breakMask = snapshot.BreakMask,
         };
     }
 

@@ -63,7 +63,7 @@ public sealed class GameCubeBusTests
         GameCubeBus bus = new();
 
         bus.Write32(0xCC00_3004, GameCubeBus.ProcessorInterfaceExternalInterrupt);
-        bus.Write32(0xCC00_6800, 0x100 | GameCubeBus.ExternalInterfaceTransferCompleteMask);
+        bus.Write32(0xCC00_6800, 0x080 | GameCubeBus.ExternalInterfaceTransferCompleteMask);
         bus.Write32(0xCC00_6810, 0x2000_0000);
         bus.Write32(0xCC00_680C, 0x39);
 
@@ -74,6 +74,59 @@ public sealed class GameCubeBusTests
 
         Assert.False(bus.HasPendingExternalInterrupt);
         Assert.Equal(0u, bus.Read32(0xCC00_6800) & GameCubeBus.ExternalInterfaceTransferCompleteStatus);
+    }
+
+    [Fact]
+    public void ExiDebugSnapshotReportsChannelState()
+    {
+        GameCubeBus bus = new()
+        {
+            ExternalInterfaceMemoryCardSlotAInserted = true,
+        };
+
+        bus.Write32(0xCC00_3004, GameCubeBus.ProcessorInterfaceExternalInterrupt);
+        bus.Write32(0xCC00_6800, 0x080 | GameCubeBus.ExternalInterfaceTransferCompleteMask);
+        bus.Write32(0xCC00_6810, 0x5200_0000);
+        bus.Write32(0xCC00_680C, 0x35);
+
+        ExternalInterfaceDebugSnapshot snapshot = bus.GetExternalInterfaceDebugSnapshot();
+        ExternalInterfaceChannelDebugSnapshot channel = snapshot.Channels[0];
+
+        Assert.True(snapshot.HasPendingExternalInterrupt);
+        Assert.Equal(GameCubeBus.ProcessorInterfaceExternalInterrupt, snapshot.ProcessorInterruptCause & GameCubeBus.ProcessorInterfaceExternalInterrupt);
+        Assert.Equal(GameCubeBus.ProcessorInterfaceExternalInterrupt, snapshot.ProcessorInterruptMask & GameCubeBus.ProcessorInterfaceExternalInterrupt);
+        Assert.True(channel.DeviceConnected);
+        Assert.True(channel.TransferCompleteStatus);
+        Assert.True(channel.TransferCompleteMask);
+        Assert.Equal(0, channel.SelectedDevice);
+        Assert.Equal("ReadBlock", channel.MemoryCardCommand);
+        Assert.True(channel.MemoryCardCommandStarted);
+        Assert.Equal(4, channel.MemoryCardCommandByteCount);
+        Assert.Equal(3, channel.MemoryCardAddressBytesReceived);
+    }
+
+    [Fact]
+    public void DiscDebugSnapshotReportsPendingCommandState()
+    {
+        GameCubeBus bus = new();
+
+        bus.Write32(0xCC00_6000, GameCubeBus.DiscInterfaceInterruptMask);
+        bus.Write32(0xCC00_6008, 0xA800_0000);
+        bus.Write32(0xCC00_600C, 0x0000_4000);
+        bus.Write32(0xCC00_6010, 0x0000_0200);
+        bus.Write32(0xCC00_6014, 0x8000_1000);
+        bus.Write32(0xCC00_6018, 0x0000_0200);
+        bus.Write32(0xCC00_601C, 0x0000_0001);
+
+        DiscInterfaceDebugSnapshot snapshot = bus.GetDiscInterfaceDebugSnapshot();
+
+        Assert.Equal(GameCubeBus.DiscInterfaceInterruptMask, snapshot.Status & GameCubeBus.DiscInterfaceInterruptMask);
+        Assert.True(snapshot.HasPendingCommand);
+        Assert.True(snapshot.PendingCommandCycles > 0);
+        Assert.Equal(0xA800_0000u, snapshot.Command0);
+        Assert.Equal(0x8000_1000u, snapshot.DmaAddress);
+        Assert.Equal(0x0000_0200u, snapshot.DmaLength);
+        Assert.Equal(1u, snapshot.Control & 1u);
     }
 
     [Fact]
