@@ -366,6 +366,10 @@ foreach ($target in $selectedTargets) {
             sonicSmallDataState = ""
             sonicModePointer = ""
             sonicModePointerValue = ""
+            watchLoadMatches = ""
+            watchPcTraceMatches = ""
+            watchWriteMatches = ""
+            watchMemoryChanges = ""
             processorInterruptCause = ""
             processorInterruptMask = ""
             diStatus = ""
@@ -723,6 +727,12 @@ foreach ($target in $selectedTargets) {
     $sonicModePointer = Get-Value $sonicResourceState "modePointer" ""
     $sonicModePointerValue = Get-Value $sonicResourceState "modePointerValue" ""
 
+    $watches = Get-Value $summary "watches" $null
+    $watchLoadMatches = Get-Value $watches "loadMatches" ""
+    $watchPcTraceMatches = Get-Value $watches "pcTraceMatches" ""
+    $watchWriteMatches = Get-Value $watches "writeMatches" ""
+    $watchMemoryChanges = Get-Value $watches "memoryChanges" ""
+
     $expectedSonicStateByte47 = Get-Value $expected "sonicStateByte47" $null
     if ($status -eq "ok" -and $null -ne $expectedSonicStateByte47 -and [int]$sonicStateByte47 -ne [int]$expectedSonicStateByte47) {
         $regressions.Add("sonicStateByte47 expected $expectedSonicStateByte47 got $sonicStateByte47")
@@ -861,6 +871,10 @@ foreach ($target in $selectedTargets) {
         sonicSmallDataState = $sonicSmallDataState
         sonicModePointer = $sonicModePointer
         sonicModePointerValue = $sonicModePointerValue
+        watchLoadMatches = $watchLoadMatches
+        watchPcTraceMatches = $watchPcTraceMatches
+        watchWriteMatches = $watchWriteMatches
+        watchMemoryChanges = $watchMemoryChanges
         processorInterruptCause = $processorInterruptCause
         processorInterruptMask = $processorInterruptMask
         diStatus = $diStatus

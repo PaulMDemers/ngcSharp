@@ -99,6 +99,12 @@ public sealed class DolRunner
         int emittedGprWatchChanges = 0;
         int emittedPcTraceChanges = 0;
         int emittedPrsTraceChanges = 0;
+        int writeWatchMatches = 0;
+        int loadWatchMatches = 0;
+        int indirectCallWatchMatches = 0;
+        int gprWatchChanges = 0;
+        int memoryWatchChanges = 0;
+        int pcTraceMatches = 0;
         bool watchLimitNoticeEmitted = false;
         bool callWatchLimitNoticeEmitted = false;
         bool loadWatchLimitNoticeEmitted = false;
@@ -260,7 +266,6 @@ public sealed class DolRunner
         if (HasWriteWatch(options))
         {
             int emittedWriteWatchChanges = 0;
-            int writeWatchMatches = 0;
             bool writeWatchLimitNoticeEmitted = false;
             bus.Memory.MainRamStoreObserver = (address, width, value) =>
             {
@@ -519,6 +524,20 @@ public sealed class DolRunner
                         onGxFifoOffset = stoppedOnGxFifoOffset,
                         gxFifoOffset = options.StopOnGxFifoOffset,
                     },
+                    watches = new
+                    {
+                        memoryChanges = memoryWatchChanges,
+                        emittedMemoryChanges = emittedWatchChanges,
+                        writeMatches = writeWatchMatches,
+                        loadMatches = loadWatchMatches,
+                        emittedLoadMatches = emittedLoadWatchChanges,
+                        indirectCallMatches = indirectCallWatchMatches,
+                        emittedIndirectCallMatches = emittedCallWatchChanges,
+                        gprChanges = gprWatchChanges,
+                        emittedGprChanges = emittedGprWatchChanges,
+                        pcTraceMatches,
+                        emittedPcTraceMatches = emittedPcTraceChanges,
+                    },
                     discInterface = BuildDiscInterfaceSummary(bus),
                     externalInterface = BuildExternalInterfaceSummary(bus),
                     sonicResourceState = BuildSonicResourceStateSummary(bus, state),
@@ -706,6 +725,7 @@ public sealed class DolRunner
 
                 if (tracedPcSet?.Contains(pc) == true && executed >= options.TracePcAfter.GetValueOrDefault())
                 {
+                    pcTraceMatches++;
                     if (options.WatchLimit is null || emittedPcTraceChanges < options.WatchLimit)
                     {
                         _output.WriteLine($"PC trace 0x{pc:X8} hit after {executed + 1} instruction(s): 0x{currentInstruction:X8} {PowerPcDisassembler.Disassemble(currentInstruction)} {FormatPcTraceRegisters(state)}");
@@ -1010,6 +1030,7 @@ public sealed class DolRunner
 
                 if (TryGetWatchedLoad(options, bus, state, currentInstruction, out WatchedLoad watchedLoad))
                 {
+                    loadWatchMatches++;
                     if (options.WatchLimit is null || emittedLoadWatchChanges < options.WatchLimit)
                     {
                         _output.WriteLine($"Load watch 0x{watchedLoad.EffectiveAddress:X8} => 0x{watchedLoad.Value:X8} into r{watchedLoad.TargetRegister} after {executed + 1} instruction(s), 0x{pc:X8}: 0x{currentInstruction:X8} {PowerPcDisassembler.Disassemble(currentInstruction)} {FormatWatchRegisters(state, currentInstruction)}");
@@ -1024,6 +1045,7 @@ public sealed class DolRunner
 
                 if ((watchedCallTargetSet is not null || hasCallRangeWatch) && TryGetIndirectBranchTarget(currentInstruction, state, out uint indirectTarget, out string? targetRegister, out bool link) && MatchesCallWatch(options, watchedCallTargetSet, indirectTarget))
                 {
+                    indirectCallWatchMatches++;
                     if (options.WatchLimit is null || emittedCallWatchChanges < options.WatchLimit)
                     {
                         string branchKind = link ? "call" : "branch";
@@ -1051,6 +1073,7 @@ public sealed class DolRunner
                     && executed >= options.WatchGprAfter.GetValueOrDefault()
                     && state.Gpr[watchedGpr] != watchedGprValue)
                 {
+                    gprWatchChanges++;
                     if (options.WatchLimit is null || emittedGprWatchChanges < options.WatchLimit)
                     {
                         _output.WriteLine($"GPR watch r{watchedGpr}: 0x{watchedGprValue:X8} -> 0x{state.Gpr[watchedGpr]:X8} after {executed + 1} instruction(s), 0x{pc:X8}: 0x{instruction:X8} {PowerPcDisassembler.Disassemble(instruction)}");
@@ -1073,6 +1096,7 @@ public sealed class DolRunner
                     uint watchedValue = watchedValues[observedAddress];
                     if (nextWatchedValue != watchedValue)
                     {
+                        memoryWatchChanges++;
                         if (options.WatchLimit is null || emittedWatchChanges < options.WatchLimit)
                         {
                             _output.WriteLine($"Watch 0x{observedAddress:X8}: 0x{watchedValue:X8} -> 0x{nextWatchedValue:X8} after {executed + 1} instruction(s), 0x{pc:X8}: 0x{instruction:X8} {PowerPcDisassembler.Disassemble(instruction)} {FormatWatchRegisters(state, instruction)}");

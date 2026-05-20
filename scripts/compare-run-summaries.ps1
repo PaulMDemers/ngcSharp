@@ -163,6 +163,13 @@ $afterPcLr = @((Get-Value $afterData "pcLrProfiles" @()) | ForEach-Object {
 }) -join "; "
 Add-Change $rows "profile" "pcLrTopCallers" $beforePcLr $afterPcLr
 
+$beforeWatches = Get-Value $beforeData "watches" $null
+$afterWatches = Get-Value $afterData "watches" $null
+Add-Change $rows "watches" "loadMatches" (Get-Value $beforeWatches "loadMatches") (Get-Value $afterWatches "loadMatches")
+Add-Change $rows "watches" "pcTraceMatches" (Get-Value $beforeWatches "pcTraceMatches") (Get-Value $afterWatches "pcTraceMatches")
+Add-Change $rows "watches" "writeMatches" (Get-Value $beforeWatches "writeMatches") (Get-Value $afterWatches "writeMatches")
+Add-Change $rows "watches" "memoryChanges" (Get-Value $beforeWatches "memoryChanges") (Get-Value $afterWatches "memoryChanges")
+
 function Format-ExiChannel {
     param($ExternalInterface, [int]$Channel)
 
