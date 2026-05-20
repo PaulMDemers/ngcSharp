@@ -571,6 +571,8 @@
       "timeoutSeconds": 240,
       "profilePc": 16,
       "extraArgs": [
+        "--profile-after",
+        "0x00F00000",
         "--memory-card-a",
         "--controller-button",
         "a",

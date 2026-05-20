@@ -49,6 +49,7 @@ public sealed record RunDolOptions(
     IReadOnlyList<MemoryDumpRequest>? DumpMemoryRequests = null,
     IReadOnlyList<PointerTableDumpRequest>? PointerTableDumpRequests = null,
     int? PcProfileTop = null,
+    int? ProfileAfter = null,
     uint? IndirectCallSiteProfileAddress = null,
     int? IndirectCallSiteProfileTop = null,
     IReadOnlyList<BranchSiteProfileRequest>? BranchSiteProfiles = null,
@@ -144,6 +145,7 @@ public sealed record RunDolOptions(
         List<MemoryDumpRequest> dumpMemoryRequests = [];
         List<PointerTableDumpRequest> pointerTableDumpRequests = [];
         int? pcProfileTop = null;
+        int? profileAfter = null;
         uint? indirectCallSiteProfileAddress = null;
         int? indirectCallSiteProfileTop = null;
         List<BranchSiteProfileRequest> branchSiteProfiles = [];
@@ -531,6 +533,15 @@ public sealed record RunDolOptions(
 
                     pcProfileTop = parsedPcProfileTop;
                     break;
+                case "--profile-after":
+                    if (index + 1 >= args.Length || !TryParseNonNegativeInt32(args[++index], out int parsedProfileAfter))
+                    {
+                        error.WriteLine("--profile-after requires a non-negative decimal or 0x-prefixed instruction count.");
+                        return false;
+                    }
+
+                    profileAfter = parsedProfileAfter;
+                    break;
                 case "--profile-indirect-call-site":
                     if (index + 2 >= args.Length || !TryParseUInt32(args[++index], out uint parsedIndirectCallSite) || !TryParsePositiveInt32(args[++index], out int parsedIndirectCallSiteTop))
                     {
@@ -829,7 +840,7 @@ public sealed record RunDolOptions(
             return false;
         }
 
-        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, pcProfileTop, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, branchSiteProfiles, pcLrProfiles, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath, discCommandLatencyCycles);
+        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, pcProfileTop, profileAfter, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, branchSiteProfiles, pcLrProfiles, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath, discCommandLatencyCycles);
         return true;
     }
 

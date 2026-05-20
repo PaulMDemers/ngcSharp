@@ -72,6 +72,8 @@ dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "path\to\g
 
 `--di-command-latency-cycles <n>` overrides the default scheduled DVD command latency for diagnostic runs. Without an override, DVD reads use transfer-size-aware latency; use the override with `--run-summary` or the compatibility matrix to sweep whether a retail title is sensitive to DI completion timing.
 
+`--profile-after <n>` scopes PC, branch-site, PC/LR, and indirect-call-site profile collection to a later instruction window. This is useful when an early hot loop otherwise dominates the profile for a longer compatibility probe.
+
 Enable a formatted memory card in Slot A:
 
 ```powershell

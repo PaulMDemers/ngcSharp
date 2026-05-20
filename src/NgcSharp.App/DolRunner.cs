@@ -542,10 +542,10 @@ public sealed class DolRunner
                     externalInterface = BuildExternalInterfaceSummary(bus),
                     sonicResourceState = BuildSonicResourceStateSummary(bus, state),
                     pcProfile = options.PcProfileTop is int pcProfileTop && pcProfile is not null
-                        ? BuildPcProfileSummary(pcProfile, pcProfileTop, executed)
+                        ? BuildPcProfileSummary(pcProfile, pcProfileTop, executed, options.ProfileAfter.GetValueOrDefault())
                         : null,
                     pcProfileWithoutExternalInterruptLeaves = options.PcProfileTop is int filteredPcProfileTop && pcProfile is not null
-                        ? BuildPcProfileWithoutExternalInterruptLeavesSummary(pcProfile, filteredPcProfileTop, executed, bus)
+                        ? BuildPcProfileWithoutExternalInterruptLeavesSummary(pcProfile, filteredPcProfileTop, executed, options.ProfileAfter.GetValueOrDefault(), bus)
                         : null,
                     indirectCallSiteProfile = options.IndirectCallSiteProfileAddress is uint profiledCallSiteSummary
                         && options.IndirectCallSiteProfileTop is int indirectCallSiteProfileTopSummary
@@ -687,7 +687,8 @@ public sealed class DolRunner
                     break;
                 }
 
-                if (pcProfile is not null)
+                bool profileThisInstruction = executed >= options.ProfileAfter.GetValueOrDefault();
+                if (profileThisInstruction && pcProfile is not null)
                 {
                     pcProfile.TryGetValue(pc, out ulong count);
                     ulong nextCount = count + 1;
@@ -709,13 +710,14 @@ public sealed class DolRunner
 
                 currentPc = pc;
                 currentInstruction = bus.Read32(pc);
-                if (pcLrProfiles is not null && pcLrProfiles.TryGetValue(pc, out Dictionary<uint, ulong>? pcLrProfile))
+                if (profileThisInstruction && pcLrProfiles is not null && pcLrProfiles.TryGetValue(pc, out Dictionary<uint, ulong>? pcLrProfile))
                 {
                     pcLrProfile.TryGetValue(state.Lr, out ulong pcLrCount);
                     pcLrProfile[state.Lr] = pcLrCount + 1;
                 }
 
-                if (branchSiteProfiles is not null
+                if (profileThisInstruction
+                    && branchSiteProfiles is not null
                     && branchSiteProfiles.TryGetValue(pc, out Dictionary<uint, ulong>? branchSiteProfile)
                     && TryGetBranchSiteTarget(currentInstruction, pc, state, out uint branchSiteTarget))
                 {
@@ -1059,7 +1061,8 @@ public sealed class DolRunner
                     }
                 }
 
-                if (indirectCallSiteProfile is not null
+                if (profileThisInstruction
+                    && indirectCallSiteProfile is not null
                     && options.IndirectCallSiteProfileAddress == pc
                     && TryGetIndirectBranchTarget(currentInstruction, state, out uint profiledIndirectTarget, out _, out bool profiledLink)
                     && profiledLink)
@@ -1639,7 +1642,7 @@ public sealed class DolRunner
         if (options.PcProfileTop is int pcProfileTop && pcProfile is not null)
         {
             Stopwatch pcProfileStopwatch = Stopwatch.StartNew();
-            ConsoleFormatting.WritePcProfile(_output, pcProfile, pcProfileTop, executed);
+            ConsoleFormatting.WritePcProfile(_output, pcProfile, pcProfileTop, executed, options.ProfileAfter.GetValueOrDefault());
             pcProfileMilliseconds += StopAndGetMilliseconds(pcProfileStopwatch);
         }
 
@@ -6027,11 +6030,14 @@ public sealed class DolRunner
         }
     }
 
-    private static object BuildPcProfileSummary(IReadOnlyDictionary<uint, ulong> profile, int topCount, int executedInstructions)
+    private static object BuildPcProfileSummary(IReadOnlyDictionary<uint, ulong> profile, int topCount, int executedInstructions, int profileAfter)
     {
+        int profiledInstructions = Math.Max(0, executedInstructions - profileAfter);
         return new
         {
             uniqueAddresses = profile.Count,
+            startInstruction = profileAfter,
+            profiledInstructions,
             totalSamples = profile.Values.Aggregate(0UL, static (total, count) => total + count),
             entries = profile
                 .OrderByDescending(entry => entry.Value)
@@ -6041,7 +6047,7 @@ public sealed class DolRunner
                 {
                     pc = $"0x{entry.Key:X8}",
                     count = entry.Value,
-                    percent = executedInstructions == 0 ? 0 : Math.Round((double)entry.Value * 100 / executedInstructions, 3),
+                    percent = profiledInstructions == 0 ? 0 : Math.Round((double)entry.Value * 100 / profiledInstructions, 3),
                 })
                 .ToArray(),
         };
@@ -6232,11 +6238,12 @@ public sealed class DolRunner
         return true;
     }
 
-    private static object BuildPcProfileWithoutExternalInterruptLeavesSummary(IReadOnlyDictionary<uint, ulong> profile, int topCount, int executedInstructions, GameCubeBus bus)
+    private static object BuildPcProfileWithoutExternalInterruptLeavesSummary(IReadOnlyDictionary<uint, ulong> profile, int topCount, int executedInstructions, int profileAfter, GameCubeBus bus)
     {
         List<KeyValuePair<uint, ulong>> included = [];
         ulong totalSamples = 0;
         ulong excludedSamples = 0;
+        int profiledInstructions = Math.Max(0, executedInstructions - profileAfter);
 
         foreach (KeyValuePair<uint, ulong> entry in profile)
         {
@@ -6253,6 +6260,8 @@ public sealed class DolRunner
         return new
         {
             uniqueAddresses = included.Count,
+            startInstruction = profileAfter,
+            profiledInstructions,
             totalSamples,
             excludedSamples,
             entries = included
@@ -6263,7 +6272,7 @@ public sealed class DolRunner
                 {
                     pc = $"0x{entry.Key:X8}",
                     count = entry.Value,
-                    percent = executedInstructions == 0 ? 0 : Math.Round((double)entry.Value * 100 / executedInstructions, 3),
+                    percent = profiledInstructions == 0 ? 0 : Math.Round((double)entry.Value * 100 / profiledInstructions, 3),
                 })
                 .ToArray(),
         };

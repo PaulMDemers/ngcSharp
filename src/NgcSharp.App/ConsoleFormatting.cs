@@ -797,13 +797,15 @@ public static class ConsoleFormatting
         return true;
     }
 
-    public static void WritePcProfile(TextWriter writer, IReadOnlyDictionary<uint, ulong> profile, int topCount, int executedInstructions)
+    public static void WritePcProfile(TextWriter writer, IReadOnlyDictionary<uint, ulong> profile, int topCount, int executedInstructions, int profileAfter = 0)
     {
-        writer.WriteLine($"PC profile: {profile.Count} unique address(es)");
+        int profiledInstructions = Math.Max(0, executedInstructions - profileAfter);
+        string windowSuffix = profileAfter == 0 ? string.Empty : $" after {profileAfter} instruction(s)";
+        writer.WriteLine($"PC profile{windowSuffix}: {profile.Count} unique address(es)");
 
         foreach (KeyValuePair<uint, ulong> entry in profile.OrderByDescending(entry => entry.Value).ThenBy(entry => entry.Key).Take(topCount))
         {
-            double percent = executedInstructions == 0 ? 0 : (double)entry.Value * 100 / executedInstructions;
+            double percent = profiledInstructions == 0 ? 0 : (double)entry.Value * 100 / profiledInstructions;
             writer.WriteLine($"0x{entry.Key:X8}  {entry.Value,10}  {percent,6:F2}%");
         }
     }
