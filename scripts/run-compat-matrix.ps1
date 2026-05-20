@@ -372,8 +372,10 @@ foreach ($target in $selectedTargets) {
             diCommand0 = ""
             diDmaAddress = ""
             diDmaLength = ""
+            diCommandLatencyCycles = ""
             diPendingCommand = ""
             diPendingCommandCycles = ""
+            diCommandHistory = ""
             diRecentAccesses = ""
             exiPending = ""
             exi0Parameter = ""
@@ -732,8 +734,12 @@ foreach ($target in $selectedTargets) {
     $diCommand0 = Get-Value $discInterface "command0" ""
     $diDmaAddress = Get-Value $discInterface "dmaAddress" ""
     $diDmaLength = Get-Value $discInterface "dmaLength" ""
+    $diCommandLatencyCycles = Get-Value $discInterface "commandLatencyCycles" ""
     $diPendingCommand = Get-Value $discInterface "hasPendingCommand" ""
     $diPendingCommandCycles = Get-Value $discInterface "pendingCommandCycles" ""
+    $diCommandHistory = @((Get-Value $discInterface "commandHistory" @()) | Select-Object -Last 6 | ForEach-Object {
+        "#$(Get-Value $_ "sequence") $(Get-Value $_ "commandName") off=$(Get-Value $_ "discOffset") len=$(Get-Value $_ "commandLength") dma=$(Get-Value $_ "dmaAddress")/$(Get-Value $_ "dmaLength") elapsed=$(Get-Value $_ "elapsedCycles") status=$(Get-Value $_ "status") irq=$(Get-Value $_ "processorInterruptPending")"
+    }) -join "; "
     $diRecentAccesses = @((Get-Value $discInterface "recentAccesses" @()) | ForEach-Object {
         "$(Get-Value $_ "kind") $(Get-Value $_ "device") $(Get-Value $_ "address")=$(Get-Value $_ "value")"
     }) -join "; "
@@ -852,8 +858,10 @@ foreach ($target in $selectedTargets) {
         diCommand0 = $diCommand0
         diDmaAddress = $diDmaAddress
         diDmaLength = $diDmaLength
+        diCommandLatencyCycles = $diCommandLatencyCycles
         diPendingCommand = $diPendingCommand
         diPendingCommandCycles = $diPendingCommandCycles
+        diCommandHistory = $diCommandHistory
         diRecentAccesses = $diRecentAccesses
         exiPending = $exiPending
         exi0Parameter = $exi0Parameter

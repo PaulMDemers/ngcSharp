@@ -70,6 +70,8 @@ dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "path\to\g
 
 `--run-summary <json-path>` writes a compact JSON ledger with the executed instruction count, final PC, stop reason, selected registers, GX FIFO byte count, and fast-forward counters. It is the preferred way to compare bounded probes without scraping console output.
 
+`--di-command-latency-cycles <n>` overrides the default scheduled DVD command latency for diagnostic runs. Use it with `--run-summary` or the compatibility matrix to sweep whether a retail title is sensitive to DI completion timing.
+
 Enable a formatted memory card in Slot A:
 
 ```powershell

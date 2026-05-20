@@ -59,6 +59,11 @@ public sealed class DolRunner
     {
         Stopwatch totalStopwatch = Stopwatch.StartNew();
         dol.LoadInto(bus.Memory);
+        if (options.DiscCommandLatencyCycles is ulong discCommandLatencyCycles)
+        {
+            bus.DiscInterfaceCommandLatencyCycles = discCommandLatencyCycles;
+        }
+
         bus.ExternalInterfaceMemoryCardSlotAInserted = options.MemoryCardSlotAInserted;
         bus.ExternalInterfaceMemoryCardSlotBInserted = options.MemoryCardSlotBInserted;
         if (prepareStandaloneBoot)
@@ -6115,6 +6120,7 @@ public sealed class DolRunner
             control = $"0x{snapshot.Control:X8}",
             immediateData = $"0x{snapshot.ImmediateData:X8}",
             configuration = $"0x{snapshot.Configuration:X8}",
+            commandLatencyCycles = bus.DiscInterfaceCommandLatencyCycles,
             hasPendingCommand = snapshot.HasPendingCommand,
             pendingCommandCycles = snapshot.PendingCommandCycles,
             lastError = $"0x{snapshot.LastError:X8}",
@@ -6128,6 +6134,25 @@ public sealed class DolRunner
                 bus.MmioAccesses,
                 static access => access.DeviceName == "DI" || (access.DeviceName == "PI" && (access.Address == 0xCC00_3000 || access.Address == 0xCC00_3004)),
                 24),
+            commandHistory = snapshot.CommandHistory.Select(command => new
+            {
+                sequence = command.Sequence,
+                startCycle = command.StartCycle,
+                completeCycle = command.CompleteCycle,
+                elapsedCycles = command.CompleteCycle >= command.StartCycle ? command.CompleteCycle - command.StartCycle : 0,
+                latencyCycles = command.LatencyCycles,
+                command0 = $"0x{command.Command0:X8}",
+                command1 = $"0x{command.Command1:X8}",
+                command2 = $"0x{command.Command2:X8}",
+                dmaAddress = $"0x{command.DmaAddress:X8}",
+                dmaLength = $"0x{command.DmaLength:X8}",
+                commandName = command.CommandName,
+                discOffset = $"0x{command.DiscOffset:X8}",
+                commandLength = $"0x{command.CommandLength:X8}",
+                status = $"0x{command.Status:X8}",
+                lastError = $"0x{command.LastError:X8}",
+                processorInterruptPending = command.ProcessorInterruptPending,
+            }).ToArray(),
         };
     }
 

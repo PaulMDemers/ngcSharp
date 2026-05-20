@@ -1094,6 +1094,7 @@ public sealed class GameCubeBusTests
 
             using DiscImageReader disc = DiscImageReader.Open(path);
             GameCubeBus bus = new(disc);
+            bus.DiscInterfaceCommandLatencyCycles = 0x2000;
             bus.Write32(0xCC00_3004, GameCubeBus.ProcessorInterfaceDiscInterrupt);
             bus.Write32(0xCC00_6000, GameCubeBus.DiscInterfaceInterruptMask);
             bus.Write32(0xCC00_6008, 0xA800_0000);
@@ -1109,12 +1110,28 @@ public sealed class GameCubeBusTests
             Assert.Equal(1u, bus.Read32(0xCC00_601C) & 1u);
             Assert.False(bus.HasPendingExternalInterrupt);
 
-            bus.Advance(10_000);
+            bus.Advance(0x1FFF);
+
+            Assert.Equal(0u, bus.Memory.Read32(0x8000_1000));
+            Assert.Equal(0u, bus.Read32(0xCC00_6000) & GameCubeBus.DiscInterfaceTransferComplete);
+            Assert.Empty(bus.GetDiscInterfaceDebugSnapshot().CommandHistory);
+
+            bus.Advance(1);
 
             Assert.Equal(0xDEAD_BEEFu, bus.Memory.Read32(0x8000_1000));
             Assert.Equal(GameCubeBus.DiscInterfaceTransferComplete, bus.Read32(0xCC00_6000) & GameCubeBus.DiscInterfaceTransferComplete);
             Assert.Equal(0u, bus.Read32(0xCC00_6018));
             Assert.True(bus.HasPendingExternalInterrupt);
+            DiscInterfaceCommandDebugSnapshot command = Assert.Single(bus.GetDiscInterfaceDebugSnapshot().CommandHistory);
+            Assert.Equal(1ul, command.Sequence);
+            Assert.Equal("Read", command.CommandName);
+            Assert.Equal(0x200u, command.DiscOffset);
+            Assert.Equal(0x20u, command.CommandLength);
+            Assert.Equal(0x8000_1000u, command.DmaAddress);
+            Assert.Equal(0x20u, command.DmaLength);
+            Assert.Equal(0x2000ul, command.LatencyCycles);
+            Assert.Equal(0x2000ul, command.CompleteCycle - command.StartCycle);
+            Assert.True(command.ProcessorInterruptPending);
 
             bus.Write32(0xCC00_6000, GameCubeBus.DiscInterfaceTransferComplete);
 

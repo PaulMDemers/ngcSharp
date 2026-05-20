@@ -187,6 +187,18 @@ function Format-MmioAccesses {
     }) -join "; "
 }
 
+function Format-DiCommandHistory {
+    param($Commands)
+
+    if ($null -eq $Commands) {
+        return ""
+    }
+
+    return @($Commands | Select-Object -Last 6 | ForEach-Object {
+        "#$(Get-Value $_ "sequence") $(Get-Value $_ "commandName") off=$(Get-Value $_ "discOffset") len=$(Get-Value $_ "commandLength") dma=$(Get-Value $_ "dmaAddress")/$(Get-Value $_ "dmaLength") elapsed=$(Get-Value $_ "elapsedCycles") status=$(Get-Value $_ "status") irq=$(Get-Value $_ "processorInterruptPending")"
+    }) -join "; "
+}
+
 $beforeExi = Get-Value $beforeData "externalInterface" $null
 $afterExi = Get-Value $afterData "externalInterface" $null
 Add-Change $rows "interrupts" "processorInterruptCause" (Get-Value $beforeExi "processorInterruptCause") (Get-Value $afterExi "processorInterruptCause")
@@ -198,8 +210,10 @@ Add-Change $rows "di" "status" (Get-Value $beforeDi "status") (Get-Value $afterD
 Add-Change $rows "di" "command0" (Get-Value $beforeDi "command0") (Get-Value $afterDi "command0")
 Add-Change $rows "di" "dmaAddress" (Get-Value $beforeDi "dmaAddress") (Get-Value $afterDi "dmaAddress")
 Add-Change $rows "di" "dmaLength" (Get-Value $beforeDi "dmaLength") (Get-Value $afterDi "dmaLength")
+Add-Change $rows "di" "commandLatencyCycles" (Get-Value $beforeDi "commandLatencyCycles") (Get-Value $afterDi "commandLatencyCycles")
 Add-Change $rows "di" "hasPendingCommand" (Get-Value $beforeDi "hasPendingCommand") (Get-Value $afterDi "hasPendingCommand")
 Add-Change $rows "di" "pendingCommandCycles" (Get-Value $beforeDi "pendingCommandCycles") (Get-Value $afterDi "pendingCommandCycles")
+Add-Change $rows "di" "commandHistory" (Format-DiCommandHistory (Get-Value $beforeDi "commandHistory" @())) (Format-DiCommandHistory (Get-Value $afterDi "commandHistory" @()))
 Add-Change $rows "di" "recentAccesses" (Format-MmioAccesses (Get-Value $beforeDi "recentAccesses" @())) (Format-MmioAccesses (Get-Value $afterDi "recentAccesses" @()))
 
 Add-Change $rows "exi" "hasPendingExternalInterrupt" (Get-Value $beforeExi "hasPendingExternalInterrupt") (Get-Value $afterExi "hasPendingExternalInterrupt")
