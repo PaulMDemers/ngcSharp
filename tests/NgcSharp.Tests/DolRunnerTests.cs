@@ -297,6 +297,67 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void ReverseWordFillLoopFastForwardWritesRepeatedWordAndFinishesLoop()
+    {
+        const uint pc = 0x8000_3300;
+        const uint endAddress = 0x8001_0080;
+        GameCubeBus bus = new();
+        WriteReverseWordFillLoop(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[0] = 2;
+        state.Gpr[4] = 0xA5A5_5A5A;
+        state.Gpr[7] = endAddress;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardWordFillLoop(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(36, skippedInstructions);
+        Assert.Equal(pc + 0x48, state.Pc);
+        Assert.Equal(0u, state.Gpr[0]);
+        Assert.Equal(endAddress - 128, state.Gpr[7]);
+        Assert.Equal(0x2000_0000u, state.Cr & 0xF000_0000);
+        for (uint address = endAddress - 128; address < endAddress; address += 4)
+        {
+            Assert.Equal(0xA5A5_5A5Au, bus.Memory.Read32(address));
+        }
+    }
+
+    [Fact]
+    public void ReverseWordFillLoopFastForwardStopsAtPositiveDecrementerEdge()
+    {
+        const uint pc = 0x8000_3300;
+        const uint endAddress = 0x8001_00C0;
+        GameCubeBus bus = new();
+        WriteReverseWordFillLoop(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[0] = 3;
+        state.Gpr[4] = 0xCAFE_BABE;
+        state.Gpr[7] = endAddress;
+        state.Spr[22] = 20;
+
+        bool skipped = InvokeFastForwardWordFillLoop(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(18, skippedInstructions);
+        Assert.Equal(pc, state.Pc);
+        Assert.Equal(2u, state.Gpr[0]);
+        Assert.Equal(endAddress - 64, state.Gpr[7]);
+        Assert.Equal(2u, state.Spr[22]);
+        Assert.Equal(0x4000_0000u, state.Cr & 0xF000_0000);
+        for (uint address = endAddress - 64; address < endAddress; address += 4)
+        {
+            Assert.Equal(0xCAFE_BABEu, bus.Memory.Read32(address));
+        }
+    }
+
+    [Fact]
     public void SignedLongDivisionLeafFastForwardReturnsQuotient()
     {
         const uint pc = 0x8000_3300;
@@ -2770,6 +2831,28 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x1C, 0x90E3_001C);
         WriteInstruction(memory, pc + 0x20, 0x94E3_0020);
         WriteInstruction(memory, pc + 0x24, 0x4082_FFDC);
+    }
+
+    private static void WriteReverseWordFillLoop(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x9087_FFFC);
+        WriteInstruction(memory, pc + 0x04, 0x9087_FFF8);
+        WriteInstruction(memory, pc + 0x08, 0x9087_FFF4);
+        WriteInstruction(memory, pc + 0x0C, 0x9087_FFF0);
+        WriteInstruction(memory, pc + 0x10, 0x9087_FFEC);
+        WriteInstruction(memory, pc + 0x14, 0x9087_FFE8);
+        WriteInstruction(memory, pc + 0x18, 0x9087_FFE4);
+        WriteInstruction(memory, pc + 0x1C, 0x9087_FFE0);
+        WriteInstruction(memory, pc + 0x20, 0x9087_FFDC);
+        WriteInstruction(memory, pc + 0x24, 0x9087_FFD8);
+        WriteInstruction(memory, pc + 0x28, 0x9087_FFD4);
+        WriteInstruction(memory, pc + 0x2C, 0x9087_FFD0);
+        WriteInstruction(memory, pc + 0x30, 0x9087_FFCC);
+        WriteInstruction(memory, pc + 0x34, 0x9087_FFC8);
+        WriteInstruction(memory, pc + 0x38, 0x9087_FFC4);
+        WriteInstruction(memory, pc + 0x3C, 0x9487_FFC0);
+        WriteInstruction(memory, pc + 0x40, 0x3400_FFFF);
+        WriteInstruction(memory, pc + 0x44, 0x4082_FFBC);
     }
 
     private static void WriteSignedLongDivisionLeafSignature(GameCubeMemory memory, uint pc)

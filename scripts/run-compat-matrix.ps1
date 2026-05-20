@@ -342,6 +342,7 @@ foreach ($target in $selectedTargets) {
             maxDisplayNonblack = ""
             prsDecompressInstructions = ""
             resourceLookupInstructions = ""
+            reverseWordFillInstructions = ""
             timeBaseReadInstructions = ""
             externalInterruptLeafInstructions = ""
             sonicResourceModeQueryInstructions = ""
@@ -571,6 +572,7 @@ foreach ($target in $selectedTargets) {
     $fastForward = Get-Value $summary "fastForward" $null
     $prsDecompressInstructions = Get-Value $fastForward "prsDecompressInstructions" ""
     $resourceLookupInstructions = Get-Value $fastForward "resourceLookupInstructions" ""
+    $reverseWordFillInstructions = Get-Value $fastForward "reverseWordFillInstructions" ""
     $timeBaseReadInstructions = Get-Value $fastForward "timeBaseReadInstructions" ""
     $externalInterruptLeafInstructions = Get-Value $fastForward "externalInterruptLeafInstructions" ""
     $sonicResourceModeQueryInstructions = Get-Value $fastForward "sonicResourceModeQueryInstructions" ""
@@ -586,6 +588,11 @@ foreach ($target in $selectedTargets) {
     $expectedMinResourceLookupInstructions = Get-Value $expected "minResourceLookupInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinResourceLookupInstructions -and [long]$resourceLookupInstructions -lt [long]$expectedMinResourceLookupInstructions) {
         $regressions.Add("resourceLookupInstructions expected >= $expectedMinResourceLookupInstructions got $resourceLookupInstructions")
+    }
+
+    $expectedMinReverseWordFillInstructions = Get-Value $expected "minReverseWordFillInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinReverseWordFillInstructions -and [long]$reverseWordFillInstructions -lt [long]$expectedMinReverseWordFillInstructions) {
+        $regressions.Add("reverseWordFillInstructions expected >= $expectedMinReverseWordFillInstructions got $reverseWordFillInstructions")
     }
 
     $expectedMinTimeBaseReadInstructions = Get-Value $expected "minTimeBaseReadInstructions" $null
@@ -853,6 +860,7 @@ foreach ($target in $selectedTargets) {
         maxDisplayNonblack = $maxDisplayNonblack
         prsDecompressInstructions = $prsDecompressInstructions
         resourceLookupInstructions = $resourceLookupInstructions
+        reverseWordFillInstructions = $reverseWordFillInstructions
         timeBaseReadInstructions = $timeBaseReadInstructions
         externalInterruptLeafInstructions = $externalInterruptLeafInstructions
         sonicResourceModeQueryInstructions = $sonicResourceModeQueryInstructions
