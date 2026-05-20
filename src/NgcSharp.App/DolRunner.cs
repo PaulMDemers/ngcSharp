@@ -159,6 +159,7 @@ public sealed class DolRunner
         ulong sonicResourceStatePollFastForwardInstructions = 0;
         ulong sonicModeWrapperFastForwardInstructions = 0;
         ulong sonicResourceFixupFastForwardInstructions = 0;
+        ulong sonicOverlayInactiveSlotScanFastForwardInstructions = 0;
         uint currentPc = state.Pc;
         uint currentInstruction = 0;
         Action<uint, uint>? previousWriteObserver = bus.MainRamWrite32Observer;
@@ -672,6 +673,7 @@ public sealed class DolRunner
                         sonicResourceStatePollInstructions = sonicResourceStatePollFastForwardInstructions,
                         sonicModeWrapperInstructions = sonicModeWrapperFastForwardInstructions,
                         sonicResourceFixupInstructions = sonicResourceFixupFastForwardInstructions,
+                        sonicOverlayInactiveSlotScanInstructions = sonicOverlayInactiveSlotScanFastForwardInstructions,
                     },
                 };
 
@@ -1022,6 +1024,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicNormalizedStringScan(state, bus, out skippedInstructions))
                 {
                     normalizedStringScanFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicOverlayInactiveSlotScan(state, bus, out skippedInstructions))
+                {
+                    sonicOverlayInactiveSlotScanFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1459,6 +1468,11 @@ public sealed class DolRunner
             if (sonicResourceFixupFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {sonicResourceFixupFastForwardInstructions} Sonic resource fixup instruction(s).");
+            }
+
+            if (sonicOverlayInactiveSlotScanFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {sonicOverlayInactiveSlotScanFastForwardInstructions} Sonic overlay inactive slot scan instruction(s).");
             }
 
             if (gxMemoryCheckpoints.Length != 0)
@@ -5478,6 +5492,94 @@ public sealed class DolRunner
             _ => 0,
         };
     }
+
+    private static bool TryFastForwardSonicOverlayInactiveSlotScan(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        const uint pc = 0x80BC_8110;
+        const uint slotTable = 0x80BE_D490;
+        const uint slotStride = 0x10;
+        const uint maxSlots = 64;
+        const uint instructionsPerSlot = 10;
+
+        if (state.Pc != pc || !MatchesSonicOverlayInactiveSlotScan(bus))
+        {
+            return false;
+        }
+
+        uint slot = state.Gpr[31];
+        if (slot >= maxSlots)
+        {
+            return false;
+        }
+
+        uint slotsToConsider = maxSlots - slot;
+        uint decrementer = state.Spr[22];
+        if ((decrementer & 0x8000_0000) == 0)
+        {
+            uint slotsBeforeInterruptEdge = decrementer / instructionsPerSlot;
+            if (slotsBeforeInterruptEdge == 0)
+            {
+                return false;
+            }
+
+            slotsToConsider = Math.Min(slotsToConsider, slotsBeforeInterruptEdge);
+        }
+
+        uint inactiveSlots = 0;
+        uint lastOffset = 0;
+        uint lastValue = 0;
+        while (inactiveSlots < slotsToConsider)
+        {
+            uint currentSlot = slot + inactiveSlots;
+            uint offset = checked(currentSlot * slotStride);
+            uint entryAddress = slotTable + offset;
+            if (!bus.Memory.IsMainRamAddress(entryAddress, sizeof(uint)))
+            {
+                return false;
+            }
+
+            uint value = bus.Memory.Read32(entryAddress);
+            if (value == 1)
+            {
+                break;
+            }
+
+            lastOffset = offset;
+            lastValue = value;
+            inactiveSlots++;
+        }
+
+        if (inactiveSlots == 0)
+        {
+            return false;
+        }
+
+        uint nextSlot = slot + inactiveSlots;
+        state.Gpr[0] = lastValue;
+        state.Gpr[3] = slotTable + lastOffset;
+        state.Gpr[4] = lastOffset;
+        state.Gpr[31] = nextSlot;
+        SetCr0ForSignedCompareImmediate(state, nextSlot, 64);
+        state.Pc = nextSlot < maxSlots ? pc : 0x80BC_82B8;
+
+        uint skipped = checked(inactiveSlots * instructionsPerSlot);
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+    private static bool MatchesSonicOverlayInactiveSlotScan(GameCubeBus bus) =>
+        bus.Read32(0x80BC_8110) == 0x57E4_2036
+        && bus.Read32(0x80BC_8114) == 0x3C60_80BF
+        && bus.Read32(0x80BC_8118) == 0x3803_D490
+        && bus.Read32(0x80BC_811C) == 0x7C60_2214
+        && bus.Read32(0x80BC_8120) == 0x8003_0000
+        && bus.Read32(0x80BC_8124) == 0x2C00_0001
+        && bus.Read32(0x80BC_8128) == 0x4082_0184
+        && bus.Read32(0x80BC_82AC) == 0x3BFF_0001
+        && bus.Read32(0x80BC_82B0) == 0x2C1F_0040
+        && bus.Read32(0x80BC_82B4) == 0x4180_FE5C;
 
     private static bool TryFastForwardSonicModeWrapper(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {

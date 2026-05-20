@@ -348,6 +348,8 @@ foreach ($target in $selectedTargets) {
             sonicResourceModeQueryInstructions = ""
             sonicResourceStatePollInstructions = ""
             sonicModeWrapperInstructions = ""
+            sonicResourceFixupInstructions = ""
+            sonicOverlayInactiveSlotScanInstructions = ""
             topPc = ""
             topPcCount = ""
             nonExternalInterruptTopPc = ""
@@ -579,6 +581,7 @@ foreach ($target in $selectedTargets) {
     $sonicResourceStatePollInstructions = Get-Value $fastForward "sonicResourceStatePollInstructions" ""
     $sonicModeWrapperInstructions = Get-Value $fastForward "sonicModeWrapperInstructions" ""
     $sonicResourceFixupInstructions = Get-Value $fastForward "sonicResourceFixupInstructions" ""
+    $sonicOverlayInactiveSlotScanInstructions = Get-Value $fastForward "sonicOverlayInactiveSlotScanInstructions" ""
 
     $expectedMinPrsDecompressInstructions = Get-Value $expected "minPrsDecompressInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinPrsDecompressInstructions -and [long]$prsDecompressInstructions -lt [long]$expectedMinPrsDecompressInstructions) {
@@ -623,6 +626,11 @@ foreach ($target in $selectedTargets) {
     $expectedMinSonicResourceFixupInstructions = Get-Value $expected "minSonicResourceFixupInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinSonicResourceFixupInstructions -and [long]$sonicResourceFixupInstructions -lt [long]$expectedMinSonicResourceFixupInstructions) {
         $regressions.Add("sonicResourceFixupInstructions expected >= $expectedMinSonicResourceFixupInstructions got $sonicResourceFixupInstructions")
+    }
+
+    $expectedMinSonicOverlayInactiveSlotScanInstructions = Get-Value $expected "minSonicOverlayInactiveSlotScanInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinSonicOverlayInactiveSlotScanInstructions -and [long]$sonicOverlayInactiveSlotScanInstructions -lt [long]$expectedMinSonicOverlayInactiveSlotScanInstructions) {
+        $regressions.Add("sonicOverlayInactiveSlotScanInstructions expected >= $expectedMinSonicOverlayInactiveSlotScanInstructions got $sonicOverlayInactiveSlotScanInstructions")
     }
 
     $pcProfile = Get-Value $summary "pcProfile" $null
@@ -867,6 +875,7 @@ foreach ($target in $selectedTargets) {
         sonicResourceStatePollInstructions = $sonicResourceStatePollInstructions
         sonicModeWrapperInstructions = $sonicModeWrapperInstructions
         sonicResourceFixupInstructions = $sonicResourceFixupInstructions
+        sonicOverlayInactiveSlotScanInstructions = $sonicOverlayInactiveSlotScanInstructions
         topPc = $topPc
         topPcCount = $topPcCount
         nonExternalInterruptTopPc = $nonExternalInterruptTopPc

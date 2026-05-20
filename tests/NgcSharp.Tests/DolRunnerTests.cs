@@ -2080,6 +2080,61 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicOverlayInactiveSlotScanFastForwardStopsBeforeActiveSlot()
+    {
+        const uint pc = 0x80BC_8110;
+        const uint slotTable = 0x80BE_D490;
+        GameCubeBus bus = new();
+        WriteSonicOverlayInactiveSlotScan(bus.Memory);
+        bus.Memory.Write32(slotTable + 3 * 0x10, 0);
+        bus.Memory.Write32(slotTable + 4 * 0x10, 2);
+        bus.Memory.Write32(slotTable + 5 * 0x10, 1);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Gpr[31] = 3;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardSonicOverlayInactiveSlotScan(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(20, skippedInstructions);
+        Assert.Equal(pc, state.Pc);
+        Assert.Equal(5u, state.Gpr[31]);
+        Assert.Equal(2u, state.Gpr[0]);
+        Assert.Equal(0x40u, state.Gpr[4]);
+        Assert.Equal(slotTable + 0x40, state.Gpr[3]);
+        Assert.Equal(0x8000_0000u, state.Cr & 0xF000_0000);
+    }
+
+    [Fact]
+    public void SonicOverlayInactiveSlotScanFastForwardCompletesInnerLoop()
+    {
+        const uint slotTable = 0x80BE_D490;
+        GameCubeBus bus = new();
+        WriteSonicOverlayInactiveSlotScan(bus.Memory);
+        bus.Memory.Write32(slotTable + 62 * 0x10, 0);
+        bus.Memory.Write32(slotTable + 63 * 0x10, 0);
+        PowerPcState state = new()
+        {
+            Pc = 0x80BC_8110,
+        };
+        state.Gpr[31] = 62;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bool skipped = InvokeFastForwardSonicOverlayInactiveSlotScan(state, bus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(20, skippedInstructions);
+        Assert.Equal(0x80BC_82B8u, state.Pc);
+        Assert.Equal(64u, state.Gpr[31]);
+        Assert.Equal(0x3F0u, state.Gpr[4]);
+        Assert.Equal(slotTable + 0x3F0, state.Gpr[3]);
+        Assert.Equal(0x2000_0000u, state.Cr & 0xF000_0000);
+    }
+
+    [Fact]
     public void SonicGxAttributeFlushFastForwardEmitsFifoPacketsAndClearsFlags()
     {
         const uint pc = 0x8010_10A0;
@@ -2819,6 +2874,16 @@ public sealed class DolRunnerTests
         return result;
     }
 
+    private static bool InvokeFastForwardSonicOverlayInactiveSlotScan(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicOverlayInactiveSlotScan", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic overlay inactive slot scan fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
     private static void WriteZeroStoreLoop(GameCubeMemory memory, uint pc)
     {
         WriteInstruction(memory, pc + 0x00, 0x90E3_0004);
@@ -3339,6 +3404,20 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x48, 0x4200_FFD8);
         WriteInstruction(memory, pc + 0x4C, 0x3860_FFFF);
         WriteInstruction(memory, pc + 0x50, 0x4E80_0020);
+    }
+
+    private static void WriteSonicOverlayInactiveSlotScan(GameCubeMemory memory)
+    {
+        WriteInstruction(memory, 0x80BC_8110, 0x57E4_2036);
+        WriteInstruction(memory, 0x80BC_8114, 0x3C60_80BF);
+        WriteInstruction(memory, 0x80BC_8118, 0x3803_D490);
+        WriteInstruction(memory, 0x80BC_811C, 0x7C60_2214);
+        WriteInstruction(memory, 0x80BC_8120, 0x8003_0000);
+        WriteInstruction(memory, 0x80BC_8124, 0x2C00_0001);
+        WriteInstruction(memory, 0x80BC_8128, 0x4082_0184);
+        WriteInstruction(memory, 0x80BC_82AC, 0x3BFF_0001);
+        WriteInstruction(memory, 0x80BC_82B0, 0x2C1F_0040);
+        WriteInstruction(memory, 0x80BC_82B4, 0x4180_FE5C);
     }
 
     private static void WriteSonicGxAttributeFlush(GameCubeMemory memory, uint pc)

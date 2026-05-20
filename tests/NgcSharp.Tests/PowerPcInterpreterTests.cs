@@ -1899,6 +1899,8 @@ public sealed class PowerPcInterpreterTests
     {
         Assert.Equal("addi r3, r0, 42", PowerPcDisassembler.Disassemble(Addi(3, 0, 42)));
         Assert.Equal("mflr r7", PowerPcDisassembler.Disassemble(Mfspr(rD: 7, spr: 8)));
+        Assert.Equal("bl 0xFFFFECCC", PowerPcDisassembler.Disassemble(0x4BFF_ECCD));
+        Assert.Equal("bcl 12, 0, 0xFFFFFE5C", PowerPcDisassembler.Disassemble(0x4180_FE5D));
     }
 
     private static void WriteInstruction(GameCubeMemory memory, uint address, uint instruction)
