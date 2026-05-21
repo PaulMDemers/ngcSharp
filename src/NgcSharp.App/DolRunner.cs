@@ -37,6 +37,8 @@ public sealed class DolRunner
     private const uint SonicPairedTransform4dExitInstructions = 11;
     private const uint SonicVectorBlendCopyLoopPc = 0x8012_0D98;
     private const uint SonicVectorBlendCopyInstructionsPerIteration = 47;
+    private const uint SonicGeneratedRangeScanLoopPc = 0x80BC_BFBC;
+    private const uint SonicGeneratedTileRangeScanLoopPc = 0x80BC_C0A4;
     private const uint ExternalInterruptVector = 0x8000_0500;
 
     private static readonly uint[] VideoInterruptRegisters =
@@ -189,6 +191,7 @@ public sealed class DolRunner
         ulong sonicGxFloatTexcoordStripEmitFastForwardInstructions = 0;
         ulong sonicPairedTransform4dFastForwardInstructions = 0;
         ulong sonicVectorBlendCopyFastForwardInstructions = 0;
+        ulong sonicGeneratedRangeScanFastForwardInstructions = 0;
         uint currentPc = state.Pc;
         uint currentInstruction = 0;
         Action<uint, uint>? previousWriteObserver = bus.MainRamWrite32Observer;
@@ -727,6 +730,7 @@ public sealed class DolRunner
                         sonicGxFloatTexcoordStripEmitInstructions = sonicGxFloatTexcoordStripEmitFastForwardInstructions,
                         sonicPairedTransform4dInstructions = sonicPairedTransform4dFastForwardInstructions,
                         sonicVectorBlendCopyInstructions = sonicVectorBlendCopyFastForwardInstructions,
+                        sonicGeneratedRangeScanInstructions = sonicGeneratedRangeScanFastForwardInstructions,
                     },
                 };
 
@@ -1172,6 +1176,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicVectorBlendCopyLoop(state, bus, out skippedInstructions))
                 {
                     sonicVectorBlendCopyFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGeneratedRangeScan(state, bus, out skippedInstructions))
+                {
+                    sonicGeneratedRangeScanFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1670,6 +1681,11 @@ public sealed class DolRunner
             if (sonicVectorBlendCopyFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {sonicVectorBlendCopyFastForwardInstructions} Sonic vector blend/copy instruction(s).");
+            }
+
+            if (sonicGeneratedRangeScanFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {sonicGeneratedRangeScanFastForwardInstructions} Sonic generated range-scan instruction(s).");
             }
 
             if (gxMemoryCheckpoints.Length != 0)
@@ -6630,6 +6646,165 @@ public sealed class DolRunner
         }
     }
 
+    private static bool TryFastForwardSonicGeneratedRangeScan(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        if (pc == SonicGeneratedRangeScanLoopPc)
+        {
+            return TryFastForwardSonicGeneratedRangeScanLoop(
+                state,
+                bus,
+                out skippedInstructions,
+                limit: 2048,
+                indexStride: 56,
+                groupStride: 0,
+                baseOffset: 0x0001_A800,
+                loopPc: SonicGeneratedRangeScanLoopPc,
+                loopExitPc: 0x80BC_C094,
+                firstSkipInstructions: 25,
+                secondSkipInstructions: 46,
+                matcher: MatchesSonicGeneratedRangeScanLoop);
+        }
+
+        if (pc == SonicGeneratedTileRangeScanLoopPc)
+        {
+            return TryFastForwardSonicGeneratedRangeScanLoop(
+                state,
+                bus,
+                out skippedInstructions,
+                limit: 256,
+                indexStride: 68,
+                groupStride: 17408,
+                baseOffset: 0x0002_6800,
+                loopPc: SonicGeneratedTileRangeScanLoopPc,
+                loopExitPc: 0x80BC_C228,
+                firstSkipInstructions: 27,
+                secondSkipInstructions: 50,
+                matcher: MatchesSonicGeneratedTileRangeScanLoop);
+        }
+
+        return false;
+    }
+
+    private static bool TryFastForwardSonicGeneratedRangeScanLoop(
+        PowerPcState state,
+        GameCubeBus bus,
+        out int skippedInstructions,
+        int limit,
+        int indexStride,
+        int groupStride,
+        uint baseOffset,
+        uint loopPc,
+        uint loopExitPc,
+        uint firstSkipInstructions,
+        uint secondSkipInstructions,
+        Func<GameCubeBus, uint, bool> matcher)
+    {
+        skippedInstructions = 0;
+        if (!matcher(bus, state.Pc))
+        {
+            return false;
+        }
+
+        int index = unchecked((int)state.Gpr[31]);
+        if (index < 0 || index >= limit)
+        {
+            return false;
+        }
+
+        try
+        {
+            uint tableBasePointerAddress = 0x80BD_4F58;
+            uint tableBase = bus.Read32(tableBasePointerAddress);
+            float lower = ReadSingleFloat(bus, 0x80BE_CA10);
+            float upper = ReadSingleFloat(bus, 0x80BE_CA08);
+            if (float.IsNaN(lower) || float.IsNaN(upper))
+            {
+                return false;
+            }
+
+            uint skipped = 0;
+            while (index < limit)
+            {
+                uint offset = unchecked((uint)(state.Gpr[30] * (uint)groupStride + (uint)index * (uint)indexStride) + baseOffset);
+                uint valueAddress = unchecked(tableBase + offset);
+                int value = unchecked((int)bus.Read32(valueAddress));
+                double converted = value;
+
+                state.Gpr[3] = tableBasePointerAddress;
+                if (converted < lower)
+                {
+                    if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: checked(skipped + firstSkipInstructions), extraInstructions: 0))
+                    {
+                        break;
+                    }
+
+                    SetSonicGeneratedRangeScanFirstSkipState(state, bus, value, converted, lower, loopPc == SonicGeneratedTileRangeScanLoopPc);
+                    skipped = checked(skipped + firstSkipInstructions);
+                }
+                else if (converted >= upper)
+                {
+                    if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: checked(skipped + secondSkipInstructions), extraInstructions: 0))
+                    {
+                        break;
+                    }
+
+                    SetSonicGeneratedRangeScanSecondSkipState(state, bus, tableBase, value, converted, lower, index, loopPc == SonicGeneratedTileRangeScanLoopPc);
+                    skipped = checked(skipped + secondSkipInstructions);
+                }
+                else
+                {
+                    break;
+                }
+
+                index++;
+                state.Gpr[31] = unchecked((uint)index);
+                SetCr0ForSignedCompareImmediate(state, state.Gpr[31], limit);
+                state.Pc = index < limit ? loopPc : loopExitPc;
+            }
+
+            if (skipped == 0)
+            {
+                return false;
+            }
+
+            AdvanceFastForwardedInstructions(state, bus, skipped);
+            skippedInstructions = checked((int)skipped);
+            return true;
+        }
+        catch (AddressTranslationException)
+        {
+            return false;
+        }
+    }
+
+    private static void SetSonicGeneratedRangeScanFirstSkipState(PowerPcState state, GameCubeBus bus, int value, double converted, float threshold, bool tileLoop)
+    {
+        state.Gpr[3] = 0x80BE_CA10;
+        state.Gpr[4] = tileLoop ? 0x4330_0000 : 0x80BF_0000;
+        state.Gpr[5] = tileLoop ? 0x80BD_3120 : state.Gpr[31] * 56;
+        state.Fpr[0] = threshold;
+        state.FprPair1[0] = state.Fpr[0];
+        state.Fpr[1] = converted;
+        state.FprPair1[1] = converted;
+        bus.Write32(state.Gpr[1] + 0xC8, 0x4330_0000);
+        bus.Write32(state.Gpr[1] + 0xCC, unchecked((uint)(value ^ int.MinValue)));
+    }
+
+    private static void SetSonicGeneratedRangeScanSecondSkipState(PowerPcState state, GameCubeBus bus, uint tableBase, int value, double converted, float lower, int index, bool tileLoop)
+    {
+        state.Gpr[3] = 0x80BE_CA08;
+        state.Gpr[4] = tileLoop ? unchecked((uint)(value ^ int.MinValue)) : 0x80BF_0000;
+        state.Gpr[5] = tileLoop ? tableBase : unchecked((uint)index * 56);
+        state.Fpr[0] = lower;
+        state.FprPair1[0] = state.Fpr[0];
+        state.Fpr[1] = converted;
+        state.FprPair1[1] = converted;
+        bus.Write32(state.Gpr[1] + 0xC8, 0x4330_0000);
+        bus.Write32(state.Gpr[1] + 0xCC, unchecked((uint)(value ^ int.MinValue)));
+    }
+
     private static bool TryFastForwardSonicResourceModeQuery(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         skippedInstructions = 0;
@@ -7377,6 +7552,69 @@ public sealed class DolRunner
         && bus.Read32(pc + 0x138) == 0x2C19_0000
         && bus.Read32(pc + 0x13C) == 0x4182_0014
         && bus.Read32(pc + 0x150) == 0x4200_FEB0;
+
+    private static bool MatchesSonicGeneratedRangeScanLoop(GameCubeBus bus, uint pc) =>
+        pc == SonicGeneratedRangeScanLoopPc
+        && bus.Read32(pc + 0x00) == 0x3C80_80BD
+        && bus.Read32(pc + 0x04) == 0x3884_4F58
+        && bus.Read32(pc + 0x08) == 0x8084_0000
+        && bus.Read32(pc + 0x0C) == 0x1C7F_0038
+        && bus.Read32(pc + 0x10) == 0x3CA3_0001
+        && bus.Read32(pc + 0x14) == 0x38A5_A800
+        && bus.Read32(pc + 0x18) == 0x7C84_282E
+        && bus.Read32(pc + 0x1C) == 0x3C60_80BD
+        && bus.Read32(pc + 0x20) == 0x3863_3120
+        && bus.Read32(pc + 0x24) == 0xC823_0000
+        && bus.Read32(pc + 0x28) == 0x6C83_8000
+        && bus.Read32(pc + 0x2C) == 0x9061_00CC
+        && bus.Read32(pc + 0x30) == 0x3C60_4330
+        && bus.Read32(pc + 0x34) == 0x9061_00C8
+        && bus.Read32(pc + 0x38) == 0xC801_00C8
+        && bus.Read32(pc + 0x3C) == 0xEC20_0828
+        && bus.Read32(pc + 0x40) == 0x3C80_80BF
+        && bus.Read32(pc + 0x44) == 0x3864_CA10
+        && bus.Read32(pc + 0x48) == 0xC003_0000
+        && bus.Read32(pc + 0x4C) == 0xFC01_0040
+        && bus.Read32(pc + 0x50) == 0x4C40_1382
+        && bus.Read32(pc + 0x54) == 0x4082_0078
+        && bus.Read32(pc + 0xA4) == 0xFC01_0040
+        && bus.Read32(pc + 0xA8) == 0x4081_0024
+        && bus.Read32(pc + 0xC8) == 0x4BFF_8549
+        && bus.Read32(pc + 0xCC) == 0x3BFF_0001
+        && bus.Read32(pc + 0xD0) == 0x2C1F_0800
+        && bus.Read32(pc + 0xD4) == 0x4180_FF2C;
+
+    private static bool MatchesSonicGeneratedTileRangeScanLoop(GameCubeBus bus, uint pc) =>
+        pc == SonicGeneratedTileRangeScanLoopPc
+        && bus.Read32(pc + 0x00) == 0x3C60_80BD
+        && bus.Read32(pc + 0x04) == 0x3883_4F58
+        && bus.Read32(pc + 0x08) == 0x80A4_0000
+        && bus.Read32(pc + 0x0C) == 0x1C7E_4400
+        && bus.Read32(pc + 0x10) == 0x1C9F_0044
+        && bus.Read32(pc + 0x14) == 0x7C63_2214
+        && bus.Read32(pc + 0x18) == 0x3C63_0002
+        && bus.Read32(pc + 0x1C) == 0x3863_6800
+        && bus.Read32(pc + 0x20) == 0x7C65_182E
+        && bus.Read32(pc + 0x24) == 0x3CA0_80BD
+        && bus.Read32(pc + 0x28) == 0x38A5_3120
+        && bus.Read32(pc + 0x2C) == 0xC825_0000
+        && bus.Read32(pc + 0x30) == 0x6C63_8000
+        && bus.Read32(pc + 0x34) == 0x9061_00CC
+        && bus.Read32(pc + 0x38) == 0x3C80_4330
+        && bus.Read32(pc + 0x3C) == 0x9081_00C8
+        && bus.Read32(pc + 0x40) == 0xC801_00C8
+        && bus.Read32(pc + 0x44) == 0xEC20_0828
+        && bus.Read32(pc + 0x48) == 0x3C60_80BF
+        && bus.Read32(pc + 0x4C) == 0x3863_CA10
+        && bus.Read32(pc + 0x50) == 0xC003_0000
+        && bus.Read32(pc + 0x54) == 0xFC01_0040
+        && bus.Read32(pc + 0x58) == 0x4C40_1382
+        && bus.Read32(pc + 0x5C) == 0x4082_011C
+        && bus.Read32(pc + 0xB4) == 0xFC01_0040
+        && bus.Read32(pc + 0xB8) == 0x4081_00C0
+        && bus.Read32(pc + 0x178) == 0x3BFF_0001
+        && bus.Read32(pc + 0x17C) == 0x2C1F_0100
+        && bus.Read32(pc + 0x180) == 0x4180_FE80;
 
     private static (double Lane0, double Lane1) ReadPairedSingleFloatPair(GameCubeBus bus, uint address) =>
         (ReadSingleFloat(bus, address), ReadSingleFloat(bus, address + sizeof(uint)));

@@ -667,7 +667,7 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "pc": "0x80BCC0C4",
+        "pc": "0x80120118",
         "topPc": "0x80101948",
         "minTopPcCount": 1800,
         "nonExternalInterruptTopPc": "0x80101948",
@@ -682,7 +682,8 @@
         "minSonicGxDrawBeginInstructions": 80000,
         "minSonicGxFloatTexcoordStripEmitInstructions": 140000,
         "minSonicPairedTransform4dInstructions": 40000,
-        "minSonicVectorBlendCopyInstructions": 80000
+        "minSonicVectorBlendCopyInstructions": 80000,
+        "minSonicGeneratedRangeScanInstructions": 150000
       }
     },
     {

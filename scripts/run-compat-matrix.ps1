@@ -357,6 +357,7 @@ foreach ($target in $selectedTargets) {
             sonicGxFloatTexcoordStripEmitInstructions = ""
             sonicPairedTransform4dInstructions = ""
             sonicVectorBlendCopyInstructions = ""
+            sonicGeneratedRangeScanInstructions = ""
             topPc = ""
             topPcCount = ""
             nonExternalInterruptTopPc = ""
@@ -596,6 +597,7 @@ foreach ($target in $selectedTargets) {
     $sonicGxFloatTexcoordStripEmitInstructions = Get-Value $fastForward "sonicGxFloatTexcoordStripEmitInstructions" ""
     $sonicPairedTransform4dInstructions = Get-Value $fastForward "sonicPairedTransform4dInstructions" ""
     $sonicVectorBlendCopyInstructions = Get-Value $fastForward "sonicVectorBlendCopyInstructions" ""
+    $sonicGeneratedRangeScanInstructions = Get-Value $fastForward "sonicGeneratedRangeScanInstructions" ""
 
     $expectedMinPrsDecompressInstructions = Get-Value $expected "minPrsDecompressInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinPrsDecompressInstructions -and [long]$prsDecompressInstructions -lt [long]$expectedMinPrsDecompressInstructions) {
@@ -680,6 +682,11 @@ foreach ($target in $selectedTargets) {
     $expectedMinSonicVectorBlendCopyInstructions = Get-Value $expected "minSonicVectorBlendCopyInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinSonicVectorBlendCopyInstructions -and [long]$sonicVectorBlendCopyInstructions -lt [long]$expectedMinSonicVectorBlendCopyInstructions) {
         $regressions.Add("sonicVectorBlendCopyInstructions expected >= $expectedMinSonicVectorBlendCopyInstructions got $sonicVectorBlendCopyInstructions")
+    }
+
+    $expectedMinSonicGeneratedRangeScanInstructions = Get-Value $expected "minSonicGeneratedRangeScanInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinSonicGeneratedRangeScanInstructions -and [long]$sonicGeneratedRangeScanInstructions -lt [long]$expectedMinSonicGeneratedRangeScanInstructions) {
+        $regressions.Add("sonicGeneratedRangeScanInstructions expected >= $expectedMinSonicGeneratedRangeScanInstructions got $sonicGeneratedRangeScanInstructions")
     }
 
     $pcProfile = Get-Value $summary "pcProfile" $null
@@ -932,6 +939,7 @@ foreach ($target in $selectedTargets) {
         sonicGxFloatTexcoordStripEmitInstructions = $sonicGxFloatTexcoordStripEmitInstructions
         sonicPairedTransform4dInstructions = $sonicPairedTransform4dInstructions
         sonicVectorBlendCopyInstructions = $sonicVectorBlendCopyInstructions
+        sonicGeneratedRangeScanInstructions = $sonicGeneratedRangeScanInstructions
         topPc = $topPc
         topPcCount = $topPcCount
         nonExternalInterruptTopPc = $nonExternalInterruptTopPc
