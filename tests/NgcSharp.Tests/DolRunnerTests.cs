@@ -2784,6 +2784,7 @@ public sealed class DolRunnerTests
     {
         const uint headerPc = 0x8011_CD40;
         const uint highRangePc = 0x8011_CDE8;
+        const uint extendedRangePc = 0x8011_CE20;
         foreach (uint command in new[] { 0x04u, 0x11u })
         {
             GameCubeBus expectedBus = new();
@@ -2816,6 +2817,27 @@ public sealed class DolRunnerTests
             WriteSonicGxCommandDispatch(actualBus.Memory);
             PowerPcState expectedState = CreateSonicGxCommandDispatchState(highRangePc, command);
             PowerPcState actualState = CreateSonicGxCommandDispatchState(highRangePc, command);
+
+            new PowerPcInterpreter().Run(expectedState, expectedBus, 2);
+            bool skipped = InvokeFastForwardSonicGxCommandDispatch(actualState, actualBus, out int skippedInstructions);
+
+            Assert.True(skipped);
+            Assert.Equal(2, skippedInstructions);
+            Assert.Equal(expectedState.Pc, actualState.Pc);
+            Assert.Equal(expectedState.Cr, actualState.Cr);
+            Assert.Equal(expectedState.Gpr[25], actualState.Gpr[25]);
+            Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+            Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        }
+
+        foreach (uint command in new[] { 0x3Fu, 0x40u })
+        {
+            GameCubeBus expectedBus = new();
+            GameCubeBus actualBus = new();
+            WriteSonicGxCommandDispatch(expectedBus.Memory);
+            WriteSonicGxCommandDispatch(actualBus.Memory);
+            PowerPcState expectedState = CreateSonicGxCommandDispatchState(extendedRangePc, command);
+            PowerPcState actualState = CreateSonicGxCommandDispatchState(extendedRangePc, command);
 
             new PowerPcInterpreter().Run(expectedState, expectedBus, 2);
             bool skipped = InvokeFastForwardSonicGxCommandDispatch(actualState, actualBus, out int skippedInstructions);
@@ -5157,6 +5179,12 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, highRangePc + 0x04, 0x4080_0034);
         WriteInstruction(memory, highRangePc + 0x08, 0x2C18_0000);
         WriteInstruction(memory, highRangePc + 0x38, 0x2C19_0040);
+
+        const uint extendedRangePc = 0x8011_CE20;
+        WriteInstruction(memory, extendedRangePc + 0x00, 0x2C19_0040);
+        WriteInstruction(memory, extendedRangePc + 0x04, 0x4080_003C);
+        WriteInstruction(memory, extendedRangePc + 0x08, 0xAB34_0000);
+        WriteInstruction(memory, extendedRangePc + 0x40, 0x7E83_A378);
     }
 
     private static void WriteSonicGprSaveRestoreTail(GameCubeMemory memory)

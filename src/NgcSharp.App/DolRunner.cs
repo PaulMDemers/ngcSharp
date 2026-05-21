@@ -37,6 +37,7 @@ public sealed class DolRunner
     private const uint SonicGxCommandListTerminalInstructions = 23;
     private const uint SonicGxCommandDispatchHeaderPc = 0x8011_CD40;
     private const uint SonicGxCommandDispatchHighRangePc = 0x8011_CDE8;
+    private const uint SonicGxCommandDispatchExtendedRangePc = 0x8011_CE20;
     private const uint SonicGprSaveTailPc = 0x8010_AFCC;
     private const uint SonicGprRestoreTailPc = 0x8010_B018;
     private const uint SonicGxAttributeStateSetterPc = 0x8010_0D44;
@@ -6682,6 +6683,22 @@ public sealed class DolRunner
             return true;
         }
 
+        if (MatchesSonicGxCommandDispatchExtendedRange(bus, state.Pc))
+        {
+            const uint skipped = 2;
+            if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: skipped, extraInstructions: 0))
+            {
+                return false;
+            }
+
+            uint command = state.Gpr[25];
+            state.Pc = unchecked((int)command) >= 64 ? SonicGxCommandDispatchExtendedRangePc + 0x40 : SonicGxCommandDispatchExtendedRangePc + 0x08;
+            SetCr0ForSignedCompareImmediate(state, command, 64);
+            AdvanceFastForwardedInstructions(state, bus, skipped);
+            skippedInstructions = checked((int)skipped);
+            return true;
+        }
+
         return false;
     }
 
@@ -6700,6 +6717,13 @@ public sealed class DolRunner
         && bus.Read32(pc + 0x04) == 0x4080_0034
         && bus.Read32(pc + 0x08) == 0x2C18_0000
         && bus.Read32(pc + 0x38) == 0x2C19_0040;
+
+    private static bool MatchesSonicGxCommandDispatchExtendedRange(GameCubeBus bus, uint pc) =>
+        pc == SonicGxCommandDispatchExtendedRangePc
+        && bus.Read32(pc + 0x00) == 0x2C19_0040
+        && bus.Read32(pc + 0x04) == 0x4080_003C
+        && bus.Read32(pc + 0x08) == 0xAB34_0000
+        && bus.Read32(pc + 0x40) == 0x7E83_A378;
 
     private static bool TryFastForwardSonicGprSaveRestoreTail(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
