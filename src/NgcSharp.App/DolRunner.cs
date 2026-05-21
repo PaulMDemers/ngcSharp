@@ -43,6 +43,8 @@ public sealed class DolRunner
     private const uint SonicGxDrawBeginPc = 0x8010_1948;
     private const uint SonicGxDrawBeginFastForwardInstructions = 28;
     private const uint SonicGxVertexDescriptorSetterPc = 0x8010_0830;
+    private const uint SonicGxVertexAttributeFlushPc = 0x8010_3D28;
+    private const uint SonicGxVertexAttributeHelperPc = 0x8010_3C5C;
     private const uint SonicGxIndexedStripDrawBeginPc = 0x8012_0078;
     private const uint SonicGxIndexedStripTailPc = 0x8012_00FC;
     private const uint SonicGxFloatTexcoordStripEmitLoopPc = 0x8011_D860;
@@ -214,6 +216,7 @@ public sealed class DolRunner
         ulong sonicGxAttributeStateSetterFastForwardInstructions = 0;
         ulong sonicGxDrawBeginFastForwardInstructions = 0;
         ulong sonicGxVertexDescriptorSetterFastForwardInstructions = 0;
+        ulong sonicGxVertexAttributeFlushFastForwardInstructions = 0;
         ulong sonicGxIndexedStripBatchFastForwardInstructions = 0;
         ulong sonicGxIndexedStripDrawBeginFastForwardInstructions = 0;
         ulong sonicGxIndexedStripTailFastForwardInstructions = 0;
@@ -765,6 +768,7 @@ public sealed class DolRunner
                         sonicGxAttributeStateSetterInstructions = sonicGxAttributeStateSetterFastForwardInstructions,
                         sonicGxDrawBeginInstructions = sonicGxDrawBeginFastForwardInstructions,
                         sonicGxVertexDescriptorSetterInstructions = sonicGxVertexDescriptorSetterFastForwardInstructions,
+                        sonicGxVertexAttributeFlushInstructions = sonicGxVertexAttributeFlushFastForwardInstructions,
                         sonicGxIndexedStripBatchInstructions = sonicGxIndexedStripBatchFastForwardInstructions,
                         sonicGxIndexedStripDrawBeginInstructions = sonicGxIndexedStripDrawBeginFastForwardInstructions,
                         sonicGxIndexedStripTailInstructions = sonicGxIndexedStripTailFastForwardInstructions,
@@ -1197,6 +1201,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxVertexDescriptorSetter(state, bus, out skippedInstructions))
                 {
                     sonicGxVertexDescriptorSetterFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxVertexAttributeFlush(state, bus, out skippedInstructions))
+                {
+                    sonicGxVertexAttributeFlushFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -6177,6 +6188,371 @@ public sealed class DolRunner
         && bus.Read32(pc + 0x358) == 0x9003_04F0
         && bus.Read32(pc + 0x35C) == 0x4E80_0020;
 
+    private static bool TryFastForwardSonicGxVertexAttributeFlush(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (!MatchesSonicGxVertexAttributeFlush(bus, state.Pc))
+        {
+            return false;
+        }
+
+        uint stateBlockPointerAddress = unchecked(state.Gpr[13] + 0xFFFF_8380u);
+        uint oldStackPointer = state.Gpr[1];
+        uint stackPointer = unchecked(oldStackPointer - 40u);
+        if (!bus.Memory.IsMainRamAddress(stateBlockPointerAddress, sizeof(uint))
+            || !bus.Memory.IsMainRamAddress(stackPointer, 48))
+        {
+            return false;
+        }
+
+        uint stateBlock = bus.Memory.Read32(stateBlockPointerAddress);
+        if (!bus.Memory.IsMainRamAddress(stateBlock, 0x4E0)
+            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 2048, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        uint skipped = 0;
+        uint originalLr = state.Lr;
+        uint originalR27 = state.Gpr[27];
+        uint originalR28 = state.Gpr[28];
+        uint originalR29 = state.Gpr[29];
+        uint originalR30 = state.Gpr[30];
+        uint originalR31 = state.Gpr[31];
+
+        bus.Memory.Write32(oldStackPointer + 4, originalLr);
+        bus.Memory.Write32(stackPointer, oldStackPointer);
+        state.Gpr[1] = stackPointer;
+        bus.Memory.Write32(stackPointer + 20, originalR27);
+        bus.Memory.Write32(stackPointer + 24, originalR28);
+        bus.Memory.Write32(stackPointer + 28, originalR29);
+        bus.Memory.Write32(stackPointer + 32, originalR30);
+        bus.Memory.Write32(stackPointer + 36, originalR31);
+        skipped += 4;
+
+        state.Gpr[3] = stateBlock;
+        state.Gpr[0] = bus.Memory.Read32(stateBlock + 0x4DC);
+        skipped += 2;
+        SetCr0ForUnsignedCompareImmediate(state, state.Gpr[0], 0xFF);
+        skipped++;
+        if (state.Gpr[0] == 0xFF)
+        {
+            skipped++;
+            return FinishSonicGxVertexAttributeFlush(state, bus, skipped, originalLr, originalR27, originalR28, originalR29, originalR30, originalR31, out skippedInstructions);
+        }
+
+        skipped++;
+        state.Gpr[0] = bus.Memory.Read32(stateBlock + 0x204);
+        state.Gpr[30] = state.Gpr[0];
+        state.Gpr[3] = Rlwinm(state.Gpr[0], 22, 28, 31);
+        state.Gpr[31] = unchecked(state.Gpr[3] + 1u);
+        state.Gpr[27] = Rlwinm(state.Gpr[0], 16, 29, 31);
+        skipped += 5;
+        skipped++;
+
+        while (true)
+        {
+            SetCr0ForUnsignedCompareImmediate(state, state.Gpr[30], state.Gpr[27]);
+            skipped++;
+            if (state.Gpr[30] >= state.Gpr[27])
+            {
+                skipped++;
+                break;
+            }
+
+            skipped++;
+            uint word120 = bus.Memory.Read32(stateBlock + 0x120);
+            if (state.Gpr[30] > 3)
+            {
+                return false;
+            }
+
+            switch (state.Gpr[30])
+            {
+                case 0:
+                    state.Gpr[3] = stateBlock;
+                    state.Gpr[0] = word120;
+                    state.Gpr[29] = Rlwinm(state.Gpr[0], 0, 29, 31);
+                    state.Gpr[28] = Rlwinm(state.Gpr[0], 29, 29, 31);
+                    skipped += 7;
+                    break;
+                case 1:
+                    state.Gpr[3] = stateBlock;
+                    state.Gpr[0] = word120;
+                    state.Gpr[29] = Rlwinm(state.Gpr[0], 26, 29, 31);
+                    state.Gpr[28] = Rlwinm(state.Gpr[0], 23, 29, 31);
+                    skipped += 10;
+                    break;
+                case 2:
+                    state.Gpr[3] = stateBlock;
+                    state.Gpr[0] = word120;
+                    state.Gpr[29] = Rlwinm(state.Gpr[0], 20, 29, 31);
+                    state.Gpr[28] = Rlwinm(state.Gpr[0], 17, 29, 31);
+                    skipped += 6;
+                    break;
+                default:
+                    state.Gpr[3] = stateBlock;
+                    state.Gpr[0] = word120;
+                    state.Gpr[29] = Rlwinm(state.Gpr[0], 14, 29, 31);
+                    state.Gpr[28] = Rlwinm(state.Gpr[0], 11, 29, 31);
+                    skipped += 9;
+                    break;
+            }
+
+            state.Gpr[3] = stateBlock;
+            state.Gpr[0] = 1;
+            state.Gpr[0] = ShiftLeftWord(state.Gpr[0], state.Gpr[28]);
+            state.Gpr[3] = bus.Memory.Read32(stateBlock + 0x4DC);
+            state.Gpr[0] = state.Gpr[3] & state.Gpr[0];
+            SetCr0(state, state.Gpr[0]);
+            skipped += 5;
+            if (state.Gpr[0] == 0)
+            {
+                skipped++;
+                state.Gpr[3] = state.Gpr[29];
+                state.Gpr[4] = state.Gpr[28];
+                skipped += 2;
+                if (!TryFastForwardSonicGxVertexAttributeHelperBody(state, bus))
+                {
+                    return false;
+                }
+
+                state.Lr = 0x8010_3DF8;
+                skipped += 52;
+            }
+            else
+            {
+                skipped++;
+            }
+
+            state.Gpr[30] = unchecked(state.Gpr[30] + 1u);
+            skipped++;
+        }
+
+        state.Gpr[27] = 0;
+        state.Gpr[30] = state.Gpr[27];
+        skipped += 3;
+        while (true)
+        {
+            SetCr0ForUnsignedCompareImmediate(state, state.Gpr[27], state.Gpr[31]);
+            skipped++;
+            if (state.Gpr[27] >= state.Gpr[31])
+            {
+                skipped++;
+                break;
+            }
+
+            skipped++;
+            state.Gpr[5] = stateBlock;
+            state.Gpr[3] = unchecked(state.Gpr[30] + 0x49Cu);
+            state.Gpr[4] = Rlwinm(state.Gpr[27], 1, 0, 29);
+            if (!bus.Memory.IsMainRamAddress(unchecked(state.Gpr[5] + state.Gpr[3]), sizeof(uint))
+                || !bus.Memory.IsMainRamAddress(unchecked(state.Gpr[5] + state.Gpr[4] + 0x100u), sizeof(uint)))
+            {
+                return false;
+            }
+
+            state.Gpr[3] = bus.Memory.Read32(unchecked(state.Gpr[5] + state.Gpr[3]));
+            state.Gpr[0] = Rlwinm(state.Gpr[27], 0, 31, 31);
+            state.Gpr[4] = unchecked(state.Gpr[4] + 0x100u);
+            state.Gpr[4] = unchecked(state.Gpr[5] + state.Gpr[4]);
+            state.Gpr[29] = Rlwinm(state.Gpr[3], 0, 24, 22);
+            skipped += 8;
+            state.Gpr[0] = bus.Memory.Read32(state.Gpr[4]);
+            if (state.Gpr[27] % 2 != 0)
+            {
+                state.Gpr[28] = Rlwinm(state.Gpr[0], 17, 29, 31);
+                skipped += 4;
+            }
+            else
+            {
+                state.Gpr[28] = Rlwinm(state.Gpr[0], 29, 29, 31);
+                skipped += 3;
+            }
+
+            SetCr0ForUnsignedCompareImmediate(state, state.Gpr[29], 0xFF);
+            skipped++;
+            if (state.Gpr[29] != 0xFF)
+            {
+                skipped++;
+                state.Gpr[0] = unchecked(state.Gpr[0] + 1u);
+                state.Gpr[3] = bus.Memory.Read32(stateBlock + 0x4DC);
+                state.Gpr[0] = ShiftLeftWord(state.Gpr[0], state.Gpr[28]);
+                state.Gpr[0] = state.Gpr[3] & state.Gpr[0];
+                SetCr0(state, state.Gpr[0]);
+                skipped += 4;
+                if (state.Gpr[0] == 0)
+                {
+                    skipped++;
+                    state.Gpr[3] = state.Gpr[29];
+                    state.Gpr[4] = state.Gpr[28];
+                    skipped += 2;
+                    if (!TryFastForwardSonicGxVertexAttributeHelperBody(state, bus))
+                    {
+                        return false;
+                    }
+
+                    state.Lr = 0x8010_3E70;
+                    skipped += 52;
+                }
+                else
+                {
+                    skipped++;
+                }
+            }
+            else
+            {
+                skipped++;
+            }
+
+            state.Gpr[30] = unchecked(state.Gpr[30] + 4u);
+            state.Gpr[27] = unchecked(state.Gpr[27] + 1u);
+            skipped += 2;
+        }
+
+        return FinishSonicGxVertexAttributeFlush(state, bus, skipped, originalLr, originalR27, originalR28, originalR29, originalR30, originalR31, out skippedInstructions);
+    }
+
+    private static bool TryFastForwardSonicGxVertexAttributeHelperBody(PowerPcState state, GameCubeBus bus)
+    {
+        uint stateBlockPointerAddress = unchecked(state.Gpr[13] + 0xFFFF_8380u);
+        if (!bus.Memory.IsMainRamAddress(stateBlockPointerAddress, sizeof(uint)))
+        {
+            return false;
+        }
+
+        uint stateBlock = bus.Memory.Read32(stateBlockPointerAddress);
+        uint destinationOffset = Rlwinm(state.Gpr[4], 2, 0, 29);
+        uint sourceOffset = Rlwinm(state.Gpr[3], 2, 0, 29);
+        uint sourceBase = unchecked(stateBlock + sourceOffset);
+        uint destinationBase = unchecked(stateBlock + destinationOffset);
+        if (!bus.Memory.IsMainRamAddress(sourceBase + 0x47C, sizeof(uint))
+            || !bus.Memory.IsMainRamAddress(destinationBase + 0xD8, sizeof(uint))
+            || !bus.Memory.IsMainRamAddress(stateBlock + 2, sizeof(ushort)))
+        {
+            return false;
+        }
+
+        uint value45C = bus.Memory.Read32(sourceBase + 0x45C);
+        uint fifoRegister = unchecked(destinationOffset + 97u);
+        uint wordB8 = bus.Memory.Read32(destinationBase + 0xB8);
+        wordB8 = Rlwimi(wordB8, value45C, 0, 22, 31);
+        bus.Memory.Write32(destinationBase + 0xB8, wordB8);
+
+        uint wordD8 = bus.Memory.Read32(destinationBase + 0xD8);
+        wordD8 = Rlwimi(wordD8, value45C, 22, 22, 31);
+        bus.Memory.Write32(destinationBase + 0xD8, wordD8);
+
+        uint value47C = bus.Memory.Read32(sourceBase + 0x47C);
+        wordB8 = bus.Memory.Read32(destinationBase + 0xB8);
+        uint highBits = Rlwinm(value47C, 30, 30, 31);
+        uint highFlag = unchecked(1u - highBits);
+        uint lowBits = Rlwinm(value47C, 0, 30, 31);
+        uint lowFlag = uint.LeadingZeroCount(unchecked(1u - lowBits));
+        wordB8 = (wordB8 & 0xFFFF_03FFu) | Rlwinm(lowFlag, 11, 8, 15);
+        bus.Memory.Write32(destinationBase + 0xB8, wordB8);
+
+        uint highFlagBits = uint.LeadingZeroCount(highFlag);
+        wordD8 = bus.Memory.Read32(destinationBase + 0xD8);
+        wordD8 = (wordD8 & 0xFFFE_0000u) | Rlwinm(highFlagBits, 11, 8, 15);
+        bus.Memory.Write32(destinationBase + 0xD8, wordD8);
+
+        const uint fifo = 0xCC00_8000;
+        bus.Write8(fifo, (byte)fifoRegister);
+        bus.Write32(fifo, bus.Memory.Read32(destinationBase + 0xB8));
+        bus.Write8(fifo, (byte)fifoRegister);
+        uint finalWordD8 = bus.Memory.Read32(destinationBase + 0xD8);
+        bus.Write32(fifo, finalWordD8);
+        bus.Memory.Write16(stateBlock + 2, 0);
+
+        state.Gpr[0] = finalWordD8;
+        state.Gpr[3] = 0;
+        state.Gpr[4] = destinationBase;
+        state.Gpr[5] = stateBlock;
+        state.Gpr[6] = 0xCC01_0000;
+        state.Gpr[7] = fifoRegister;
+        state.Gpr[8] = destinationBase;
+        state.Gpr[9] = value47C;
+        state.Gpr[10] = destinationBase;
+        return true;
+    }
+
+    private static bool FinishSonicGxVertexAttributeFlush(
+        PowerPcState state,
+        GameCubeBus bus,
+        uint skipped,
+        uint originalLr,
+        uint originalR27,
+        uint originalR28,
+        uint originalR29,
+        uint originalR30,
+        uint originalR31,
+        out int skippedInstructions)
+    {
+        if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: skipped + 5, extraInstructions: 0))
+        {
+            skippedInstructions = 0;
+            return false;
+        }
+
+        state.Gpr[27] = originalR27;
+        state.Gpr[28] = originalR28;
+        state.Gpr[29] = originalR29;
+        state.Gpr[30] = originalR30;
+        state.Gpr[31] = originalR31;
+        state.Gpr[0] = bus.Memory.Read32(state.Gpr[1] + 44);
+        state.Gpr[1] = unchecked(state.Gpr[1] + 40u);
+        state.Lr = originalLr;
+        state.Pc = originalLr & 0xFFFF_FFFCu;
+        skipped += 5;
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+    private static bool MatchesSonicGxVertexAttributeFlush(GameCubeBus bus, uint pc) =>
+        pc == SonicGxVertexAttributeFlushPc
+        && bus.Read32(pc + 0x000) == 0x7C08_02A6
+        && bus.Read32(pc + 0x004) == 0x9001_0004
+        && bus.Read32(pc + 0x008) == 0x9421_FFD8
+        && bus.Read32(pc + 0x00C) == 0xBF61_0014
+        && bus.Read32(pc + 0x010) == 0x806D_8380
+        && bus.Read32(pc + 0x014) == 0x8003_04DC
+        && bus.Read32(pc + 0x018) == 0x2800_00FF
+        && bus.Read32(pc + 0x01C) == 0x4182_013C
+        && bus.Read32(pc + 0x020) == 0x8003_0204
+        && bus.Read32(pc + 0x024) == 0x3BC0_0000
+        && bus.Read32(pc + 0x028) == 0x5403_B73E
+        && bus.Read32(pc + 0x02C) == 0x3BE3_0001
+        && bus.Read32(pc + 0x030) == 0x541B_877E
+        && bus.Read32(pc + 0x034) == 0x4800_00A0
+        && bus.Read32(pc + 0x0D4) == 0x7C1E_D840
+        && bus.Read32(pc + 0x0D8) == 0x4180_FF60
+        && bus.Read32(pc + 0x0DC) == 0x3B60_0000
+        && bus.Read32(pc + 0x0E0) == 0x3BDB_0000
+        && bus.Read32(pc + 0x0E4) == 0x4800_006C
+        && bus.Read32(pc + 0x150) == 0x7C1B_F840
+        && bus.Read32(pc + 0x154) == 0x4180_FF94
+        && bus.Read32(pc + 0x158) == 0xBB61_0014
+        && bus.Read32(pc + 0x15C) == 0x8001_002C
+        && bus.Read32(pc + 0x160) == 0x3821_0028
+        && bus.Read32(pc + 0x164) == 0x7C08_03A6
+        && bus.Read32(pc + 0x168) == 0x4E80_0020
+        && MatchesSonicGxVertexAttributeHelper(bus);
+
+    private static bool MatchesSonicGxVertexAttributeHelper(GameCubeBus bus) =>
+        bus.Read32(SonicGxVertexAttributeHelperPc + 0x000) == 0x80AD_8380
+        && bus.Read32(SonicGxVertexAttributeHelperPc + 0x004) == 0x5480_103A
+        && bus.Read32(SonicGxVertexAttributeHelperPc + 0x008) == 0x5469_103A
+        && bus.Read32(SonicGxVertexAttributeHelperPc + 0x028) == 0x50A3_05BE
+        && bus.Read32(SonicGxVertexAttributeHelperPc + 0x044) == 0x50A4_B5BE
+        && bus.Read32(SonicGxVertexAttributeHelperPc + 0x0A8) == 0x98E6_8000
+        && bus.Read32(SonicGxVertexAttributeHelperPc + 0x0B4) == 0x9006_8000
+        && bus.Read32(SonicGxVertexAttributeHelperPc + 0x0B8) == 0x98E6_8000
+        && bus.Read32(SonicGxVertexAttributeHelperPc + 0x0C0) == 0x9006_8000
+        && bus.Read32(SonicGxVertexAttributeHelperPc + 0x0C4) == 0xB065_0002
+        && bus.Read32(SonicGxVertexAttributeHelperPc + 0x0C8) == 0x4E80_0020;
+
     private static bool MatchesSonicGxIndexedStripDrawBegin(GameCubeBus bus, uint pc) =>
         pc == SonicGxIndexedStripDrawBeginPc
         && bus.Read32(pc + 0x00) == 0xA818_0000
@@ -9620,6 +9996,15 @@ public sealed class DolRunner
         uint rotated = shift == 0 ? value : (value << shift) | (value >> (32 - shift));
         return rotated & PowerPcMask(maskBegin, maskEnd);
     }
+
+    private static uint Rlwimi(uint original, uint value, int shift, int maskBegin, int maskEnd)
+    {
+        uint mask = PowerPcMask(maskBegin, maskEnd);
+        uint rotated = shift == 0 ? value : (value << shift) | (value >> (32 - shift));
+        return (original & ~mask) | (rotated & mask);
+    }
+
+    private static uint ShiftLeftWord(uint value, uint shift) => value << (int)(shift & 0x1F);
 
     private static uint PowerPcMask(int begin, int end)
     {
