@@ -6396,7 +6396,7 @@ public sealed class DolRunner
         uint attribute = state.Gpr[3];
         uint parameter = state.Gpr[4];
         uint caseIndex = unchecked(parameter - 9u);
-        if (caseIndex != 4)
+        if (caseIndex is not (0 or 4))
         {
             return false;
         }
@@ -6408,9 +6408,10 @@ public sealed class DolRunner
         }
 
         uint stateBlock = bus.Memory.Read32(stateBlockPointerAddress);
+        uint skipped = caseIndex == 0 ? 43u : 44u;
         if (!bus.Memory.IsMainRamAddress(stateBlock, 0x4F4)
             || attribute > 7
-            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: 44, extraInstructions: 0))
+            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: skipped, extraInstructions: 0))
         {
             return false;
         }
@@ -6419,15 +6420,41 @@ public sealed class DolRunner
         uint wordAddress = unchecked(stateBlock + attributeOffset + 0x1C);
         uint originalWord = bus.Memory.Read32(wordAddress);
         uint word = originalWord;
-        word = Rlwinm(word, 0, 11, 9) | Rlwinm(state.Gpr[5], 21, 0, 10);
-        bus.Memory.Write32(wordAddress, word);
-        word = bus.Memory.Read32(wordAddress);
-        uint maskedSecondWord = Rlwinm(word, 0, 10, 6);
-        word = maskedSecondWord | Rlwinm(state.Gpr[6], 22, 0, 9);
-        bus.Memory.Write32(wordAddress, word);
-        word = bus.Memory.Read32(wordAddress);
-        word = Rlwinm(word, 0, 7, 1) | Rlwinm(state.Gpr[7], 25, 0, 6);
-        bus.Memory.Write32(wordAddress, word);
+        uint finalR6;
+        uint finalR8;
+        uint target;
+        if (caseIndex == 0)
+        {
+            word = Rlwinm(word, 0, 0, 30) | state.Gpr[5];
+            bus.Memory.Write32(wordAddress, word);
+            uint shiftedR6 = Rlwinm(state.Gpr[6], 1, 0, 30);
+            word = bus.Memory.Read32(wordAddress);
+            word = Rlwinm(word, 0, 31, 27) | shiftedR6;
+            bus.Memory.Write32(wordAddress, word);
+            uint r7Bits = Rlwinm(state.Gpr[7], 4, 20, 27);
+            word = bus.Memory.Read32(wordAddress);
+            uint maskedThirdWord = Rlwinm(word, 0, 28, 22);
+            word = maskedThirdWord | r7Bits;
+            bus.Memory.Write32(wordAddress, word);
+            finalR6 = shiftedR6;
+            finalR8 = unchecked(stateBlock + attributeOffset + 0x3C);
+            target = 0x8010_0D80;
+        }
+        else
+        {
+            word = Rlwinm(word, 0, 11, 9) | Rlwinm(state.Gpr[5], 21, 0, 10);
+            bus.Memory.Write32(wordAddress, word);
+            word = bus.Memory.Read32(wordAddress);
+            uint maskedSecondWord = Rlwinm(word, 0, 10, 6);
+            word = maskedSecondWord | Rlwinm(state.Gpr[6], 22, 0, 9);
+            bus.Memory.Write32(wordAddress, word);
+            word = bus.Memory.Read32(wordAddress);
+            word = Rlwinm(word, 0, 7, 1) | Rlwinm(state.Gpr[7], 25, 0, 6);
+            bus.Memory.Write32(wordAddress, word);
+            finalR6 = maskedSecondWord;
+            finalR8 = originalWord;
+            target = 0x8010_0E78;
+        }
 
         uint attributeByte = attribute & 0xFFu;
         uint attributeMask = Rlwinm(unchecked(attributeByte + 1u), (int)attributeByte, 24, 31);
@@ -6441,15 +6468,15 @@ public sealed class DolRunner
         state.Gpr[3] = oldDirtyAttributeFlags;
         state.Gpr[4] = stateBlock;
         state.Gpr[5] = stateBlock;
-        state.Gpr[6] = maskedSecondWord;
-        state.Gpr[8] = originalWord;
+        state.Gpr[6] = finalR6;
+        state.Gpr[8] = finalR8;
         state.Gpr[9] = unchecked(stateBlock + attributeOffset + 0x5C);
         state.Gpr[10] = 0x801D_26D0;
-        state.Ctr = 0x8010_0E78;
+        state.Ctr = target;
         state.Pc = state.Lr & 0xFFFF_FFFCu;
         SetCr0ForUnsignedCompareImmediate(state, caseIndex, 16);
-        AdvanceFastForwardedInstructions(state, bus, 44);
-        skippedInstructions = 44;
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
         return true;
     }
 
@@ -6470,6 +6497,21 @@ public sealed class DolRunner
         && bus.Read32(pc + 0x030) == 0x7C0A_002E
         && bus.Read32(pc + 0x034) == 0x7C09_03A6
         && bus.Read32(pc + 0x038) == 0x4E80_0420
+        && bus.Read32(pc + 0x03C) == 0x8004_0000
+        && bus.Read32(pc + 0x040) == 0x54C6_083C
+        && bus.Read32(pc + 0x044) == 0x5400_003C
+        && bus.Read32(pc + 0x048) == 0x7C00_2B78
+        && bus.Read32(pc + 0x04C) == 0x9004_0000
+        && bus.Read32(pc + 0x050) == 0x54E0_2536
+        && bus.Read32(pc + 0x054) == 0x80A4_0000
+        && bus.Read32(pc + 0x058) == 0x54A5_07F6
+        && bus.Read32(pc + 0x05C) == 0x7CA5_3378
+        && bus.Read32(pc + 0x060) == 0x90A4_0000
+        && bus.Read32(pc + 0x064) == 0x80A4_0000
+        && bus.Read32(pc + 0x068) == 0x54A5_072C
+        && bus.Read32(pc + 0x06C) == 0x7CA0_0378
+        && bus.Read32(pc + 0x070) == 0x9004_0000
+        && bus.Read32(pc + 0x074) == 0x4800_02B4
         && bus.Read32(pc + 0x134) == 0x8104_0000
         && bus.Read32(pc + 0x138) == 0x54A0_A814
         && bus.Read32(pc + 0x13C) == 0x5505_02D2

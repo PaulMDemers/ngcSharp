@@ -2787,52 +2787,55 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
-    public void SonicGxAttributeStateSetterFastForwardMatchesInterpreterCase4()
+    public void SonicGxAttributeStateSetterFastForwardMatchesInterpreterCases()
     {
         const uint pc = 0x8010_0D44;
         const uint stateBlock = 0x803C_0000;
-        GameCubeBus expectedBus = new();
-        GameCubeBus actualBus = new();
-        WriteSonicGxAttributeStateSetter(expectedBus.Memory, pc);
-        WriteSonicGxAttributeStateSetter(actualBus.Memory, pc);
-        PowerPcState expectedState = CreateSonicGxAttributeStateSetterState(expectedBus, pc, stateBlock);
-        PowerPcState actualState = CreateSonicGxAttributeStateSetterState(actualBus, pc, stateBlock);
-
-        PowerPcInterpreter interpreter = new();
-        int expectedInstructions = 0;
-        while (expectedState.Pc != expectedState.Lr && expectedInstructions < 96)
+        foreach (uint parameter in new[] { 9u, 13u })
         {
-            interpreter.Step(expectedState, expectedBus);
-            expectedInstructions++;
-        }
+            GameCubeBus expectedBus = new();
+            GameCubeBus actualBus = new();
+            WriteSonicGxAttributeStateSetter(expectedBus.Memory, pc);
+            WriteSonicGxAttributeStateSetter(actualBus.Memory, pc);
+            PowerPcState expectedState = CreateSonicGxAttributeStateSetterState(expectedBus, pc, stateBlock, parameter);
+            PowerPcState actualState = CreateSonicGxAttributeStateSetterState(actualBus, pc, stateBlock, parameter);
 
-        Assert.Equal(expectedState.Lr, expectedState.Pc);
-        bool skipped = InvokeFastForwardSonicGxAttributeStateSetter(actualState, actualBus, out int skippedInstructions);
-
-        Assert.True(skipped);
-        Assert.Equal(expectedInstructions, skippedInstructions);
-        Assert.Equal(expectedState.Pc, actualState.Pc);
-        Assert.Equal(expectedState.Lr, actualState.Lr);
-        Assert.Equal(expectedState.Ctr, actualState.Ctr);
-        Assert.Equal(expectedState.Cr, actualState.Cr);
-        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
-        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
-        foreach (int register in new[] { 0, 3, 4, 5, 6, 8, 9, 10 })
-        {
-            Assert.True(
-                expectedState.Gpr[register] == actualState.Gpr[register],
-                $"r{register}: expected 0x{expectedState.Gpr[register]:X8}, actual 0x{actualState.Gpr[register]:X8}");
-        }
-
-        foreach (uint offset in new[] { 0x1Cu, 0x4EEu, 0x4F0u })
-        {
-            if (offset == 0x4EE)
+            PowerPcInterpreter interpreter = new();
+            int expectedInstructions = 0;
+            while (expectedState.Pc != expectedState.Lr && expectedInstructions < 96)
             {
-                Assert.Equal(expectedBus.Memory.Read8(stateBlock + offset), actualBus.Memory.Read8(stateBlock + offset));
+                interpreter.Step(expectedState, expectedBus);
+                expectedInstructions++;
             }
-            else
+
+            Assert.Equal(expectedState.Lr, expectedState.Pc);
+            bool skipped = InvokeFastForwardSonicGxAttributeStateSetter(actualState, actualBus, out int skippedInstructions);
+
+            Assert.True(skipped);
+            Assert.Equal(expectedInstructions, skippedInstructions);
+            Assert.Equal(expectedState.Pc, actualState.Pc);
+            Assert.Equal(expectedState.Lr, actualState.Lr);
+            Assert.Equal(expectedState.Ctr, actualState.Ctr);
+            Assert.Equal(expectedState.Cr, actualState.Cr);
+            Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+            Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+            foreach (int register in new[] { 0, 3, 4, 5, 6, 8, 9, 10 })
             {
-                Assert.Equal(expectedBus.Memory.Read32(stateBlock + offset), actualBus.Memory.Read32(stateBlock + offset));
+                Assert.True(
+                    expectedState.Gpr[register] == actualState.Gpr[register],
+                    $"parameter {parameter}, r{register}: expected 0x{expectedState.Gpr[register]:X8}, actual 0x{actualState.Gpr[register]:X8}");
+            }
+
+            foreach (uint offset in new[] { 0x1Cu, 0x4EEu, 0x4F0u })
+            {
+                if (offset == 0x4EE)
+                {
+                    Assert.Equal(expectedBus.Memory.Read8(stateBlock + offset), actualBus.Memory.Read8(stateBlock + offset));
+                }
+                else
+                {
+                    Assert.Equal(expectedBus.Memory.Read32(stateBlock + offset), actualBus.Memory.Read32(stateBlock + offset));
+                }
             }
         }
     }
@@ -5043,6 +5046,22 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x034, 0x7C09_03A6);
         WriteInstruction(memory, pc + 0x038, 0x4E80_0420);
 
+        WriteInstruction(memory, pc + 0x03C, 0x8004_0000);
+        WriteInstruction(memory, pc + 0x040, 0x54C6_083C);
+        WriteInstruction(memory, pc + 0x044, 0x5400_003C);
+        WriteInstruction(memory, pc + 0x048, 0x7C00_2B78);
+        WriteInstruction(memory, pc + 0x04C, 0x9004_0000);
+        WriteInstruction(memory, pc + 0x050, 0x54E0_2536);
+        WriteInstruction(memory, pc + 0x054, 0x80A4_0000);
+        WriteInstruction(memory, pc + 0x058, 0x54A5_07F6);
+        WriteInstruction(memory, pc + 0x05C, 0x7CA5_3378);
+        WriteInstruction(memory, pc + 0x060, 0x90A4_0000);
+        WriteInstruction(memory, pc + 0x064, 0x80A4_0000);
+        WriteInstruction(memory, pc + 0x068, 0x54A5_072C);
+        WriteInstruction(memory, pc + 0x06C, 0x7CA0_0378);
+        WriteInstruction(memory, pc + 0x070, 0x9004_0000);
+        WriteInstruction(memory, pc + 0x074, 0x4800_02B4);
+
         WriteInstruction(memory, pc + 0x134, 0x8104_0000);
         WriteInstruction(memory, pc + 0x138, 0x54A0_A814);
         WriteInstruction(memory, pc + 0x13C, 0x5505_02D2);
@@ -5074,6 +5093,7 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x354, 0x9804_04EE);
         WriteInstruction(memory, pc + 0x358, 0x4E80_0020);
 
+        memory.Write32(0x801D_26D0, pc + 0x03C);
         memory.Write32(0x801D_26D0 + 4 * sizeof(uint), pc + 0x134);
     }
 
@@ -5603,7 +5623,7 @@ public sealed class DolRunnerTests
         return state;
     }
 
-    private static PowerPcState CreateSonicGxAttributeStateSetterState(GameCubeBus bus, uint pc, uint stateBlock)
+    private static PowerPcState CreateSonicGxAttributeStateSetterState(GameCubeBus bus, uint pc, uint stateBlock, uint parameter)
     {
         PowerPcState state = new()
         {
@@ -5613,7 +5633,7 @@ public sealed class DolRunnerTests
             Xer = 0x2000_0000,
         };
         state.Gpr[3] = 0;
-        state.Gpr[4] = 13;
+        state.Gpr[4] = parameter;
         state.Gpr[5] = 1;
         state.Gpr[6] = 3;
         state.Gpr[7] = 8;
