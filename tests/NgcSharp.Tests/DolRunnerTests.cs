@@ -3379,6 +3379,46 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicCoordinatePairFillFastForwardMatchesInterpreterLoop()
+    {
+        const uint pc = 0x8014_B260;
+        const uint output = 0x8039_9000;
+        const uint iterations = 8;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        PowerPcState expectedState = CreateSonicCoordinatePairFillState(expectedBus, pc, output, iterations, columnLimit: 3, column: 2, row: 4);
+        PowerPcState actualState = CreateSonicCoordinatePairFillState(actualBus, pc, output, iterations, columnLimit: 3, column: 2, row: 4);
+
+        PowerPcInterpreter interpreter = new();
+        int expectedInstructions = 0;
+        while (expectedState.Pc != pc + 0x2C && expectedInstructions < 128)
+        {
+            interpreter.Step(expectedState, expectedBus);
+            expectedInstructions++;
+        }
+
+        Assert.Equal(pc + 0x2C, expectedState.Pc);
+        bool skipped = InvokeFastForwardSonicCoordinatePairFillLoop(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(expectedInstructions, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Ctr, actualState.Ctr);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 0, 3, 4, 5, 6 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+
+        for (uint offset = 0; offset < iterations * 2; offset++)
+        {
+            Assert.Equal(expectedBus.Memory.Read8(output + offset), actualBus.Memory.Read8(output + offset));
+        }
+    }
+
+    [Fact]
     public void SonicGeneratedRangeScanFastForwardMatchesInterpreterNoHitLoop()
     {
         const uint pc = 0x80BC_BFBC;
@@ -4339,6 +4379,16 @@ public sealed class DolRunnerTests
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicVectorBlendCopyLoop", BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("Could not find Sonic vector blend/copy fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
+    private static bool InvokeFastForwardSonicCoordinatePairFillLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicCoordinatePairFillLoop", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic coordinate pair fill fast-forward helper.");
         object?[] args = [state, bus, 0];
         bool result = (bool)method.Invoke(null, args)!;
         skippedInstructions = (int)args[2]!;
@@ -6399,6 +6449,31 @@ public sealed class DolRunnerTests
         return state;
     }
 
+    private static PowerPcState CreateSonicCoordinatePairFillState(
+        GameCubeBus bus,
+        uint pc,
+        uint output,
+        uint iterations,
+        int columnLimit,
+        int column,
+        int row)
+    {
+        WriteSonicCoordinatePairFillLoop(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Ctr = iterations,
+            Cr = 0x4200_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[3] = unchecked((uint)columnLimit);
+        state.Gpr[4] = unchecked((uint)column);
+        state.Gpr[5] = output;
+        state.Gpr[6] = unchecked((uint)row);
+        state.Spr[22] = 0xFFFF_F000;
+        return state;
+    }
+
     private static PowerPcState CreateSonicGeneratedRangeScanState(GameCubeBus bus, uint pc, uint table, uint stack, int index, int group)
     {
         PowerPcState state = new()
@@ -6668,6 +6743,21 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x148, 0x9007_0000);
         WriteInstruction(memory, pc + 0x14C, 0x38E7_0004);
         WriteInstruction(memory, pc + 0x150, 0x4200_FEB0);
+    }
+
+    private static void WriteSonicCoordinatePairFillLoop(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x7C04_1800);
+        WriteInstruction(memory, pc + 0x04, 0x4180_000C);
+        WriteInstruction(memory, pc + 0x08, 0x3880_0000);
+        WriteInstruction(memory, pc + 0x0C, 0x38C6_0001);
+        WriteInstruction(memory, pc + 0x10, 0x7CC0_0774);
+        WriteInstruction(memory, pc + 0x14, 0x9805_0000);
+        WriteInstruction(memory, pc + 0x18, 0x7C80_0774);
+        WriteInstruction(memory, pc + 0x1C, 0x3884_0001);
+        WriteInstruction(memory, pc + 0x20, 0x9805_0001);
+        WriteInstruction(memory, pc + 0x24, 0x38A5_0002);
+        WriteInstruction(memory, pc + 0x28, 0x4200_FFD8);
     }
 
     private static void WriteSonicGeneratedRangeScanLoop(GameCubeMemory memory, uint pc)
