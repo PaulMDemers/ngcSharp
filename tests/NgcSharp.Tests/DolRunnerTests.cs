@@ -2802,6 +2802,40 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicGeneratedModelPointerScanFastForwardMatchesInterpreterNoHitPath()
+    {
+        const uint pc = 0x80BC_B1EC;
+        const uint tableContainer = 0x8125_FE60;
+        const uint pointerTable = 0x8136_7AA8;
+        const uint stack = 0x817F_F000;
+        const uint inputPointer = 0x8134_F1BC;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        PowerPcState expectedState = CreateSonicGeneratedModelPointerScanState(expectedBus, pc, tableContainer, pointerTable, stack, inputPointer);
+        PowerPcState actualState = CreateSonicGeneratedModelPointerScanState(actualBus, pc, tableContainer, pointerTable, stack, inputPointer);
+
+        new PowerPcInterpreter().Run(expectedState, expectedBus, 214);
+        bool skipped = InvokeFastForwardSonicGeneratedModelPointerScan(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(214, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Lr, actualState.Lr);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 0, 1, 3, 30, 31 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+
+        for (uint offset = 0; offset <= 0x20; offset += sizeof(uint))
+        {
+            Assert.Equal(expectedBus.Memory.Read32(stack - 24 + offset), actualBus.Memory.Read32(stack - 24 + offset));
+        }
+    }
+
+    [Fact]
     public void SonicGeneratedTileRangeScanFastForwardMatchesInterpreterNoHitLoop()
     {
         const uint pc = 0x80BC_C0A4;
@@ -3601,6 +3635,16 @@ public sealed class DolRunnerTests
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGeneratedRangeScan", BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("Could not find Sonic generated range-scan fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
+    private static bool InvokeFastForwardSonicGeneratedModelPointerScan(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGeneratedModelPointerScan", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic generated model pointer scan fast-forward helper.");
         object?[] args = [state, bus, 0];
         bool result = (bool)method.Invoke(null, args)!;
         skippedInstructions = (int)args[2]!;
@@ -5051,6 +5095,38 @@ public sealed class DolRunnerTests
         return state;
     }
 
+    private static PowerPcState CreateSonicGeneratedModelPointerScanState(
+        GameCubeBus bus,
+        uint pc,
+        uint tableContainer,
+        uint pointerTable,
+        uint stack,
+        uint inputPointer)
+    {
+        WriteSonicGeneratedModelPointerScan(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x80BC_7650,
+            Cr = 0x8200_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[1] = stack;
+        state.Gpr[3] = inputPointer;
+        state.Gpr[30] = 0xAAAA_0001;
+        state.Gpr[31] = 0xBBBB_0002;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bus.Memory.Write32(0x80BD_3668, tableContainer);
+        bus.Memory.Write32(tableContainer + 0x20, pointerTable);
+        for (uint index = 0; index < 18; index++)
+        {
+            bus.Memory.Write32(pointerTable + index * 20, 0x8136_0000u + index * 0x100);
+        }
+
+        return state;
+    }
+
     private static void WriteSonicGeneratedRangeValue(GameCubeMemory memory, uint table, int index, int stride, int group, int groupStride, uint baseOffset, int value)
     {
         uint offset = unchecked((uint)(group * groupStride + index * stride) + baseOffset);
@@ -5315,6 +5391,38 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0xCC, 0x3BFF_0001);
         WriteInstruction(memory, pc + 0xD0, 0x2C1F_0800);
         WriteInstruction(memory, pc + 0xD4, 0x4180_FF2C);
+    }
+
+    private static void WriteSonicGeneratedModelPointerScan(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x7C08_02A6);
+        WriteInstruction(memory, pc + 0x04, 0x9001_0004);
+        WriteInstruction(memory, pc + 0x08, 0x9421_FFE8);
+        WriteInstruction(memory, pc + 0x0C, 0x93E1_0014);
+        WriteInstruction(memory, pc + 0x10, 0x93C1_0010);
+        WriteInstruction(memory, pc + 0x14, 0x7C7E_1B78);
+        WriteInstruction(memory, pc + 0x18, 0x3BE0_0000);
+        WriteInstruction(memory, pc + 0x1C, 0x4800_0034);
+        WriteInstruction(memory, pc + 0x20, 0x3C60_80BD);
+        WriteInstruction(memory, pc + 0x24, 0x3863_3668);
+        WriteInstruction(memory, pc + 0x28, 0x8063_0000);
+        WriteInstruction(memory, pc + 0x2C, 0x8063_0020);
+        WriteInstruction(memory, pc + 0x30, 0x1C1F_0014);
+        WriteInstruction(memory, pc + 0x34, 0x7C03_002E);
+        WriteInstruction(memory, pc + 0x38, 0x7C00_F040);
+        WriteInstruction(memory, pc + 0x3C, 0x4082_0010);
+        WriteInstruction(memory, pc + 0x40, 0x3C60_80BD);
+        WriteInstruction(memory, pc + 0x44, 0x3863_B5CC);
+        WriteInstruction(memory, pc + 0x48, 0x4B55_116D);
+        WriteInstruction(memory, pc + 0x4C, 0x3BFF_0001);
+        WriteInstruction(memory, pc + 0x50, 0x2C1F_0012);
+        WriteInstruction(memory, pc + 0x54, 0x4180_FFCC);
+        WriteInstruction(memory, pc + 0x58, 0x8001_001C);
+        WriteInstruction(memory, pc + 0x5C, 0x83E1_0014);
+        WriteInstruction(memory, pc + 0x60, 0x83C1_0010);
+        WriteInstruction(memory, pc + 0x64, 0x3821_0018);
+        WriteInstruction(memory, pc + 0x68, 0x7C08_03A6);
+        WriteInstruction(memory, pc + 0x6C, 0x4E80_0020);
     }
 
     private static void WriteSonicGeneratedTileRangeScanLoop(GameCubeMemory memory, uint pc)

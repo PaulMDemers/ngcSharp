@@ -667,11 +667,11 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "pc": "0x80BCB210",
-        "topPc": "0x80120078",
-        "minTopPcCount": 1800,
-        "nonExternalInterruptTopPc": "0x80120078",
-        "minNonExternalInterruptTopPcCount": 1800,
+        "pc": "0x80105050",
+        "topPc": "0x801200A8",
+        "minTopPcCount": 2000,
+        "nonExternalInterruptTopPc": "0x801200A8",
+        "minNonExternalInterruptTopPcCount": 2000,
         "sonicStateByte47": 0,
         "minReverseWordFillInstructions": 300000,
         "minSonicResourceFixupInstructions": 900000,
@@ -687,6 +687,7 @@
         "minSonicGxFloatTexcoordStripEmitInstructions": 140000,
         "minSonicPairedTransform4dInstructions": 40000,
         "minSonicVectorBlendCopyInstructions": 80000,
+        "minSonicGeneratedModelPointerScanInstructions": 40000,
         "minSonicGeneratedRangeScanInstructions": 150000
       }
     },

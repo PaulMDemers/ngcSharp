@@ -361,6 +361,7 @@ foreach ($target in $selectedTargets) {
             sonicGxFloatTexcoordStripEmitInstructions = ""
             sonicPairedTransform4dInstructions = ""
             sonicVectorBlendCopyInstructions = ""
+            sonicGeneratedModelPointerScanInstructions = ""
             sonicGeneratedRangeScanInstructions = ""
             topPc = ""
             topPcCount = ""
@@ -605,6 +606,7 @@ foreach ($target in $selectedTargets) {
     $sonicGxFloatTexcoordStripEmitInstructions = Get-Value $fastForward "sonicGxFloatTexcoordStripEmitInstructions" ""
     $sonicPairedTransform4dInstructions = Get-Value $fastForward "sonicPairedTransform4dInstructions" ""
     $sonicVectorBlendCopyInstructions = Get-Value $fastForward "sonicVectorBlendCopyInstructions" ""
+    $sonicGeneratedModelPointerScanInstructions = Get-Value $fastForward "sonicGeneratedModelPointerScanInstructions" ""
     $sonicGeneratedRangeScanInstructions = Get-Value $fastForward "sonicGeneratedRangeScanInstructions" ""
 
     $expectedMinPrsDecompressInstructions = Get-Value $expected "minPrsDecompressInstructions" $null
@@ -710,6 +712,11 @@ foreach ($target in $selectedTargets) {
     $expectedMinSonicVectorBlendCopyInstructions = Get-Value $expected "minSonicVectorBlendCopyInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinSonicVectorBlendCopyInstructions -and [long]$sonicVectorBlendCopyInstructions -lt [long]$expectedMinSonicVectorBlendCopyInstructions) {
         $regressions.Add("sonicVectorBlendCopyInstructions expected >= $expectedMinSonicVectorBlendCopyInstructions got $sonicVectorBlendCopyInstructions")
+    }
+
+    $expectedMinSonicGeneratedModelPointerScanInstructions = Get-Value $expected "minSonicGeneratedModelPointerScanInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinSonicGeneratedModelPointerScanInstructions -and [long]$sonicGeneratedModelPointerScanInstructions -lt [long]$expectedMinSonicGeneratedModelPointerScanInstructions) {
+        $regressions.Add("sonicGeneratedModelPointerScanInstructions expected >= $expectedMinSonicGeneratedModelPointerScanInstructions got $sonicGeneratedModelPointerScanInstructions")
     }
 
     $expectedMinSonicGeneratedRangeScanInstructions = Get-Value $expected "minSonicGeneratedRangeScanInstructions" $null
@@ -971,6 +978,7 @@ foreach ($target in $selectedTargets) {
         sonicGxFloatTexcoordStripEmitInstructions = $sonicGxFloatTexcoordStripEmitInstructions
         sonicPairedTransform4dInstructions = $sonicPairedTransform4dInstructions
         sonicVectorBlendCopyInstructions = $sonicVectorBlendCopyInstructions
+        sonicGeneratedModelPointerScanInstructions = $sonicGeneratedModelPointerScanInstructions
         sonicGeneratedRangeScanInstructions = $sonicGeneratedRangeScanInstructions
         topPc = $topPc
         topPcCount = $topPcCount

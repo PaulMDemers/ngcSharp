@@ -44,6 +44,8 @@ public sealed class DolRunner
     private const uint SonicPairedTransform4dExitInstructions = 11;
     private const uint SonicVectorBlendCopyLoopPc = 0x8012_0D98;
     private const uint SonicVectorBlendCopyInstructionsPerIteration = 47;
+    private const uint SonicGeneratedModelPointerScanPc = 0x80BC_B1EC;
+    private const uint SonicGeneratedModelPointerScanInstructions = 214;
     private const uint SonicGeneratedRangeScanLoopPc = 0x80BC_BFBC;
     private const uint SonicGeneratedTileRangeScanLoopPc = 0x80BC_C0A4;
     private const uint ExternalInterruptVector = 0x8000_0500;
@@ -202,6 +204,7 @@ public sealed class DolRunner
         ulong sonicGxFloatTexcoordStripEmitFastForwardInstructions = 0;
         ulong sonicPairedTransform4dFastForwardInstructions = 0;
         ulong sonicVectorBlendCopyFastForwardInstructions = 0;
+        ulong sonicGeneratedModelPointerScanFastForwardInstructions = 0;
         ulong sonicGeneratedRangeScanFastForwardInstructions = 0;
         uint currentPc = state.Pc;
         uint currentInstruction = 0;
@@ -745,6 +748,7 @@ public sealed class DolRunner
                         sonicGxFloatTexcoordStripEmitInstructions = sonicGxFloatTexcoordStripEmitFastForwardInstructions,
                         sonicPairedTransform4dInstructions = sonicPairedTransform4dFastForwardInstructions,
                         sonicVectorBlendCopyInstructions = sonicVectorBlendCopyFastForwardInstructions,
+                        sonicGeneratedModelPointerScanInstructions = sonicGeneratedModelPointerScanFastForwardInstructions,
                         sonicGeneratedRangeScanInstructions = sonicGeneratedRangeScanFastForwardInstructions,
                     },
                 };
@@ -1212,6 +1216,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicVectorBlendCopyLoop(state, bus, out skippedInstructions))
                 {
                     sonicVectorBlendCopyFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGeneratedModelPointerScan(state, bus, out skippedInstructions))
+                {
+                    sonicGeneratedModelPointerScanFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1744,6 +1755,11 @@ public sealed class DolRunner
             if (sonicVectorBlendCopyFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {sonicVectorBlendCopyFastForwardInstructions} Sonic vector blend/copy instruction(s).");
+            }
+
+            if (sonicGeneratedModelPointerScanFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {sonicGeneratedModelPointerScanFastForwardInstructions} Sonic generated model pointer scan instruction(s).");
             }
 
             if (sonicGeneratedRangeScanFastForwardInstructions != 0)
@@ -7238,6 +7254,68 @@ public sealed class DolRunner
         return false;
     }
 
+    private static bool TryFastForwardSonicGeneratedModelPointerScan(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (!MatchesSonicGeneratedModelPointerScan(bus, state.Pc)
+            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: SonicGeneratedModelPointerScanInstructions, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        uint inputPointer = state.Gpr[3];
+        uint stackPointer = state.Gpr[1];
+        uint newStackPointer = unchecked(stackPointer - 24);
+        if (!bus.Memory.IsMainRamAddress(newStackPointer, 32))
+        {
+            return false;
+        }
+
+        uint tableContainer = bus.Read32(0x80BD_3668);
+        if (!bus.Memory.IsMainRamAddress(tableContainer + 0x20, sizeof(uint)))
+        {
+            return false;
+        }
+
+        uint pointerTable = bus.Memory.Read32(tableContainer + 0x20);
+        const int entries = 18;
+        const int stride = 20;
+        if (!bus.Memory.IsMainRamAddress(pointerTable, entries * stride))
+        {
+            return false;
+        }
+
+        for (int index = 0; index < entries; index++)
+        {
+            if (bus.Memory.Read32(pointerTable + (uint)(index * stride)) == inputPointer)
+            {
+                return false;
+            }
+        }
+
+        uint oldLr = state.Lr;
+        uint oldR30 = state.Gpr[30];
+        uint oldR31 = state.Gpr[31];
+
+        bus.Write32(stackPointer + 4, oldLr);
+        bus.Write32(newStackPointer, stackPointer);
+        bus.Write32(newStackPointer + 20, oldR31);
+        bus.Write32(newStackPointer + 16, oldR30);
+
+        state.Gpr[0] = oldLr;
+        state.Gpr[1] = stackPointer;
+        state.Gpr[3] = pointerTable;
+        state.Gpr[30] = oldR30;
+        state.Gpr[31] = oldR31;
+        state.Lr = oldLr;
+        state.Pc = oldLr & 0xFFFF_FFFCu;
+        SetCr0ForSignedCompareImmediate(state, entries, entries);
+
+        AdvanceFastForwardedInstructions(state, bus, SonicGeneratedModelPointerScanInstructions);
+        skippedInstructions = checked((int)SonicGeneratedModelPointerScanInstructions);
+        return true;
+    }
+
     private static bool TryFastForwardSonicGeneratedRangeScanLoop(
         PowerPcState state,
         GameCubeBus bus,
@@ -8134,6 +8212,37 @@ public sealed class DolRunner
         && bus.Read32(pc + 0xCC) == 0x3BFF_0001
         && bus.Read32(pc + 0xD0) == 0x2C1F_0800
         && bus.Read32(pc + 0xD4) == 0x4180_FF2C;
+
+    private static bool MatchesSonicGeneratedModelPointerScan(GameCubeBus bus, uint pc) =>
+        pc == SonicGeneratedModelPointerScanPc
+        && bus.Read32(pc + 0x00) == 0x7C08_02A6
+        && bus.Read32(pc + 0x04) == 0x9001_0004
+        && bus.Read32(pc + 0x08) == 0x9421_FFE8
+        && bus.Read32(pc + 0x0C) == 0x93E1_0014
+        && bus.Read32(pc + 0x10) == 0x93C1_0010
+        && bus.Read32(pc + 0x14) == 0x7C7E_1B78
+        && bus.Read32(pc + 0x18) == 0x3BE0_0000
+        && bus.Read32(pc + 0x1C) == 0x4800_0034
+        && bus.Read32(pc + 0x20) == 0x3C60_80BD
+        && bus.Read32(pc + 0x24) == 0x3863_3668
+        && bus.Read32(pc + 0x28) == 0x8063_0000
+        && bus.Read32(pc + 0x2C) == 0x8063_0020
+        && bus.Read32(pc + 0x30) == 0x1C1F_0014
+        && bus.Read32(pc + 0x34) == 0x7C03_002E
+        && bus.Read32(pc + 0x38) == 0x7C00_F040
+        && bus.Read32(pc + 0x3C) == 0x4082_0010
+        && bus.Read32(pc + 0x40) == 0x3C60_80BD
+        && bus.Read32(pc + 0x44) == 0x3863_B5CC
+        && bus.Read32(pc + 0x48) == 0x4B55_116D
+        && bus.Read32(pc + 0x4C) == 0x3BFF_0001
+        && bus.Read32(pc + 0x50) == 0x2C1F_0012
+        && bus.Read32(pc + 0x54) == 0x4180_FFCC
+        && bus.Read32(pc + 0x58) == 0x8001_001C
+        && bus.Read32(pc + 0x5C) == 0x83E1_0014
+        && bus.Read32(pc + 0x60) == 0x83C1_0010
+        && bus.Read32(pc + 0x64) == 0x3821_0018
+        && bus.Read32(pc + 0x68) == 0x7C08_03A6
+        && bus.Read32(pc + 0x6C) == 0x4E80_0020;
 
     private static bool MatchesSonicGeneratedTileRangeScanLoop(GameCubeBus bus, uint pc) =>
         pc == SonicGeneratedTileRangeScanLoopPc
