@@ -931,13 +931,16 @@ public sealed class DolRunner
                     continue;
                 }
 
-                if (options.FastForwardIdle && TryFastForwardSunshineFlagWaitLoop(state, bus, out skippedIdleCycles))
+                if (options.FastForwardIdle && currentInstruction == 0x4800_0705 && TryFastForwardSunshineFlagWaitLoop(state, bus, out skippedIdleCycles))
                 {
                     idleFastForwardCycles += skippedIdleCycles;
                     continue;
                 }
 
-                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardCtrDelayLoop(state, bus, out int skippedInstructions))
+                if (options.FastForwardIdle
+                    && canFastForwardWithWriteWatch
+                    && currentInstruction == 0x4200_0000
+                    && TryFastForwardCtrDelayLoop(state, bus, out int skippedInstructions))
                 {
                     ctrDelayFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
@@ -963,7 +966,10 @@ public sealed class DolRunner
                     continue;
                 }
 
-                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardInterleavedWordFillLoop(state, bus, out skippedInstructions))
+                if (options.FastForwardIdle
+                    && canFastForwardWithWriteWatch
+                    && IsDFormWithSignedImmediate(currentInstruction, primaryOpcode: 36, immediate: 4)
+                    && TryFastForwardInterleavedWordFillLoop(state, bus, out skippedInstructions))
                 {
                     bulkFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
@@ -984,28 +990,40 @@ public sealed class DolRunner
                     continue;
                 }
 
-                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardByteFillLoop(state, bus, out skippedInstructions))
+                if (options.FastForwardIdle
+                    && canFastForwardWithWriteWatch
+                    && IsDFormWithSignedImmediate(currentInstruction, primaryOpcode: 13, immediate: -1)
+                    && TryFastForwardByteFillLoop(state, bus, out skippedInstructions))
                 {
                     bulkFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
 
-                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardCtrByteCopyLoop(state, bus, out skippedInstructions))
+                if (options.FastForwardIdle
+                    && canFastForwardWithWriteWatch
+                    && currentInstruction == 0x8805_0000
+                    && TryFastForwardCtrByteCopyLoop(state, bus, out skippedInstructions))
                 {
                     memoryCopyFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
 
-                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardCtrSingleByteCopyLoop(state, bus, out skippedInstructions))
+                if (options.FastForwardIdle
+                    && canFastForwardWithWriteWatch
+                    && currentInstruction == 0x8805_0000
+                    && TryFastForwardCtrSingleByteCopyLoop(state, bus, out skippedInstructions))
                 {
                     memoryCopyFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
 
-                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardWordCopyLoop(state, bus, out skippedInstructions))
+                if (options.FastForwardIdle
+                    && canFastForwardWithWriteWatch
+                    && currentInstruction == 0x8006_0004
+                    && TryFastForwardWordCopyLoop(state, bus, out skippedInstructions))
                 {
                     memoryCopyFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
@@ -1040,7 +1058,10 @@ public sealed class DolRunner
                     continue;
                 }
 
-                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardResourceNameTableScan(state, bus, out skippedInstructions))
+                if (options.FastForwardIdle
+                    && canFastForwardWithWriteWatch
+                    && currentInstruction == 0x7C78_C82E
+                    && TryFastForwardResourceNameTableScan(state, bus, out skippedInstructions))
                 {
                     stringCompareFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
@@ -1068,7 +1089,10 @@ public sealed class DolRunner
                     continue;
                 }
 
-                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardNullTerminatedByteScanLoop(state, bus, out skippedInstructions))
+                if (options.FastForwardIdle
+                    && canFastForwardWithWriteWatch
+                    && IsDFormWithSignedImmediate(currentInstruction, primaryOpcode: 35, immediate: 1)
+                    && TryFastForwardNullTerminatedByteScanLoop(state, bus, out skippedInstructions))
                 {
                     stringLengthFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
@@ -1082,28 +1106,40 @@ public sealed class DolRunner
                     continue;
                 }
 
-                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardAlignedStringCompareRoutine(state, bus, out skippedInstructions))
+                if (options.FastForwardIdle
+                    && canFastForwardWithWriteWatch
+                    && currentInstruction == 0x88A3_0000
+                    && TryFastForwardAlignedStringCompareRoutine(state, bus, out skippedInstructions))
                 {
                     stringCompareFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
 
-                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSimpleStringCompareRoutine(state, bus, out skippedInstructions))
+                if (options.FastForwardIdle
+                    && canFastForwardWithWriteWatch
+                    && currentInstruction is 0x88A3_0000 or 0x8CA3_0001
+                    && TryFastForwardSimpleStringCompareRoutine(state, bus, out skippedInstructions))
                 {
                     stringCompareFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
 
-                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardStringLengthRoutine(state, bus, out skippedInstructions))
+                if (options.FastForwardIdle
+                    && canFastForwardWithWriteWatch
+                    && currentInstruction == 0x9421_FFF0
+                    && TryFastForwardStringLengthRoutine(state, bus, out skippedInstructions))
                 {
                     stringLengthFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
 
-                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardTextureSampleLeaf(state, bus, out skippedInstructions))
+                if (options.FastForwardIdle
+                    && canFastForwardWithWriteWatch
+                    && currentInstruction == 0xA003_0004
+                    && TryFastForwardTextureSampleLeaf(state, bus, out skippedInstructions))
                 {
                     textureSampleFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
@@ -1378,7 +1414,10 @@ public sealed class DolRunner
                     continue;
                 }
 
-                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSunshineByteRunCopyLoop(state, bus, out skippedInstructions))
+                if (options.FastForwardIdle
+                    && canFastForwardWithWriteWatch
+                    && currentInstruction == 0x88C9_0000
+                    && TryFastForwardSunshineByteRunCopyLoop(state, bus, out skippedInstructions))
                 {
                     memoryCopyFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
@@ -10094,6 +10133,9 @@ public sealed class DolRunner
         ulong skipped = (ulong)iterations * instructionsPerIteration + extraInstructions;
         return skipped <= decrementer;
     }
+
+    private static bool IsDFormWithSignedImmediate(uint instruction, int primaryOpcode, int immediate) =>
+        (instruction >> 26) == primaryOpcode && unchecked((short)(instruction & 0xFFFF)) == immediate;
 
     private static void AdvanceFastForwardedInstructions(PowerPcState state, GameCubeBus bus, uint instructions)
     {

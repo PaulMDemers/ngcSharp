@@ -22,13 +22,25 @@ See [docs/compatibility.md](docs/compatibility.md) for the current compatibility
 
 These snapshots come from bounded ngcSharp diagnostic runs against user-provided retail images. They document the emulator's current output state; black frames and diagnostic placeholders are expected while GX, VI, interrupt, and boot-flow work is still in progress. No Dolphin captures or commercial game artwork are checked in.
 
-| Wind Waker | Twilight Princess |
-| --- | --- |
-| ![Wind Waker ngcSharp compatibility frame](docs/screenshots/retail-compat/wind-waker.png) | ![Twilight Princess ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/twilight-princess.png) |
+Latest snapshot set: pass 10 post-sweep from the ten-pass compatibility loop. See [docs/ten-pass-compatibility-summary.md](docs/ten-pass-compatibility-summary.md) for the complete pass summary.
 
-| Super Mario Sunshine | ND Demo |
+| Title | Snapshot |
 | --- | --- |
-| ![Super Mario Sunshine ngcSharp compatibility frame](docs/screenshots/retail-compat/super-mario-sunshine.png) | ![ND Demo ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/nd-demo.png) |
+| Legend of Zelda: The Wind Waker | ![Wind Waker ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/legend-of-zelda-the---the-wind-waker-usa.png) |
+| Legend of Zelda: Twilight Princess | ![Twilight Princess ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/legend-of-zelda-the---twilight-princess-usa.png) |
+| Metal Gear Solid: The Twin Snakes Disc 1 | ![Metal Gear Solid The Twin Snakes Disc 1 ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/metal-gear-solid---the-twin-snakes-usa-disc-1.png) |
+| Metal Gear Solid: The Twin Snakes Disc 2 | ![Metal Gear Solid The Twin Snakes Disc 2 ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/metal-gear-solid---the-twin-snakes-usa-disc-2.png) |
+| Metroid Prime | ![Metroid Prime ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/metroid-prime-usa.png) |
+| ND Demo Tech Demo | ![ND Demo ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/nd-demo---tech-demo---usa-ntsc.png) |
+| Need for Speed: Hot Pursuit 2 | ![Need for Speed Hot Pursuit 2 ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/need-for-speed---hot-pursuit-2-usa.png) |
+| Need for Speed: Underground 2 | ![Need for Speed Underground 2 ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/need-for-speed---underground-2-usa.png) |
+| Paper Mario: The Thousand-Year Door | ![Paper Mario The Thousand-Year Door ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/paper-mario---the-thousand-year-door-usa.png) |
+| Pokemon Colosseum | ![Pokemon Colosseum ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/pokemon-colosseum-usa.png) |
+| Pokemon XD: Gale of Darkness | ![Pokemon XD Gale of Darkness ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/pokemon-xd---gale-of-darkness-usa.png) |
+| Resident Evil Zero Disc 1 | ![Resident Evil Zero Disc 1 ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/resident-evil-zero-usa-disc-1.png) |
+| Resident Evil Zero Disc 2 | ![Resident Evil Zero Disc 2 ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/resident-evil-zero-usa-disc-2.png) |
+| Super Mario Sunshine | ![Super Mario Sunshine ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/super-mario-sunshine-usa.png) |
+| Super Smash Bros. Melee | ![Super Smash Bros Melee ngcSharp compatibility diagnostic frame](docs/screenshots/retail-compat/super-smash-bros.-melee-usa-en-ja.png) |
 
 ## Repository Layout
 
