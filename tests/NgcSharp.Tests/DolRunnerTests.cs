@@ -2786,6 +2786,7 @@ public sealed class DolRunnerTests
         const uint highRangePc = 0x8011_CDE8;
         const uint extendedRangePc = 0x8011_CE20;
         const uint metadataHeaderPc = 0x8011_CE60;
+        const uint activeBatchRecordPc = 0x8011_CE80;
         foreach (uint command in new[] { 0x04u, 0x11u })
         {
             GameCubeBus expectedBus = new();
@@ -2885,6 +2886,50 @@ public sealed class DolRunnerTests
             {
                 Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
             }
+            Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+            Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        }
+
+        foreach ((uint currentSlot, uint activeBatchDepth, uint command, uint count, int expectedInstructions) in new[]
+        {
+            (0u, 2u, 66u, 3u, 14),
+            (1u, 1u, 65u, 7u, 10),
+        })
+        {
+            const uint stream = 0x8131_930E;
+            const uint streamStack = 0x803C_1288;
+            const uint flagStack = 0x803C_1268;
+            GameCubeBus expectedBus = new();
+            GameCubeBus actualBus = new();
+            WriteSonicGxCommandDispatch(expectedBus.Memory);
+            WriteSonicGxCommandDispatch(actualBus.Memory);
+            PowerPcState expectedState = CreateSonicGxCommandDispatchState(activeBatchRecordPc, command);
+            PowerPcState actualState = CreateSonicGxCommandDispatchState(activeBatchRecordPc, command);
+            foreach (PowerPcState state in new[] { expectedState, actualState })
+            {
+                state.Gpr[20] = stream;
+                state.Gpr[23] = currentSlot;
+                state.Gpr[24] = activeBatchDepth;
+                state.Gpr[27] = count;
+                state.Gpr[30] = streamStack;
+                state.Gpr[31] = flagStack;
+            }
+
+            new PowerPcInterpreter().Run(expectedState, expectedBus, expectedInstructions);
+            bool skipped = InvokeFastForwardSonicGxCommandDispatch(actualState, actualBus, out int skippedInstructions);
+
+            Assert.True(skipped);
+            Assert.Equal(expectedInstructions, skippedInstructions);
+            Assert.Equal(expectedState.Pc, actualState.Pc);
+            Assert.Equal(expectedState.Cr, actualState.Cr);
+            foreach (int register in new[] { 0, 3, 20, 23, 24, 25, 27, 30, 31 })
+            {
+                Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+            }
+
+            uint stackOffset = currentSlot * sizeof(uint);
+            Assert.Equal(expectedBus.Memory.Read32(streamStack + stackOffset), actualBus.Memory.Read32(streamStack + stackOffset));
+            Assert.Equal(expectedBus.Memory.Read32(flagStack + stackOffset), actualBus.Memory.Read32(flagStack + stackOffset));
             Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
             Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
         }
@@ -5233,6 +5278,23 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, metadataHeaderPc + 0x14, 0x7C1A_0378);
         WriteInstruction(memory, metadataHeaderPc + 0x18, 0x2C18_0000);
         WriteInstruction(memory, metadataHeaderPc + 0x1C, 0x4081_0044);
+
+        const uint activeBatchRecordPc = 0x8011_CE80;
+        WriteInstruction(memory, activeBatchRecordPc + 0x00, 0x56E3_103A);
+        WriteInstruction(memory, activeBatchRecordPc + 0x04, 0x7E9E_192E);
+        WriteInstruction(memory, activeBatchRecordPc + 0x08, 0x2019_0042);
+        WriteInstruction(memory, activeBatchRecordPc + 0x0C, 0x7C00_0034);
+        WriteInstruction(memory, activeBatchRecordPc + 0x10, 0x5400_D97E);
+        WriteInstruction(memory, activeBatchRecordPc + 0x14, 0x7C1F_192E);
+        WriteInstruction(memory, activeBatchRecordPc + 0x18, 0x7EE0_BB78);
+        WriteInstruction(memory, activeBatchRecordPc + 0x1C, 0x3AF7_0001);
+        WriteInstruction(memory, activeBatchRecordPc + 0x20, 0x7C00_C000);
+        WriteInstruction(memory, activeBatchRecordPc + 0x24, 0x4080_0014);
+        WriteInstruction(memory, activeBatchRecordPc + 0x28, 0x381B_FFFF);
+        WriteInstruction(memory, activeBatchRecordPc + 0x2C, 0x5400_083C);
+        WriteInstruction(memory, activeBatchRecordPc + 0x30, 0x7E94_0214);
+        WriteInstruction(memory, activeBatchRecordPc + 0x34, 0x4800_02D0);
+        WriteInstruction(memory, activeBatchRecordPc + 0x38, 0x7EDC_B378);
     }
 
     private static void WriteSonicGprSaveRestoreTail(GameCubeMemory memory)
