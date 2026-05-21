@@ -2519,6 +2519,49 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicVectorBlendCopyFastForwardMatchesInterpreterLoop()
+    {
+        const uint pc = 0x8012_0D98;
+        const uint input = 0x800C_0000;
+        const uint output = 0x800D_0000;
+        const uint blendA = 0x800E_0000;
+        const uint blendB = 0x800F_0000;
+        const uint stack = 0x817F_F000;
+        const uint iterations = 3;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        PowerPcState expectedState = CreateSonicVectorBlendCopyState(expectedBus, pc, input, output, blendA, blendB, stack, iterations);
+        PowerPcState actualState = CreateSonicVectorBlendCopyState(actualBus, pc, input, output, blendA, blendB, stack, iterations);
+        int expectedInstructions = checked((int)(iterations * 47));
+
+        new PowerPcInterpreter().Run(expectedState, expectedBus, expectedInstructions);
+        bool skipped = InvokeFastForwardSonicVectorBlendCopy(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(expectedInstructions, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Ctr, actualState.Ctr);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 4, 7, 29, 31 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+
+        for (int register = 0; register <= 2; register++)
+        {
+            Assert.Equal(BitConverter.DoubleToInt64Bits(expectedState.Fpr[register]), BitConverter.DoubleToInt64Bits(actualState.Fpr[register]));
+            Assert.Equal(BitConverter.DoubleToInt64Bits(expectedState.FprPair1[register]), BitConverter.DoubleToInt64Bits(actualState.FprPair1[register]));
+        }
+
+        for (uint offset = 0; offset < iterations * 24; offset += sizeof(uint))
+        {
+            Assert.Equal(expectedBus.Memory.Read32(output + offset), actualBus.Memory.Read32(output + offset));
+        }
+    }
+
+    [Fact]
     public void SonicBitPlaneCropFastForwardCropsRowsInPlace()
     {
         const uint pc = 0x800E_1F14;
@@ -3221,6 +3264,16 @@ public sealed class DolRunnerTests
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicPairedTransform4d", BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("Could not find Sonic paired transform 4D fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
+    private static bool InvokeFastForwardSonicVectorBlendCopy(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicVectorBlendCopyLoop", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic vector blend/copy fast-forward helper.");
         object?[] args = [state, bus, 0];
         bool result = (bool)method.Invoke(null, args)!;
         skippedInstructions = (int)args[2]!;
@@ -4294,6 +4347,57 @@ public sealed class DolRunnerTests
         return state;
     }
 
+    private static PowerPcState CreateSonicVectorBlendCopyState(GameCubeBus bus, uint pc, uint input, uint output, uint blendA, uint blendB, uint stack, uint iterations)
+    {
+        WriteSonicVectorBlendCopyLoop(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8012_3456,
+            Ctr = iterations,
+            Cr = 0x4200_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[1] = stack;
+        state.Gpr[4] = input;
+        state.Gpr[7] = output;
+        state.Gpr[9] = iterations;
+        state.Gpr[10] = 1;
+        state.Gpr[11] = 1;
+        state.Gpr[12] = 0;
+        state.Gpr[25] = 0;
+        state.Gpr[26] = 0x8123_4568;
+        state.Gpr[27] = 0;
+        state.Gpr[28] = 0x8010_0000;
+        state.Gpr[29] = blendB;
+        state.Gpr[30] = 0x8010_1000;
+        state.Gpr[31] = blendA;
+        state.Spr[22] = 0xFFFF_F000;
+
+        for (int register = 0; register < state.Fpr.Length; register++)
+        {
+            state.Fpr[register] = (float)(register * 0.25f - 1.5f);
+            state.FprPair1[register] = (float)(register * -0.125f + 2.0f);
+        }
+
+        state.Fpr[31] = 0.625f;
+        state.FprPair1[31] = 0.625f;
+        WriteSingle(bus.Memory, stack + 0x38, -0.375f);
+
+        for (uint iteration = 0; iteration < iterations; iteration++)
+        {
+            for (uint lane = 0; lane < 3; lane++)
+            {
+                uint offset = iteration * 12 + lane * sizeof(uint);
+                WriteSingle(bus.Memory, blendA + offset, 0.25f + iteration * 0.5f + lane * 0.125f);
+                WriteSingle(bus.Memory, blendB + offset, -1.5f + iteration * 0.25f - lane * 0.25f);
+                WriteSingle(bus.Memory, input + iteration * 24 + 12 + lane * sizeof(uint), 4.0f + iteration + lane * 0.5f);
+            }
+        }
+
+        return state;
+    }
+
     private static void WriteSonicPairedTransform2dLoop(GameCubeMemory memory, uint pc)
     {
         WriteInstruction(memory, pc - 0x78, 0x80A3_0000);
@@ -4409,6 +4513,98 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x70, 0xCA41_0028);
         WriteInstruction(memory, pc + 0x74, 0x3821_0040);
         WriteInstruction(memory, pc + 0x78, 0x4E80_0020);
+    }
+
+    private static void WriteSonicVectorBlendCopyLoop(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc - 0x10, 0x7D29_03A6);
+        WriteInstruction(memory, pc - 0x0C, 0x2C09_0000);
+        WriteInstruction(memory, pc - 0x08, 0x4081_015C);
+        WriteInstruction(memory, pc + 0x000, 0x2C0A_0000);
+        WriteInstruction(memory, pc + 0x004, 0x4182_008C);
+        WriteInstruction(memory, pc + 0x008, 0x281A_0000);
+        WriteInstruction(memory, pc + 0x00C, 0x4182_0064);
+        WriteInstruction(memory, pc + 0x010, 0xC01F_0000);
+        WriteInstruction(memory, pc + 0x014, 0xEC40_07F2);
+        WriteInstruction(memory, pc + 0x018, 0xC03D_0000);
+        WriteInstruction(memory, pc + 0x01C, 0xC001_0038);
+        WriteInstruction(memory, pc + 0x020, 0xEC01_0032);
+        WriteInstruction(memory, pc + 0x024, 0xEC02_002A);
+        WriteInstruction(memory, pc + 0x028, 0xD007_0000);
+        WriteInstruction(memory, pc + 0x02C, 0xC01F_0004);
+        WriteInstruction(memory, pc + 0x030, 0xEC40_07F2);
+        WriteInstruction(memory, pc + 0x034, 0xC03D_0004);
+        WriteInstruction(memory, pc + 0x038, 0xC001_0038);
+        WriteInstruction(memory, pc + 0x03C, 0xEC01_0032);
+        WriteInstruction(memory, pc + 0x040, 0xEC02_002A);
+        WriteInstruction(memory, pc + 0x044, 0xD007_0004);
+        WriteInstruction(memory, pc + 0x048, 0xC01F_0008);
+        WriteInstruction(memory, pc + 0x04C, 0xEC40_07F2);
+        WriteInstruction(memory, pc + 0x050, 0xC03D_0008);
+        WriteInstruction(memory, pc + 0x054, 0xC001_0038);
+        WriteInstruction(memory, pc + 0x058, 0xEC01_0032);
+        WriteInstruction(memory, pc + 0x05C, 0xEC02_002A);
+        WriteInstruction(memory, pc + 0x060, 0xD007_0008);
+        WriteInstruction(memory, pc + 0x064, 0x3BFF_000C);
+        WriteInstruction(memory, pc + 0x068, 0x3BBD_000C);
+        WriteInstruction(memory, pc + 0x06C, 0x4800_001C);
+        WriteInstruction(memory, pc + 0x070, 0xC004_0000);
+        WriteInstruction(memory, pc + 0x074, 0xD007_0000);
+        WriteInstruction(memory, pc + 0x078, 0xC004_0004);
+        WriteInstruction(memory, pc + 0x07C, 0xD007_0004);
+        WriteInstruction(memory, pc + 0x080, 0xC004_0008);
+        WriteInstruction(memory, pc + 0x084, 0xD007_0008);
+        WriteInstruction(memory, pc + 0x088, 0x38E7_000C);
+        WriteInstruction(memory, pc + 0x08C, 0x3884_000C);
+        WriteInstruction(memory, pc + 0x090, 0x2C0B_0000);
+        WriteInstruction(memory, pc + 0x094, 0x4182_008C);
+        WriteInstruction(memory, pc + 0x098, 0x281B_0000);
+        WriteInstruction(memory, pc + 0x09C, 0x4182_0064);
+        WriteInstruction(memory, pc + 0x0A0, 0xC01E_0000);
+        WriteInstruction(memory, pc + 0x0A4, 0xEC40_07B2);
+        WriteInstruction(memory, pc + 0x0A8, 0xC03C_0000);
+        WriteInstruction(memory, pc + 0x0AC, 0xC001_002C);
+        WriteInstruction(memory, pc + 0x0B0, 0xEC01_0032);
+        WriteInstruction(memory, pc + 0x0B4, 0xEC02_002A);
+        WriteInstruction(memory, pc + 0x0B8, 0xD007_0000);
+        WriteInstruction(memory, pc + 0x0BC, 0xC01E_0004);
+        WriteInstruction(memory, pc + 0x0C0, 0xEC40_07B2);
+        WriteInstruction(memory, pc + 0x0C4, 0xC03C_0004);
+        WriteInstruction(memory, pc + 0x0C8, 0xC001_002C);
+        WriteInstruction(memory, pc + 0x0CC, 0xEC01_0032);
+        WriteInstruction(memory, pc + 0x0D0, 0xEC02_002A);
+        WriteInstruction(memory, pc + 0x0D4, 0xD007_0004);
+        WriteInstruction(memory, pc + 0x0D8, 0xC01E_0008);
+        WriteInstruction(memory, pc + 0x0DC, 0xEC40_07B2);
+        WriteInstruction(memory, pc + 0x0E0, 0xC03C_0008);
+        WriteInstruction(memory, pc + 0x0E4, 0xC001_002C);
+        WriteInstruction(memory, pc + 0x0E8, 0xEC01_0032);
+        WriteInstruction(memory, pc + 0x0EC, 0xEC02_002A);
+        WriteInstruction(memory, pc + 0x0F0, 0xD007_0008);
+        WriteInstruction(memory, pc + 0x0F4, 0x3BDE_000C);
+        WriteInstruction(memory, pc + 0x0F8, 0x3B9C_000C);
+        WriteInstruction(memory, pc + 0x0FC, 0x4800_001C);
+        WriteInstruction(memory, pc + 0x100, 0xC004_0000);
+        WriteInstruction(memory, pc + 0x104, 0xD007_0000);
+        WriteInstruction(memory, pc + 0x108, 0xC004_0004);
+        WriteInstruction(memory, pc + 0x10C, 0xD007_0004);
+        WriteInstruction(memory, pc + 0x110, 0xC004_0008);
+        WriteInstruction(memory, pc + 0x114, 0xD007_0008);
+        WriteInstruction(memory, pc + 0x118, 0x38E7_000C);
+        WriteInstruction(memory, pc + 0x11C, 0x3884_000C);
+        WriteInstruction(memory, pc + 0x120, 0x2C0C_0000);
+        WriteInstruction(memory, pc + 0x124, 0x4182_0014);
+        WriteInstruction(memory, pc + 0x128, 0x8004_0000);
+        WriteInstruction(memory, pc + 0x12C, 0x3884_0004);
+        WriteInstruction(memory, pc + 0x130, 0x9007_0000);
+        WriteInstruction(memory, pc + 0x134, 0x38E7_0004);
+        WriteInstruction(memory, pc + 0x138, 0x2C19_0000);
+        WriteInstruction(memory, pc + 0x13C, 0x4182_0014);
+        WriteInstruction(memory, pc + 0x140, 0x8004_0000);
+        WriteInstruction(memory, pc + 0x144, 0x3884_0004);
+        WriteInstruction(memory, pc + 0x148, 0x9007_0000);
+        WriteInstruction(memory, pc + 0x14C, 0x38E7_0004);
+        WriteInstruction(memory, pc + 0x150, 0x4200_FEB0);
     }
 
     private static void WriteIdentityByteTable(GameCubeMemory memory, uint table)
