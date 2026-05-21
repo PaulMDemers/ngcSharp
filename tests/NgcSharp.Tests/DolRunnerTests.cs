@@ -2518,6 +2518,56 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicGxVertexDescriptorSetterFastForwardMatchesInterpreterPaths()
+    {
+        const uint pc = 0x8010_0830;
+        const uint stateBlock = 0x803C_0000;
+        foreach ((uint descriptor, byte vertexMatrixFlag, byte normalMatrixFlag) in new[]
+        {
+            (9u, (byte)0, (byte)0),
+            (11u, (byte)1, (byte)0),
+            (13u, (byte)0, (byte)1),
+        })
+        {
+            GameCubeBus expectedBus = new();
+            GameCubeBus actualBus = new();
+            WriteSonicGxVertexDescriptorSetter(expectedBus.Memory, pc);
+            WriteSonicGxVertexDescriptorSetter(actualBus.Memory, pc);
+            PowerPcState expectedState = CreateSonicGxVertexDescriptorSetterState(expectedBus, pc, stateBlock, descriptor, vertexMatrixFlag, normalMatrixFlag);
+            PowerPcState actualState = CreateSonicGxVertexDescriptorSetterState(actualBus, pc, stateBlock, descriptor, vertexMatrixFlag, normalMatrixFlag);
+
+            PowerPcInterpreter interpreter = new();
+            int expectedInstructions = 0;
+            while (expectedState.Pc != expectedState.Lr && expectedInstructions < 128)
+            {
+                interpreter.Step(expectedState, expectedBus);
+                expectedInstructions++;
+            }
+
+            Assert.Equal(expectedState.Lr, expectedState.Pc);
+            bool skipped = InvokeFastForwardSonicGxVertexDescriptorSetter(actualState, actualBus, out int skippedInstructions);
+
+            Assert.True(skipped);
+            Assert.Equal(expectedInstructions, skippedInstructions);
+            Assert.Equal(expectedState.Pc, actualState.Pc);
+            Assert.Equal(expectedState.Lr, actualState.Lr);
+            Assert.Equal(expectedState.Ctr, actualState.Ctr);
+            Assert.Equal(expectedState.Cr, actualState.Cr);
+            Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+            Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+            foreach (int register in new[] { 0, 3, 4, 5, 6, 7, 8, 9, 10 })
+            {
+                Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+            }
+
+            foreach (uint offset in new[] { 0x14u, 0x18u, 0x4F0u })
+            {
+                Assert.Equal(expectedBus.Memory.Read32(stateBlock + offset), actualBus.Memory.Read32(stateBlock + offset));
+            }
+        }
+    }
+
+    [Fact]
     public void SonicGxIndexedStripBatchFastForwardMatchesInterpreterPath()
     {
         const uint pc = 0x8012_0078;
@@ -3702,6 +3752,16 @@ public sealed class DolRunnerTests
         return result;
     }
 
+    private static bool InvokeFastForwardSonicGxVertexDescriptorSetter(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGxVertexDescriptorSetter", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic GX vertex descriptor setter fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
     private static bool InvokeFastForwardSonicGxIndexedStripDrawBegin(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGxIndexedStripDrawBegin", BindingFlags.NonPublic | BindingFlags.Static)
@@ -4611,6 +4671,71 @@ public sealed class DolRunnerTests
         WriteSonicGxVertexEmitLoop(memory, pc + 0x30);
     }
 
+    private static void WriteSonicGxVertexDescriptorSetter(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x000, 0x2803_0019);
+        WriteInstruction(memory, pc + 0x004, 0x4181_0300);
+        WriteInstruction(memory, pc + 0x008, 0x3CA0_801D);
+        WriteInstruction(memory, pc + 0x00C, 0x38A5_2668);
+        WriteInstruction(memory, pc + 0x010, 0x5460_103A);
+        WriteInstruction(memory, pc + 0x014, 0x7C05_002E);
+        WriteInstruction(memory, pc + 0x018, 0x7C09_03A6);
+        WriteInstruction(memory, pc + 0x01C, 0x4E80_0420);
+
+        WriteInstruction(memory, pc + 0x138, 0x806D_8380);
+        WriteInstruction(memory, pc + 0x13C, 0x5480_482C);
+        WriteInstruction(memory, pc + 0x140, 0x3883_0014);
+        WriteInstruction(memory, pc + 0x144, 0x8063_0014);
+        WriteInstruction(memory, pc + 0x148, 0x5463_05E8);
+        WriteInstruction(memory, pc + 0x14C, 0x7C60_0378);
+        WriteInstruction(memory, pc + 0x150, 0x9004_0000);
+        WriteInstruction(memory, pc + 0x154, 0x4800_01B0);
+
+        WriteInstruction(memory, pc + 0x1D0, 0x806D_8380);
+        WriteInstruction(memory, pc + 0x1D4, 0x5480_6824);
+        WriteInstruction(memory, pc + 0x1D8, 0x3883_0014);
+        WriteInstruction(memory, pc + 0x1DC, 0x8063_0014);
+        WriteInstruction(memory, pc + 0x1E0, 0x5463_04E0);
+        WriteInstruction(memory, pc + 0x1E4, 0x7C60_0378);
+        WriteInstruction(memory, pc + 0x1E8, 0x9004_0000);
+        WriteInstruction(memory, pc + 0x1EC, 0x4800_0118);
+
+        WriteInstruction(memory, pc + 0x210, 0x806D_8380);
+        WriteInstruction(memory, pc + 0x214, 0x8403_0018);
+        WriteInstruction(memory, pc + 0x218, 0x5400_003A);
+        WriteInstruction(memory, pc + 0x21C, 0x7C00_2378);
+        WriteInstruction(memory, pc + 0x220, 0x9003_0000);
+        WriteInstruction(memory, pc + 0x224, 0x4800_00E0);
+
+        WriteInstruction(memory, pc + 0x304, 0x806D_8380);
+        WriteInstruction(memory, pc + 0x308, 0x8803_041C);
+        WriteInstruction(memory, pc + 0x30C, 0x2800_0000);
+        WriteInstruction(memory, pc + 0x310, 0x4082_0010);
+        WriteInstruction(memory, pc + 0x314, 0x8803_041D);
+        WriteInstruction(memory, pc + 0x318, 0x2800_0000);
+        WriteInstruction(memory, pc + 0x31C, 0x4182_0024);
+        WriteInstruction(memory, pc + 0x320, 0x3883_0014);
+        WriteInstruction(memory, pc + 0x324, 0x8003_0418);
+        WriteInstruction(memory, pc + 0x328, 0x8063_0014);
+        WriteInstruction(memory, pc + 0x32C, 0x5400_5828);
+        WriteInstruction(memory, pc + 0x330, 0x5463_0564);
+        WriteInstruction(memory, pc + 0x334, 0x7C60_0378);
+        WriteInstruction(memory, pc + 0x338, 0x9004_0000);
+        WriteInstruction(memory, pc + 0x33C, 0x4800_0010);
+        WriteInstruction(memory, pc + 0x340, 0x8403_0014);
+        WriteInstruction(memory, pc + 0x344, 0x5400_0564);
+        WriteInstruction(memory, pc + 0x348, 0x9003_0000);
+        WriteInstruction(memory, pc + 0x34C, 0x806D_8380);
+        WriteInstruction(memory, pc + 0x350, 0x8003_04F0);
+        WriteInstruction(memory, pc + 0x354, 0x6000_0008);
+        WriteInstruction(memory, pc + 0x358, 0x9003_04F0);
+        WriteInstruction(memory, pc + 0x35C, 0x4E80_0020);
+
+        memory.Write32(0x801D_2668 + 9 * sizeof(uint), pc + 0x138);
+        memory.Write32(0x801D_2668 + 11 * sizeof(uint), pc + 0x1D0);
+        memory.Write32(0x801D_2668 + 13 * sizeof(uint), pc + 0x210);
+    }
+
     private static void WriteSonicGxIndexedStripTail(GameCubeMemory memory, uint pc)
     {
         WriteInstruction(memory, pc + 0x00, 0x4800_0029);
@@ -4980,6 +5105,36 @@ public sealed class DolRunnerTests
         bus.Memory.Write32(state.Gpr[13] - 31872u, stateBlock);
         bus.Memory.Write32(stateBlock, 1);
         bus.Memory.Write32(stateBlock + 0x4F0, 0);
+        return state;
+    }
+
+    private static PowerPcState CreateSonicGxVertexDescriptorSetterState(GameCubeBus bus, uint pc, uint stateBlock, uint descriptor, byte vertexMatrixFlag, byte normalMatrixFlag)
+    {
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8012_0054,
+            Cr = 0x8200_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[0] = 0x1234_5678;
+        state.Gpr[3] = descriptor;
+        state.Gpr[4] = 1;
+        state.Gpr[6] = 0xAAAA_0006;
+        state.Gpr[7] = 0xBBBB_0007;
+        state.Gpr[8] = 0xCCCC_0008;
+        state.Gpr[9] = 0xDDDD_0009;
+        state.Gpr[10] = 0xEEEE_000A;
+        state.Gpr[13] = 0x803B_52C0;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bus.Memory.Write32(state.Gpr[13] - 31872u, stateBlock);
+        bus.Memory.Write32(stateBlock + 0x14, 0xDEAD_BEEF);
+        bus.Memory.Write32(stateBlock + 0x18, 0x89AB_CDEF);
+        bus.Memory.Write32(stateBlock + 0x418, 0x0000_0007);
+        bus.Memory.Write8(stateBlock + 0x41C, vertexMatrixFlag);
+        bus.Memory.Write8(stateBlock + 0x41D, normalMatrixFlag);
+        bus.Memory.Write32(stateBlock + 0x4F0, 0x40);
         return state;
     }
 

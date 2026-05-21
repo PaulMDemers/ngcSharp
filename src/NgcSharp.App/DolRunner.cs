@@ -35,6 +35,7 @@ public sealed class DolRunner
     private const uint SonicGxFloatAttributeStripEmitExitInstructions = 2;
     private const uint SonicGxDrawBeginPc = 0x8010_1948;
     private const uint SonicGxDrawBeginFastForwardInstructions = 28;
+    private const uint SonicGxVertexDescriptorSetterPc = 0x8010_0830;
     private const uint SonicGxIndexedStripDrawBeginPc = 0x8012_0078;
     private const uint SonicGxIndexedStripTailPc = 0x8012_00FC;
     private const uint SonicGxFloatTexcoordStripEmitLoopPc = 0x8011_D860;
@@ -201,6 +202,7 @@ public sealed class DolRunner
         ulong sonicGxFloatStripEmitFastForwardInstructions = 0;
         ulong sonicGxFloatAttributeStripEmitFastForwardInstructions = 0;
         ulong sonicGxDrawBeginFastForwardInstructions = 0;
+        ulong sonicGxVertexDescriptorSetterFastForwardInstructions = 0;
         ulong sonicGxIndexedStripBatchFastForwardInstructions = 0;
         ulong sonicGxIndexedStripDrawBeginFastForwardInstructions = 0;
         ulong sonicGxIndexedStripTailFastForwardInstructions = 0;
@@ -747,6 +749,7 @@ public sealed class DolRunner
                         sonicGxFloatStripEmitInstructions = sonicGxFloatStripEmitFastForwardInstructions,
                         sonicGxFloatAttributeStripEmitInstructions = sonicGxFloatAttributeStripEmitFastForwardInstructions,
                         sonicGxDrawBeginInstructions = sonicGxDrawBeginFastForwardInstructions,
+                        sonicGxVertexDescriptorSetterInstructions = sonicGxVertexDescriptorSetterFastForwardInstructions,
                         sonicGxIndexedStripBatchInstructions = sonicGxIndexedStripBatchFastForwardInstructions,
                         sonicGxIndexedStripDrawBeginInstructions = sonicGxIndexedStripDrawBeginFastForwardInstructions,
                         sonicGxIndexedStripTailInstructions = sonicGxIndexedStripTailFastForwardInstructions,
@@ -1172,6 +1175,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxPackedStateSetter(state, bus, out skippedInstructions))
                 {
                     sonicGxPackedStateSetterFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxVertexDescriptorSetter(state, bus, out skippedInstructions))
+                {
+                    sonicGxVertexDescriptorSetterFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1754,6 +1764,11 @@ public sealed class DolRunner
             if (sonicGxDrawBeginFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {sonicGxDrawBeginFastForwardInstructions} Sonic GX draw begin instruction(s).");
+            }
+
+            if (sonicGxVertexDescriptorSetterFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {sonicGxVertexDescriptorSetterFastForwardInstructions} Sonic GX vertex descriptor setter instruction(s).");
             }
 
             if (sonicGxIndexedStripBatchFastForwardInstructions != 0)
@@ -5941,6 +5956,163 @@ public sealed class DolRunner
         && bus.Read32(pc + 0xD0) == 0x3821_0028
         && bus.Read32(pc + 0xD4) == 0x7C08_03A6
         && bus.Read32(pc + 0xD8) == 0x4E80_0020;
+
+    private static bool TryFastForwardSonicGxVertexDescriptorSetter(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (!MatchesSonicGxVertexDescriptorSetter(bus, state.Pc))
+        {
+            return false;
+        }
+
+        uint descriptor = state.Gpr[3];
+        uint value = state.Gpr[4];
+        uint caseInstructions = descriptor switch
+        {
+            9 or 11 => 8,
+            13 => 6,
+            _ => 0,
+        };
+        if (caseInstructions == 0)
+        {
+            return false;
+        }
+
+        uint stateBlockPointerAddress = unchecked(state.Gpr[13] + 0xFFFF_8380u);
+        if (!bus.Memory.IsMainRamAddress(stateBlockPointerAddress, sizeof(uint)))
+        {
+            return false;
+        }
+
+        uint stateBlock = bus.Memory.Read32(stateBlockPointerAddress);
+        if (!bus.Memory.IsMainRamAddress(stateBlock, 0x4F4))
+        {
+            return false;
+        }
+
+        byte vertexMatrixFlag = bus.Memory.Read8(stateBlock + 0x41C);
+        byte normalMatrixFlag = bus.Memory.Read8(stateBlock + 0x41D);
+        uint tailInstructions = vertexMatrixFlag != 0 ? 17u : normalMatrixFlag != 0 ? 20u : 15u;
+        uint skipped = checked(8 + caseInstructions + tailInstructions);
+        if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: skipped, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        uint word14 = bus.Memory.Read32(stateBlock + 0x14);
+        uint word18 = bus.Memory.Read32(stateBlock + 0x18);
+        uint finalR4 = value;
+        uint target = descriptor switch
+        {
+            9 => 0x8010_0968u,
+            11 => 0x8010_0A00u,
+            _ => 0x8010_0A40u,
+        };
+
+        if (descriptor == 9)
+        {
+            word14 = Rlwinm(word14, 0, 23, 20) | Rlwinm(value, 9, 0, 22);
+            bus.Memory.Write32(stateBlock + 0x14, word14);
+            finalR4 = stateBlock + 0x14;
+        }
+        else if (descriptor == 11)
+        {
+            word14 = Rlwinm(word14, 0, 19, 16) | Rlwinm(value, 13, 0, 18);
+            bus.Memory.Write32(stateBlock + 0x14, word14);
+            finalR4 = stateBlock + 0x14;
+        }
+        else
+        {
+            word18 = Rlwinm(word18, 0, 0, 29) | value;
+            bus.Memory.Write32(stateBlock + 0x18, word18);
+        }
+
+        if (vertexMatrixFlag != 0 || normalMatrixFlag != 0)
+        {
+            uint matrixIndex = bus.Memory.Read32(stateBlock + 0x418);
+            word14 = bus.Memory.Read32(stateBlock + 0x14);
+            word14 = Rlwinm(word14, 0, 21, 18) | Rlwinm(matrixIndex, 11, 0, 20);
+            bus.Memory.Write32(stateBlock + 0x14, word14);
+            finalR4 = stateBlock + 0x14;
+        }
+        else
+        {
+            word14 = bus.Memory.Read32(stateBlock + 0x14);
+            word14 = Rlwinm(word14, 0, 21, 18);
+            bus.Memory.Write32(stateBlock + 0x14, word14);
+        }
+
+        uint dirtyFlags = bus.Memory.Read32(stateBlock + 0x4F0) | 0x08u;
+        bus.Memory.Write32(stateBlock + 0x4F0, dirtyFlags);
+
+        state.Gpr[0] = dirtyFlags;
+        state.Gpr[3] = stateBlock;
+        state.Gpr[4] = finalR4;
+        state.Gpr[5] = 0x801D_2668;
+        state.Ctr = target;
+        state.Pc = state.Lr & 0xFFFF_FFFCu;
+        SetCr0ForUnsignedCompareImmediate(state, vertexMatrixFlag != 0 ? vertexMatrixFlag : normalMatrixFlag, 0);
+
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+    private static bool MatchesSonicGxVertexDescriptorSetter(GameCubeBus bus, uint pc) =>
+        pc == SonicGxVertexDescriptorSetterPc
+        && bus.Read32(pc + 0x000) == 0x2803_0019
+        && bus.Read32(pc + 0x004) == 0x4181_0300
+        && bus.Read32(pc + 0x008) == 0x3CA0_801D
+        && bus.Read32(pc + 0x00C) == 0x38A5_2668
+        && bus.Read32(pc + 0x010) == 0x5460_103A
+        && bus.Read32(pc + 0x014) == 0x7C05_002E
+        && bus.Read32(pc + 0x018) == 0x7C09_03A6
+        && bus.Read32(pc + 0x01C) == 0x4E80_0420
+        && bus.Read32(pc + 0x138) == 0x806D_8380
+        && bus.Read32(pc + 0x13C) == 0x5480_482C
+        && bus.Read32(pc + 0x140) == 0x3883_0014
+        && bus.Read32(pc + 0x144) == 0x8063_0014
+        && bus.Read32(pc + 0x148) == 0x5463_05E8
+        && bus.Read32(pc + 0x14C) == 0x7C60_0378
+        && bus.Read32(pc + 0x150) == 0x9004_0000
+        && bus.Read32(pc + 0x154) == 0x4800_01B0
+        && bus.Read32(pc + 0x1D0) == 0x806D_8380
+        && bus.Read32(pc + 0x1D4) == 0x5480_6824
+        && bus.Read32(pc + 0x1D8) == 0x3883_0014
+        && bus.Read32(pc + 0x1DC) == 0x8063_0014
+        && bus.Read32(pc + 0x1E0) == 0x5463_04E0
+        && bus.Read32(pc + 0x1E4) == 0x7C60_0378
+        && bus.Read32(pc + 0x1E8) == 0x9004_0000
+        && bus.Read32(pc + 0x1EC) == 0x4800_0118
+        && bus.Read32(pc + 0x210) == 0x806D_8380
+        && bus.Read32(pc + 0x214) == 0x8403_0018
+        && bus.Read32(pc + 0x218) == 0x5400_003A
+        && bus.Read32(pc + 0x21C) == 0x7C00_2378
+        && bus.Read32(pc + 0x220) == 0x9003_0000
+        && bus.Read32(pc + 0x224) == 0x4800_00E0
+        && bus.Read32(pc + 0x304) == 0x806D_8380
+        && bus.Read32(pc + 0x308) == 0x8803_041C
+        && bus.Read32(pc + 0x30C) == 0x2800_0000
+        && bus.Read32(pc + 0x310) == 0x4082_0010
+        && bus.Read32(pc + 0x314) == 0x8803_041D
+        && bus.Read32(pc + 0x318) == 0x2800_0000
+        && bus.Read32(pc + 0x31C) == 0x4182_0024
+        && bus.Read32(pc + 0x320) == 0x3883_0014
+        && bus.Read32(pc + 0x324) == 0x8003_0418
+        && bus.Read32(pc + 0x328) == 0x8063_0014
+        && bus.Read32(pc + 0x32C) == 0x5400_5828
+        && bus.Read32(pc + 0x330) == 0x5463_0564
+        && bus.Read32(pc + 0x334) == 0x7C60_0378
+        && bus.Read32(pc + 0x338) == 0x9004_0000
+        && bus.Read32(pc + 0x33C) == 0x4800_0010
+        && bus.Read32(pc + 0x340) == 0x8403_0014
+        && bus.Read32(pc + 0x344) == 0x5400_0564
+        && bus.Read32(pc + 0x348) == 0x9003_0000
+        && bus.Read32(pc + 0x34C) == 0x806D_8380
+        && bus.Read32(pc + 0x350) == 0x8003_04F0
+        && bus.Read32(pc + 0x354) == 0x6000_0008
+        && bus.Read32(pc + 0x358) == 0x9003_04F0
+        && bus.Read32(pc + 0x35C) == 0x4E80_0020;
 
     private static bool MatchesSonicGxIndexedStripDrawBegin(GameCubeBus bus, uint pc) =>
         pc == SonicGxIndexedStripDrawBeginPc
