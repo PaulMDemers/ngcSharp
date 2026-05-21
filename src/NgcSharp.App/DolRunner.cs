@@ -34,6 +34,7 @@ public sealed class DolRunner
     private const uint SonicGxFloatAttributeStripEmitInstructionsPerIteration = 22;
     private const uint SonicGxFloatAttributeStripEmitExitInstructions = 2;
     private const uint SonicGxCommandListTerminalPc = 0x8011_D184;
+    private const uint SonicGxCommandListFetchInstructions = 4;
     private const uint SonicGxCommandListTerminalInstructions = 23;
     private const uint SonicGxCommandDispatchHeaderPc = 0x8011_CD40;
     private const uint SonicGxCommandDispatchHighRangePc = 0x8011_CDE8;
@@ -215,6 +216,7 @@ public sealed class DolRunner
         ulong sonicPairedTransform2dFastForwardInstructions = 0;
         ulong sonicGxFloatStripEmitFastForwardInstructions = 0;
         ulong sonicGxFloatAttributeStripEmitFastForwardInstructions = 0;
+        ulong sonicGxCommandListFetchFastForwardInstructions = 0;
         ulong sonicGxCommandListTerminalFastForwardInstructions = 0;
         ulong sonicGxCommandDispatchFastForwardInstructions = 0;
         ulong sonicGprSaveRestoreTailFastForwardInstructions = 0;
@@ -768,6 +770,7 @@ public sealed class DolRunner
                         sonicPairedTransform2dInstructions = sonicPairedTransform2dFastForwardInstructions,
                         sonicGxFloatStripEmitInstructions = sonicGxFloatStripEmitFastForwardInstructions,
                         sonicGxFloatAttributeStripEmitInstructions = sonicGxFloatAttributeStripEmitFastForwardInstructions,
+                        sonicGxCommandListFetchInstructions = sonicGxCommandListFetchFastForwardInstructions,
                         sonicGxCommandListTerminalInstructions = sonicGxCommandListTerminalFastForwardInstructions,
                         sonicGxCommandDispatchInstructions = sonicGxCommandDispatchFastForwardInstructions,
                         sonicGprSaveRestoreTailInstructions = sonicGprSaveRestoreTailFastForwardInstructions,
@@ -1324,6 +1327,13 @@ public sealed class DolRunner
                     continue;
                 }
 
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxCommandListFetch(state, bus, out skippedInstructions))
+                {
+                    sonicGxCommandListFetchFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxCommandDispatch(state, bus, out skippedInstructions))
                 {
                     sonicGxCommandDispatchFastForwardInstructions += (uint)skippedInstructions;
@@ -1827,6 +1837,11 @@ public sealed class DolRunner
             if (sonicGxFloatAttributeStripEmitFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {sonicGxFloatAttributeStripEmitFastForwardInstructions} Sonic GX float/attribute strip emit instruction(s).");
+            }
+
+            if (sonicGxCommandListFetchFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {sonicGxCommandListFetchFastForwardInstructions} Sonic GX command-list fetch instruction(s).");
             }
 
             if (sonicGxCommandListTerminalFastForwardInstructions != 0)
@@ -6683,6 +6698,36 @@ public sealed class DolRunner
         return true;
     }
 
+    private static bool TryFastForwardSonicGxCommandListFetch(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (!MatchesSonicGxCommandListFetch(bus, state.Pc)
+            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: SonicGxCommandListFetchInstructions, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        uint stream = state.Gpr[20];
+        if (!bus.Memory.IsMainRamAddress(stream, sizeof(ushort)))
+        {
+            return false;
+        }
+
+        short command = unchecked((short)bus.Memory.Read16(stream));
+        if (command == 0x00FF)
+        {
+            return false;
+        }
+
+        state.Gpr[20] = stream + sizeof(ushort);
+        state.Gpr[28] = unchecked((uint)command);
+        state.Pc = SonicGxCommandDispatchHeaderPc;
+        SetCr0ForSignedCompareImmediate(state, unchecked((uint)command), 255);
+        AdvanceFastForwardedInstructions(state, bus, SonicGxCommandListFetchInstructions);
+        skippedInstructions = checked((int)SonicGxCommandListFetchInstructions);
+        return true;
+    }
+
     private static bool MatchesSonicGxCommandListTerminal(GameCubeBus bus, uint pc) =>
         pc == SonicGxCommandListTerminalPc
         && bus.Read32(pc + 0x00) == 0xAB94_0000
@@ -6708,6 +6753,14 @@ public sealed class DolRunner
         && bus.Read32(0x8010_B024) == 0x83CB_FFF8
         && bus.Read32(0x8010_B028) == 0x83EB_FFFC
         && bus.Read32(0x8010_B02C) == 0x4E80_0020;
+
+    private static bool MatchesSonicGxCommandListFetch(GameCubeBus bus, uint pc) =>
+        pc == SonicGxCommandListTerminalPc
+        && bus.Read32(pc + 0x00) == 0xAB94_0000
+        && bus.Read32(pc + 0x04) == 0x3A94_0002
+        && bus.Read32(pc + 0x08) == 0x2C1C_00FF
+        && bus.Read32(pc + 0x0C) == 0x4082_FBB0
+        && MatchesSonicGxCommandDispatchHeader(bus, SonicGxCommandDispatchHeaderPc);
 
     private static bool TryFastForwardSonicGxCommandDispatch(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {

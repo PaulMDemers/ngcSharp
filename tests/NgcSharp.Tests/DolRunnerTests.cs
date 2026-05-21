@@ -2808,6 +2808,36 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicGxCommandListFetchFastForwardMatchesInterpreterBranch()
+    {
+        const uint pc = 0x8011_D184;
+        const uint stream = 0x8132_A728;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        WriteSonicGxCommandListTerminal(expectedBus.Memory, pc);
+        WriteSonicGxCommandDispatch(expectedBus.Memory);
+        WriteSonicGxCommandListTerminal(actualBus.Memory, pc);
+        WriteSonicGxCommandDispatch(actualBus.Memory);
+        PowerPcState expectedState = CreateSonicGxCommandListFetchState(expectedBus, pc, stream, command: 0x0041);
+        PowerPcState actualState = CreateSonicGxCommandListFetchState(actualBus, pc, stream, command: 0x0041);
+
+        new PowerPcInterpreter().Run(expectedState, expectedBus, 4);
+        bool skipped = InvokeFastForwardSonicGxCommandListFetch(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(4, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Lr, actualState.Lr);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 20, 28 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+    }
+
+    [Fact]
     public void SonicGxCommandDispatchFastForwardMatchesInterpreterBranches()
     {
         const uint headerPc = 0x8011_CD40;
@@ -4219,6 +4249,16 @@ public sealed class DolRunnerTests
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGxCommandListTerminal", BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("Could not find Sonic GX command-list terminal fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
+    private static bool InvokeFastForwardSonicGxCommandListFetch(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGxCommandListFetch", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic GX command-list fetch fast-forward helper.");
         object?[] args = [state, bus, 0];
         bool result = (bool)method.Invoke(null, args)!;
         skippedInstructions = (int)args[2]!;
@@ -6005,6 +6045,23 @@ public sealed class DolRunnerTests
             bus.Memory.Write32(stack + (uint)(80 + (register - 20) * sizeof(uint)), 0xCAFE_0000u + (uint)register);
         }
 
+        return state;
+    }
+
+    private static PowerPcState CreateSonicGxCommandListFetchState(GameCubeBus bus, uint pc, uint stream, short command)
+    {
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8011_D174,
+            Cr = 0x2200_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[20] = stream;
+        state.Gpr[28] = 0xABCD_001C;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bus.Memory.Write16(stream, unchecked((ushort)command));
         return state;
     }
 
