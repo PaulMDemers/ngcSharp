@@ -19,6 +19,7 @@ public sealed class DolRunner
     private const uint SonicGxVertexEmitInstructionsPerVertex = 24;
     private const uint SonicGxTexObjLoadNoCallbackPc = 0x8010_37A4;
     private const uint SonicGxTexObjLoadNoCallbackInstructions = 92;
+    private const uint SonicGxPackedStateSetterPc = 0x8010_4FF8;
     private const uint SonicPathLookupEntryPc = 0x800E_ECFC;
     private const uint SonicPathLookupByteTablePc = 0x8010_BA44;
     private const int SonicPathLookupStackWindowBytes = 0xA0;
@@ -188,6 +189,7 @@ public sealed class DolRunner
         ulong byteTableLookupFastForwardInstructions = 0;
         ulong gxVertexEmitFastForwardInstructions = 0;
         ulong sonicGxTexObjLoadNoCallbackFastForwardInstructions = 0;
+        ulong sonicGxPackedStateSetterFastForwardInstructions = 0;
         ulong normalizedStringScanFastForwardInstructions = 0;
         ulong sonicResourceModeQueryFastForwardInstructions = 0;
         ulong sonicResourceStatePollFastForwardInstructions = 0;
@@ -732,6 +734,7 @@ public sealed class DolRunner
                         byteTableLookupInstructions = byteTableLookupFastForwardInstructions,
                         gxVertexEmitInstructions = gxVertexEmitFastForwardInstructions,
                         sonicGxTexObjLoadNoCallbackInstructions = sonicGxTexObjLoadNoCallbackFastForwardInstructions,
+                        sonicGxPackedStateSetterInstructions = sonicGxPackedStateSetterFastForwardInstructions,
                         normalizedStringScanInstructions = normalizedStringScanFastForwardInstructions,
                         sonicResourceModeQueryInstructions = sonicResourceModeQueryFastForwardInstructions,
                         sonicResourceStatePollInstructions = sonicResourceStatePollFastForwardInstructions,
@@ -1160,6 +1163,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxTexObjLoadNoCallback(state, bus, out skippedInstructions))
                 {
                     sonicGxTexObjLoadNoCallbackFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxPackedStateSetter(state, bus, out skippedInstructions))
+                {
+                    sonicGxPackedStateSetterFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1675,6 +1685,11 @@ public sealed class DolRunner
             if (sonicGxTexObjLoadNoCallbackFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {sonicGxTexObjLoadNoCallbackFastForwardInstructions} Sonic GX texture object load instruction(s).");
+            }
+
+            if (sonicGxPackedStateSetterFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {sonicGxPackedStateSetterFastForwardInstructions} Sonic GX packed state setter instruction(s).");
             }
 
             if (normalizedStringScanFastForwardInstructions != 0)
@@ -5276,6 +5291,134 @@ public sealed class DolRunner
         && bus.Read32(pc + 0x1A0) == 0x7C08_03A6
         && bus.Read32(pc + 0x1A4) == 0x4E80_0020;
 
+    private static bool TryFastForwardSonicGxPackedStateSetter(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (!MatchesSonicGxPackedStateSetter(bus, state.Pc))
+        {
+            return false;
+        }
+
+        uint mode = state.Gpr[3];
+        uint skipped = mode switch
+        {
+            1 => 62,
+            3 => 64,
+            _ => 65,
+        };
+        if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: skipped, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        uint stateBlockPointerAddress = unchecked(state.Gpr[13] + 0xFFFF_8380u);
+        if (!bus.Memory.IsMainRamAddress(stateBlockPointerAddress, sizeof(uint)))
+        {
+            return false;
+        }
+
+        uint stateBlock = bus.Memory.Read32(stateBlockPointerAddress);
+        uint packedAddress = stateBlock + 0x1D0;
+        if (!bus.Memory.IsMainRamAddress(stateBlock, 0x1D4))
+        {
+            return false;
+        }
+
+        uint modeEnable = mode is 1 or 3 ? 1u : 0u;
+        uint mode3LeadingZeroes = (uint)uint.LeadingZeroCount(unchecked(3u - mode));
+        uint mode2LeadingZeroes = (uint)uint.LeadingZeroCount(unchecked(2u - mode));
+        uint arg6Bits = Rlwinm(state.Gpr[6], 12, 0, 19);
+        uint arg4Bits = Rlwinm(state.Gpr[4], 8, 0, 23);
+        uint arg5Bits = Rlwinm(state.Gpr[5], 5, 0, 26);
+
+        uint word = bus.Memory.Read32(packedAddress);
+        word = Rlwinm(word, 0, 0, 30) | modeEnable;
+        bus.Memory.Write32(packedAddress, word);
+
+        word = bus.Memory.Read32(packedAddress);
+        word = Rlwinm(word, 0, 21, 19) | Rlwinm(mode3LeadingZeroes, 6, 0, 20);
+        bus.Memory.Write32(packedAddress, word);
+
+        word = bus.Memory.Read32(packedAddress);
+        word = Rlwinm(word, 0, 31, 29) | Rlwinm(mode2LeadingZeroes, 28, 4, 30);
+        bus.Memory.Write32(packedAddress, word);
+
+        word = bus.Memory.Read32(packedAddress);
+        word = Rlwinm(word, 0, 20, 15) | arg6Bits;
+        bus.Memory.Write32(packedAddress, word);
+
+        word = bus.Memory.Read32(packedAddress);
+        word = Rlwinm(word, 0, 24, 20) | arg4Bits;
+        bus.Memory.Write32(packedAddress, word);
+
+        word = bus.Memory.Read32(packedAddress);
+        word = Rlwinm(word, 0, 27, 23) | arg5Bits;
+        bus.Memory.Write32(packedAddress, word);
+
+        word = bus.Memory.Read32(packedAddress);
+        word = Rlwinm(word, 0, 8, 31) | 0x4100_0000u;
+        bus.Memory.Write32(packedAddress, word);
+
+        const uint fifo = 0xCC00_8000;
+        bus.Write8(fifo, 0x61);
+        bus.Write32(fifo, word);
+        bus.Memory.Write16(stateBlock + 2, 0);
+
+        state.Gpr[0] = 0;
+        state.Gpr[3] = word;
+        state.Gpr[4] = stateBlock;
+        state.Gpr[5] = 0xCC01_0000;
+        state.Gpr[6] = packedAddress;
+        state.Gpr[7] = packedAddress;
+        state.Gpr[8] = packedAddress;
+        state.Gpr[9] = packedAddress;
+        state.Gpr[10] = packedAddress;
+        state.Pc = state.Lr & 0xFFFF_FFFCu;
+        SetCr0ForSignedCompareImmediate(state, mode, mode == 1 ? 1 : 3);
+
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+    private static bool MatchesSonicGxPackedStateSetter(GameCubeBus bus, uint pc)
+    {
+        if (pc != SonicGxPackedStateSetterPc)
+        {
+            return false;
+        }
+
+        ReadOnlySpan<uint> instructions =
+        [
+            0x2C03_0001, 0x3920_0001, 0x4182_0010, 0x2C03_0003,
+            0x4182_0008, 0x3920_0000, 0x810D_8380, 0x2003_0003,
+            0x7C07_0034, 0x3948_01D0, 0x8108_01D0, 0x2003_0002,
+            0x5503_003C, 0x7C63_4B78, 0x906A_0000, 0x7C00_0034,
+            0x54E3_3028, 0x812D_8380, 0x5408_E13C, 0x8409_01D0,
+            0x54C7_6026, 0x5486_402E, 0x5400_0566, 0x7C00_1B78,
+            0x9009_0000, 0x54A4_2834, 0x3860_0061, 0x812D_8380,
+            0x3CA0_CC01, 0x3800_0000, 0x3949_01D0, 0x8129_01D0,
+            0x5529_07FA, 0x7D28_4378, 0x910A_0000, 0x810D_8380,
+            0x3928_01D0, 0x8108_01D0, 0x5508_051E, 0x7D07_3B78,
+            0x90E9_0000, 0x80ED_8380, 0x3907_01D0, 0x80E7_01D0,
+            0x54E7_0628, 0x7CE6_3378, 0x90C8_0000, 0x80CD_8380,
+            0x38E6_01D0, 0x80C6_01D0, 0x54C6_06EE, 0x7CC4_2378,
+            0x9087_0000, 0x808D_8380, 0x38C4_01D0, 0x8084_01D0,
+            0x5484_023E, 0x6484_4100, 0x9086_0000, 0x9865_8000,
+            0x808D_8380, 0x8064_01D0, 0x9065_8000, 0xB004_0002,
+            0x4E80_0020,
+        ];
+        for (int index = 0; index < instructions.Length; index++)
+        {
+            if (bus.Read32(pc + (uint)(index * sizeof(uint))) != instructions[index])
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static bool TryFastForwardSonicGxVertexEmitLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         skippedInstructions = 0;
@@ -8694,6 +8837,28 @@ public sealed class DolRunner
         }
 
         return true;
+    }
+
+    private static uint Rlwinm(uint value, int shift, int maskBegin, int maskEnd)
+    {
+        uint rotated = shift == 0 ? value : (value << shift) | (value >> (32 - shift));
+        return rotated & PowerPcMask(maskBegin, maskEnd);
+    }
+
+    private static uint PowerPcMask(int begin, int end)
+    {
+        uint mask = 0;
+        int bit = begin;
+        while (true)
+        {
+            mask |= 1u << (31 - bit);
+            if (bit == end)
+            {
+                return mask;
+            }
+
+            bit = (bit + 1) & 0x1F;
+        }
     }
 
     private static bool CanFastForwardInstructionCount(PowerPcState state, uint iterations, uint instructionsPerIteration, uint extraInstructions)
