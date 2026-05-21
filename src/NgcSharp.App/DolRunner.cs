@@ -37,6 +37,8 @@ public sealed class DolRunner
     private const uint SonicGxCommandListTerminalInstructions = 23;
     private const uint SonicGxCommandDispatchHeaderPc = 0x8011_CD40;
     private const uint SonicGxCommandDispatchHighRangePc = 0x8011_CDE8;
+    private const uint SonicGprSaveTailPc = 0x8010_AFCC;
+    private const uint SonicGprRestoreTailPc = 0x8010_B018;
     private const uint SonicGxDrawBeginPc = 0x8010_1948;
     private const uint SonicGxDrawBeginFastForwardInstructions = 28;
     private const uint SonicGxVertexDescriptorSetterPc = 0x8010_0830;
@@ -207,6 +209,7 @@ public sealed class DolRunner
         ulong sonicGxFloatAttributeStripEmitFastForwardInstructions = 0;
         ulong sonicGxCommandListTerminalFastForwardInstructions = 0;
         ulong sonicGxCommandDispatchFastForwardInstructions = 0;
+        ulong sonicGprSaveRestoreTailFastForwardInstructions = 0;
         ulong sonicGxDrawBeginFastForwardInstructions = 0;
         ulong sonicGxVertexDescriptorSetterFastForwardInstructions = 0;
         ulong sonicGxIndexedStripBatchFastForwardInstructions = 0;
@@ -756,6 +759,7 @@ public sealed class DolRunner
                         sonicGxFloatAttributeStripEmitInstructions = sonicGxFloatAttributeStripEmitFastForwardInstructions,
                         sonicGxCommandListTerminalInstructions = sonicGxCommandListTerminalFastForwardInstructions,
                         sonicGxCommandDispatchInstructions = sonicGxCommandDispatchFastForwardInstructions,
+                        sonicGprSaveRestoreTailInstructions = sonicGprSaveRestoreTailFastForwardInstructions,
                         sonicGxDrawBeginInstructions = sonicGxDrawBeginFastForwardInstructions,
                         sonicGxVertexDescriptorSetterInstructions = sonicGxVertexDescriptorSetterFastForwardInstructions,
                         sonicGxIndexedStripBatchInstructions = sonicGxIndexedStripBatchFastForwardInstructions,
@@ -1299,6 +1303,13 @@ public sealed class DolRunner
                     continue;
                 }
 
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGprSaveRestoreTail(state, bus, out skippedInstructions))
+                {
+                    sonicGprSaveRestoreTailFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxFloatTexcoordStripEmitLoop(state, bus, out skippedInstructions))
                 {
                     sonicGxFloatTexcoordStripEmitFastForwardInstructions += (uint)skippedInstructions;
@@ -1791,6 +1802,11 @@ public sealed class DolRunner
             if (sonicGxCommandDispatchFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {sonicGxCommandDispatchFastForwardInstructions} Sonic GX command dispatch instruction(s).");
+            }
+
+            if (sonicGprSaveRestoreTailFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {sonicGprSaveRestoreTailFastForwardInstructions} Sonic GPR save/restore tail instruction(s).");
             }
 
             if (sonicGxDrawBeginFastForwardInstructions != 0)
@@ -6293,6 +6309,66 @@ public sealed class DolRunner
         && bus.Read32(pc + 0x04) == 0x4080_0034
         && bus.Read32(pc + 0x08) == 0x2C18_0000
         && bus.Read32(pc + 0x38) == 0x2C19_0040;
+
+    private static bool TryFastForwardSonicGprSaveRestoreTail(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        bool saveTail = MatchesSonicGprSaveTail(bus, pc);
+        bool restoreTail = MatchesSonicGprRestoreTail(bus, pc);
+        if (!saveTail && !restoreTail)
+        {
+            return false;
+        }
+
+        const uint skipped = 6;
+        uint baseAddress = unchecked(state.Gpr[11] - 20u);
+        if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: skipped, extraInstructions: 0)
+            || !bus.Memory.IsMainRamAddress(baseAddress, 20))
+        {
+            return false;
+        }
+
+        if (saveTail)
+        {
+            for (int register = 27; register <= 31; register++)
+            {
+                uint offset = (uint)((register - 27) * sizeof(uint));
+                bus.Memory.Write32(baseAddress + offset, state.Gpr[register]);
+            }
+        }
+        else
+        {
+            for (int register = 27; register <= 31; register++)
+            {
+                uint offset = (uint)((register - 27) * sizeof(uint));
+                state.Gpr[register] = bus.Memory.Read32(baseAddress + offset);
+            }
+        }
+
+        state.Pc = state.Lr & 0xFFFF_FFFCu;
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+    private static bool MatchesSonicGprSaveTail(GameCubeBus bus, uint pc) =>
+        pc == SonicGprSaveTailPc
+        && bus.Read32(pc + 0x00) == 0x936B_FFEC
+        && bus.Read32(pc + 0x04) == 0x938B_FFF0
+        && bus.Read32(pc + 0x08) == 0x93AB_FFF4
+        && bus.Read32(pc + 0x0C) == 0x93CB_FFF8
+        && bus.Read32(pc + 0x10) == 0x93EB_FFFC
+        && bus.Read32(pc + 0x14) == 0x4E80_0020;
+
+    private static bool MatchesSonicGprRestoreTail(GameCubeBus bus, uint pc) =>
+        pc == SonicGprRestoreTailPc
+        && bus.Read32(pc + 0x00) == 0x836B_FFEC
+        && bus.Read32(pc + 0x04) == 0x838B_FFF0
+        && bus.Read32(pc + 0x08) == 0x83AB_FFF4
+        && bus.Read32(pc + 0x0C) == 0x83CB_FFF8
+        && bus.Read32(pc + 0x10) == 0x83EB_FFFC
+        && bus.Read32(pc + 0x14) == 0x4E80_0020;
 
     private static bool TryFastForwardSonicGxFloatStripEmitLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
