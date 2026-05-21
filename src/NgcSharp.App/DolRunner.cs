@@ -6882,61 +6882,105 @@ public sealed class DolRunner
     {
         skippedInstructions = 0;
         uint pc = state.Pc;
-        bool saveTail = MatchesSonicGprSaveTail(bus, pc);
-        bool restoreTail = MatchesSonicGprRestoreTail(bus, pc);
+        bool saveTail = MatchesSonicGprSaveTail(bus, pc, out int saveFirstRegister, out int saveSkippedInstructions);
+        bool restoreTail = MatchesSonicGprRestoreTail(bus, pc, out int restoreFirstRegister, out int restoreSkippedInstructions);
         if (!saveTail && !restoreTail)
         {
             return false;
         }
 
-        const uint skipped = 6;
-        uint baseAddress = unchecked(state.Gpr[11] - 20u);
-        if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: skipped, extraInstructions: 0)
-            || !bus.Memory.IsMainRamAddress(baseAddress, 20))
+        int firstRegister = saveTail ? saveFirstRegister : restoreFirstRegister;
+        int skipped = saveTail ? saveSkippedInstructions : restoreSkippedInstructions;
+        int registerCount = 32 - firstRegister;
+        uint byteCount = (uint)(registerCount * sizeof(uint));
+        uint baseAddress = unchecked(state.Gpr[11] - byteCount);
+        if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: (uint)skipped, extraInstructions: 0)
+            || !bus.Memory.IsMainRamAddress(baseAddress, checked((int)byteCount)))
         {
             return false;
         }
 
         if (saveTail)
         {
-            for (int register = 27; register <= 31; register++)
+            for (int register = firstRegister; register <= 31; register++)
             {
-                uint offset = (uint)((register - 27) * sizeof(uint));
+                uint offset = (uint)((register - firstRegister) * sizeof(uint));
                 bus.Memory.Write32(baseAddress + offset, state.Gpr[register]);
             }
         }
         else
         {
-            for (int register = 27; register <= 31; register++)
+            for (int register = firstRegister; register <= 31; register++)
             {
-                uint offset = (uint)((register - 27) * sizeof(uint));
+                uint offset = (uint)((register - firstRegister) * sizeof(uint));
                 state.Gpr[register] = bus.Memory.Read32(baseAddress + offset);
             }
         }
 
         state.Pc = state.Lr & 0xFFFF_FFFCu;
-        AdvanceFastForwardedInstructions(state, bus, skipped);
-        skippedInstructions = checked((int)skipped);
+        AdvanceFastForwardedInstructions(state, bus, (uint)skipped);
+        skippedInstructions = skipped;
         return true;
     }
 
     private static bool MatchesSonicGprSaveTail(GameCubeBus bus, uint pc) =>
-        pc == SonicGprSaveTailPc
-        && bus.Read32(pc + 0x00) == 0x936B_FFEC
-        && bus.Read32(pc + 0x04) == 0x938B_FFF0
-        && bus.Read32(pc + 0x08) == 0x93AB_FFF4
-        && bus.Read32(pc + 0x0C) == 0x93CB_FFF8
-        && bus.Read32(pc + 0x10) == 0x93EB_FFFC
-        && bus.Read32(pc + 0x14) == 0x4E80_0020;
+        MatchesSonicGprSaveTail(bus, pc, out _, out _);
+
+    private static bool MatchesSonicGprSaveTail(GameCubeBus bus, uint pc, out int firstRegister, out int skippedInstructions) =>
+        MatchesSonicGprTail(
+            bus,
+            pc,
+            SonicGprSaveTailPc - 12,
+            [0x930B_FFE0, 0x932B_FFE4, 0x934B_FFE8, 0x936B_FFEC, 0x938B_FFF0, 0x93AB_FFF4, 0x93CB_FFF8, 0x93EB_FFFC, 0x4E80_0020],
+            out firstRegister,
+            out skippedInstructions);
 
     private static bool MatchesSonicGprRestoreTail(GameCubeBus bus, uint pc) =>
-        pc == SonicGprRestoreTailPc
-        && bus.Read32(pc + 0x00) == 0x836B_FFEC
-        && bus.Read32(pc + 0x04) == 0x838B_FFF0
-        && bus.Read32(pc + 0x08) == 0x83AB_FFF4
-        && bus.Read32(pc + 0x0C) == 0x83CB_FFF8
-        && bus.Read32(pc + 0x10) == 0x83EB_FFFC
-        && bus.Read32(pc + 0x14) == 0x4E80_0020;
+        MatchesSonicGprRestoreTail(bus, pc, out _, out _);
+
+    private static bool MatchesSonicGprRestoreTail(GameCubeBus bus, uint pc, out int firstRegister, out int skippedInstructions) =>
+        MatchesSonicGprTail(
+            bus,
+            pc,
+            SonicGprRestoreTailPc - 12,
+            [0x830B_FFE0, 0x832B_FFE4, 0x834B_FFE8, 0x836B_FFEC, 0x838B_FFF0, 0x83AB_FFF4, 0x83CB_FFF8, 0x83EB_FFFC, 0x4E80_0020],
+            out firstRegister,
+            out skippedInstructions);
+
+    private static bool MatchesSonicGprTail(
+        GameCubeBus bus,
+        uint pc,
+        uint basePc,
+        ReadOnlySpan<uint> instructions,
+        out int firstRegister,
+        out int skippedInstructions)
+    {
+        firstRegister = 0;
+        skippedInstructions = 0;
+        uint offset = pc - basePc;
+        if (pc < basePc || offset % sizeof(uint) != 0)
+        {
+            return false;
+        }
+
+        uint instructionIndex = offset / sizeof(uint);
+        if (instructionIndex >= instructions.Length - 1)
+        {
+            return false;
+        }
+
+        for (uint index = instructionIndex; index < instructions.Length; index++)
+        {
+            if (bus.Read32(basePc + index * sizeof(uint)) != instructions[(int)index])
+            {
+                return false;
+            }
+        }
+
+        firstRegister = 24 + (int)instructionIndex;
+        skippedInstructions = instructions.Length - (int)instructionIndex;
+        return true;
+    }
 
     private static bool TryFastForwardSonicGxAttributeStateSetter(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {

@@ -2966,34 +2966,43 @@ public sealed class DolRunnerTests
     [Fact]
     public void SonicGprSaveRestoreTailFastForwardMatchesInterpreter()
     {
-        const uint savePc = 0x8010_AFCC;
-        const uint restorePc = 0x8010_B018;
         const uint baseAddress = 0x803C_1200;
-        foreach (uint pc in new[] { savePc, restorePc })
+        foreach ((uint pc, int firstRegister) in new[]
+        {
+            (0x8010_AFC0u, 24),
+            (0x8010_AFC4u, 25),
+            (0x8010_AFC8u, 26),
+            (0x8010_AFCCu, 27),
+            (0x8010_B00Cu, 24),
+            (0x8010_B010u, 25),
+            (0x8010_B014u, 26),
+            (0x8010_B018u, 27),
+        })
         {
             GameCubeBus expectedBus = new();
             GameCubeBus actualBus = new();
             WriteSonicGprSaveRestoreTail(expectedBus.Memory);
             WriteSonicGprSaveRestoreTail(actualBus.Memory);
-            PowerPcState expectedState = CreateSonicGprSaveRestoreTailState(expectedBus, pc, baseAddress);
-            PowerPcState actualState = CreateSonicGprSaveRestoreTailState(actualBus, pc, baseAddress);
+            PowerPcState expectedState = CreateSonicGprSaveRestoreTailState(expectedBus, pc, baseAddress, firstRegister);
+            PowerPcState actualState = CreateSonicGprSaveRestoreTailState(actualBus, pc, baseAddress, firstRegister);
 
-            new PowerPcInterpreter().Run(expectedState, expectedBus, 6);
+            int expectedInstructions = 32 - firstRegister + 1;
+            new PowerPcInterpreter().Run(expectedState, expectedBus, expectedInstructions);
             bool skipped = InvokeFastForwardSonicGprSaveRestoreTail(actualState, actualBus, out int skippedInstructions);
 
             Assert.True(skipped);
-            Assert.Equal(6, skippedInstructions);
+            Assert.Equal(expectedInstructions, skippedInstructions);
             Assert.Equal(expectedState.Pc, actualState.Pc);
             Assert.Equal(expectedState.Lr, actualState.Lr);
             Assert.Equal(expectedState.Cr, actualState.Cr);
             Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
             Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
-            foreach (int register in new[] { 11, 27, 28, 29, 30, 31 })
+            foreach (int register in Enumerable.Range(firstRegister, 32 - firstRegister).Prepend(11))
             {
                 Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
             }
 
-            for (uint offset = 0; offset < 20; offset += sizeof(uint))
+            for (uint offset = 0; offset < (32u - (uint)firstRegister) * sizeof(uint); offset += sizeof(uint))
             {
                 Assert.Equal(expectedBus.Memory.Read32(baseAddress + offset), actualBus.Memory.Read32(baseAddress + offset));
             }
@@ -5356,21 +5365,25 @@ public sealed class DolRunnerTests
 
     private static void WriteSonicGprSaveRestoreTail(GameCubeMemory memory)
     {
-        const uint savePc = 0x8010_AFCC;
-        WriteInstruction(memory, savePc + 0x00, 0x936B_FFEC);
-        WriteInstruction(memory, savePc + 0x04, 0x938B_FFF0);
-        WriteInstruction(memory, savePc + 0x08, 0x93AB_FFF4);
-        WriteInstruction(memory, savePc + 0x0C, 0x93CB_FFF8);
-        WriteInstruction(memory, savePc + 0x10, 0x93EB_FFFC);
-        WriteInstruction(memory, savePc + 0x14, 0x4E80_0020);
+        WriteInstruction(memory, 0x8010_AFC0, 0x930B_FFE0);
+        WriteInstruction(memory, 0x8010_AFC4, 0x932B_FFE4);
+        WriteInstruction(memory, 0x8010_AFC8, 0x934B_FFE8);
+        WriteInstruction(memory, 0x8010_AFCC, 0x936B_FFEC);
+        WriteInstruction(memory, 0x8010_AFD0, 0x938B_FFF0);
+        WriteInstruction(memory, 0x8010_AFD4, 0x93AB_FFF4);
+        WriteInstruction(memory, 0x8010_AFD8, 0x93CB_FFF8);
+        WriteInstruction(memory, 0x8010_AFDC, 0x93EB_FFFC);
+        WriteInstruction(memory, 0x8010_AFE0, 0x4E80_0020);
 
-        const uint restorePc = 0x8010_B018;
-        WriteInstruction(memory, restorePc + 0x00, 0x836B_FFEC);
-        WriteInstruction(memory, restorePc + 0x04, 0x838B_FFF0);
-        WriteInstruction(memory, restorePc + 0x08, 0x83AB_FFF4);
-        WriteInstruction(memory, restorePc + 0x0C, 0x83CB_FFF8);
-        WriteInstruction(memory, restorePc + 0x10, 0x83EB_FFFC);
-        WriteInstruction(memory, restorePc + 0x14, 0x4E80_0020);
+        WriteInstruction(memory, 0x8010_B00C, 0x830B_FFE0);
+        WriteInstruction(memory, 0x8010_B010, 0x832B_FFE4);
+        WriteInstruction(memory, 0x8010_B014, 0x834B_FFE8);
+        WriteInstruction(memory, 0x8010_B018, 0x836B_FFEC);
+        WriteInstruction(memory, 0x8010_B01C, 0x838B_FFF0);
+        WriteInstruction(memory, 0x8010_B020, 0x83AB_FFF4);
+        WriteInstruction(memory, 0x8010_B024, 0x83CB_FFF8);
+        WriteInstruction(memory, 0x8010_B028, 0x83EB_FFFC);
+        WriteInstruction(memory, 0x8010_B02C, 0x4E80_0020);
     }
 
     private static void WriteSonicGxAttributeStateSetter(GameCubeMemory memory, uint pc)
@@ -6011,7 +6024,7 @@ public sealed class DolRunnerTests
         return state;
     }
 
-    private static PowerPcState CreateSonicGprSaveRestoreTailState(GameCubeBus bus, uint pc, uint baseAddress)
+    private static PowerPcState CreateSonicGprSaveRestoreTailState(GameCubeBus bus, uint pc, uint baseAddress, int firstRegister)
     {
         PowerPcState state = new()
         {
@@ -6020,11 +6033,11 @@ public sealed class DolRunnerTests
             Cr = 0x2200_0088,
             Xer = 0x2000_0000,
         };
-        state.Gpr[11] = baseAddress + 20;
-        for (int register = 27; register <= 31; register++)
+        state.Gpr[11] = baseAddress + (uint)((32 - firstRegister) * sizeof(uint));
+        for (int register = firstRegister; register <= 31; register++)
         {
             state.Gpr[register] = 0xABCD_0000u + (uint)register;
-            bus.Memory.Write32(baseAddress + (uint)((register - 27) * sizeof(uint)), 0xCAFE_0000u + (uint)register);
+            bus.Memory.Write32(baseAddress + (uint)((register - firstRegister) * sizeof(uint)), 0xCAFE_0000u + (uint)register);
         }
 
         state.Spr[22] = 0xFFFF_F000;
