@@ -2279,6 +2279,99 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicGxFloatStripEmitFastForwardMatchesInterpreterLoop()
+    {
+        const uint pc = 0x8011_D610;
+        const uint stream = 0x8132_A728;
+        const uint vertexBase = 0x80B2_8500;
+        const uint iterations = 3;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        List<MmioAccess> expectedWrites = [];
+        List<MmioAccess> actualWrites = [];
+        expectedBus.MmioAccessObserver = access =>
+        {
+            if (access.Kind == MmioAccessKind.Write && access.Address == 0xCC00_8000)
+            {
+                expectedWrites.Add(access);
+            }
+        };
+        actualBus.MmioAccessObserver = access =>
+        {
+            if (access.Kind == MmioAccessKind.Write && access.Address == 0xCC00_8000)
+            {
+                actualWrites.Add(access);
+            }
+        };
+        PowerPcState expectedState = CreateSonicGxFloatStripEmitState(expectedBus, pc, stream, vertexBase, iterations);
+        PowerPcState actualState = CreateSonicGxFloatStripEmitState(actualBus, pc, stream, vertexBase, iterations);
+        int expectedInstructions = checked((int)(iterations * 26 + 2));
+
+        new PowerPcInterpreter().Run(expectedState, expectedBus, expectedInstructions);
+        bool skipped = InvokeFastForwardSonicGxFloatStripEmitLoop(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(expectedInstructions, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Lr, actualState.Lr);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 0, 3, 26, 29, 30 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+
+        for (int register = 1; register <= 3; register++)
+        {
+            Assert.Equal(BitConverter.DoubleToInt64Bits(expectedState.Fpr[register]), BitConverter.DoubleToInt64Bits(actualState.Fpr[register]));
+        }
+
+        Assert.Equal(
+            expectedWrites.Select(access => (access.Width, access.Value)).ToArray(),
+            actualWrites.Select(access => (access.Width, access.Value)).ToArray());
+    }
+
+    [Fact]
+    public void SonicPairedTransform2dFastForwardMatchesInterpreterLoop()
+    {
+        const uint pc = 0x8011_DAA8;
+        const uint input = 0x800C_0000;
+        const uint output = 0x800D_0000;
+        const uint iterations = 3;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        PowerPcState expectedState = CreateSonicPairedTransform2dState(expectedBus, pc, input, output, iterations);
+        PowerPcState actualState = CreateSonicPairedTransform2dState(actualBus, pc, input, output, iterations);
+        int expectedInstructions = checked((int)(iterations * 14 + 4));
+
+        new PowerPcInterpreter().Run(expectedState, expectedBus, expectedInstructions);
+        bool skipped = InvokeFastForwardSonicPairedTransform2d(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(expectedInstructions, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Ctr, actualState.Ctr);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 5, 6, 8, 10 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+
+        for (int register = 8; register <= 13; register++)
+        {
+            Assert.Equal(BitConverter.DoubleToInt64Bits(expectedState.Fpr[register]), BitConverter.DoubleToInt64Bits(actualState.Fpr[register]));
+            Assert.Equal(BitConverter.DoubleToInt64Bits(expectedState.FprPair1[register]), BitConverter.DoubleToInt64Bits(actualState.FprPair1[register]));
+        }
+
+        for (uint offset = 0; offset <= 0x90; offset += sizeof(uint))
+        {
+            Assert.Equal(expectedBus.Memory.Read32(output + offset), actualBus.Memory.Read32(output + offset));
+        }
+    }
+
+    [Fact]
     public void SonicBitPlaneCropFastForwardCropsRowsInPlace()
     {
         const uint pc = 0x800E_1F14;
@@ -2947,6 +3040,26 @@ public sealed class DolRunnerTests
         return result;
     }
 
+    private static bool InvokeFastForwardSonicPairedTransform2d(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicPairedTransform2d", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic paired transform 2D fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
+    private static bool InvokeFastForwardSonicGxFloatStripEmitLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGxFloatStripEmitLoop", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic GX float strip emit fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
     private static bool InvokeFastForwardSonicNormalizedStringScan(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicNormalizedStringScan", BindingFlags.NonPublic | BindingFlags.Static)
@@ -3572,6 +3685,53 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0xAC, 0x4E80_0020);
     }
 
+    private static void WriteSonicGxFloatStripEmitLoop(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc - 0x30, 0xA81A_0000);
+        WriteInstruction(memory, pc - 0x2C, 0x3B5A_0002);
+        WriteInstruction(memory, pc - 0x28, 0x7C1E_0378);
+        WriteInstruction(memory, pc - 0x24, 0x2C1E_0000);
+        WriteInstruction(memory, pc - 0x20, 0x4080_0008);
+        WriteInstruction(memory, pc - 0x1C, 0x7FDE_00D0);
+        WriteInstruction(memory, pc - 0x18, 0x3860_0098);
+        WriteInstruction(memory, pc - 0x14, 0x3880_0000);
+        WriteInstruction(memory, pc - 0x10, 0x57C5_043E);
+        WriteInstruction(memory, pc - 0x0C, 0x4BFE_4345);
+        WriteInstruction(memory, pc - 0x08, 0x4800_0004);
+        WriteInstruction(memory, pc - 0x04, 0x4800_0004);
+        WriteInstruction(memory, pc + 0x00, 0xA81A_0000);
+        WriteInstruction(memory, pc + 0x04, 0x3B5A_0002);
+        WriteInstruction(memory, pc + 0x08, 0x5400_2834);
+        WriteInstruction(memory, pc + 0x0C, 0x7FBB_0214);
+        WriteInstruction(memory, pc + 0x10, 0xC03D_0000);
+        WriteInstruction(memory, pc + 0x14, 0xC05D_0004);
+        WriteInstruction(memory, pc + 0x18, 0xC07D_0008);
+        WriteInstruction(memory, pc + 0x1C, 0x4800_0065);
+        WriteInstruction(memory, pc + 0x20, 0xC03D_000C);
+        WriteInstruction(memory, pc + 0x24, 0xC05D_0010);
+        WriteInstruction(memory, pc + 0x28, 0xC07D_0014);
+        WriteInstruction(memory, pc + 0x2C, 0x4800_0041);
+        WriteInstruction(memory, pc + 0x30, 0x7F5A_FA14);
+        WriteInstruction(memory, pc + 0x34, 0x3BDE_FFFF);
+        WriteInstruction(memory, pc + 0x38, 0x2C1E_0000);
+        WriteInstruction(memory, pc + 0x3C, 0x4082_FFC4);
+        WriteInstruction(memory, pc + 0x40, 0x4800_0029);
+        WriteInstruction(memory, pc + 0x44, 0x3B9C_FFFF);
+        WriteInstruction(memory, pc + 0x48, 0x281C_0000);
+        WriteInstruction(memory, pc + 0x4C, 0x4082_FF84);
+        WriteInstruction(memory, pc + 0x68, 0x4E80_0020);
+        WriteInstruction(memory, pc + 0x6C, 0x3C60_CC01);
+        WriteInstruction(memory, pc + 0x70, 0xD023_8000);
+        WriteInstruction(memory, pc + 0x74, 0xD043_8000);
+        WriteInstruction(memory, pc + 0x78, 0xD063_8000);
+        WriteInstruction(memory, pc + 0x7C, 0x4E80_0020);
+        WriteInstruction(memory, pc + 0x80, 0x3C60_CC01);
+        WriteInstruction(memory, pc + 0x84, 0xD023_8000);
+        WriteInstruction(memory, pc + 0x88, 0xD043_8000);
+        WriteInstruction(memory, pc + 0x8C, 0xD063_8000);
+        WriteInstruction(memory, pc + 0x90, 0x4E80_0020);
+    }
+
     private static void WriteSonicBitPlaneCrop(GameCubeMemory memory, uint pc)
     {
         WriteInstruction(memory, pc + 0x000, 0x9421_FFD8);
@@ -3657,6 +3817,142 @@ public sealed class DolRunnerTests
         memory.Write32(address, word0);
         memory.Write32(address + 4, parentIndex);
         memory.Write32(address + 8, endIndex);
+    }
+
+    private static PowerPcState CreateSonicGxFloatStripEmitState(GameCubeBus bus, uint pc, uint stream, uint vertexBase, uint iterations)
+    {
+        WriteSonicGxFloatStripEmitLoop(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8011_D608,
+            Cr = 0x4400_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[26] = stream;
+        state.Gpr[27] = vertexBase;
+        state.Gpr[28] = 0x6E;
+        state.Gpr[29] = vertexBase;
+        state.Gpr[30] = iterations;
+        state.Gpr[31] = 2;
+        state.Fpr[1] = -10.0f;
+        state.Fpr[2] = -11.0f;
+        state.Fpr[3] = -12.0f;
+        state.Spr[22] = 0xFFFF_F000;
+
+        for (uint iteration = 0; iteration < iterations; iteration++)
+        {
+            uint streamCursor = stream + iteration * 4;
+            bus.Memory.Write16(streamCursor, (ushort)iteration);
+            bus.Memory.Write16(streamCursor + 2, (ushort)(0x8000u + iteration));
+
+            uint vertex = vertexBase + iteration * 0x20;
+            WriteSingle(bus.Memory, vertex + 0x00, 1.0f + iteration);
+            WriteSingle(bus.Memory, vertex + 0x04, 2.0f + iteration);
+            WriteSingle(bus.Memory, vertex + 0x08, 3.0f + iteration);
+            WriteSingle(bus.Memory, vertex + 0x0C, 4.0f + iteration);
+            WriteSingle(bus.Memory, vertex + 0x10, 5.0f + iteration);
+            WriteSingle(bus.Memory, vertex + 0x14, 6.0f + iteration);
+        }
+
+        return state;
+    }
+
+    private static PowerPcState CreateSonicPairedTransform2dState(GameCubeBus bus, uint pc, uint input, uint output, uint iterations)
+    {
+        WriteSonicPairedTransform2dLoop(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8012_3456,
+            Ctr = iterations,
+            Cr = 0x4200_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[5] = output;
+        state.Gpr[6] = input;
+        state.Gpr[7] = iterations;
+        state.Gpr[8] = 0x1122_3344;
+        state.Gpr[10] = 0xAABB_CCDD;
+        state.Spr[22] = 0xFFFF_F000;
+
+        for (int register = 0; register <= 13; register++)
+        {
+            state.Fpr[register] = (float)(register * 0.25f - 1.5f);
+            state.FprPair1[register] = (float)(register * -0.125f + 2.0f);
+        }
+
+        state.Fpr[8] = -0.75f;
+        state.FprPair1[8] = 1.25f;
+        state.Fpr[9] = 0.5f;
+        state.FprPair1[9] = 1.0f;
+        state.Fpr[12] = 9.5f;
+        state.FprPair1[12] = -2.25f;
+        state.Fpr[13] = 3.75f;
+        state.FprPair1[13] = 1.0f;
+
+        for (uint iteration = 0; iteration < iterations; iteration++)
+        {
+            uint cursor = input + iteration * 16;
+            WriteSingle(bus.Memory, cursor + 4, 0.125f + iteration);
+            WriteSingle(bus.Memory, cursor + 8, -0.25f - iteration);
+            WriteSingle(bus.Memory, cursor + 12, 2.5f + iteration);
+            bus.Memory.Write32(cursor + 16, 0x0102_0304u + iteration * 0x1111_1111u);
+        }
+
+        return state;
+    }
+
+    private static void WriteSonicPairedTransform2dLoop(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc - 0x78, 0x80A3_0000);
+        WriteInstruction(memory, pc - 0x74, 0x80C3_0004);
+        WriteInstruction(memory, pc - 0x70, 0x80E3_0008);
+        WriteInstruction(memory, pc - 0x6C, 0x38E7_FFFF);
+        WriteInstruction(memory, pc - 0x68, 0x7CE9_03A6);
+        WriteInstruction(memory, pc - 0x64, 0xE004_0000);
+        WriteInstruction(memory, pc - 0x60, 0x38C6_FFFC);
+        WriteInstruction(memory, pc - 0x5C, 0xE024_8008);
+        WriteInstruction(memory, pc - 0x58, 0x38A5_FFF8);
+        WriteInstruction(memory, pc - 0x54, 0xE0C4_0024);
+        WriteInstruction(memory, pc - 0x50, 0xE0E4_802C);
+        WriteInstruction(memory, pc - 0x4C, 0xE506_0004);
+        WriteInstruction(memory, pc - 0x48, 0xE526_8008);
+        WriteInstruction(memory, pc - 0x44, 0x8506_0004);
+        WriteInstruction(memory, pc - 0x40, 0x1140_321C);
+        WriteInstruction(memory, pc - 0x3C, 0xE044_000C);
+        WriteInstruction(memory, pc - 0x38, 0x1161_3A1C);
+        WriteInstruction(memory, pc - 0x34, 0xE064_8014);
+        WriteInstruction(memory, pc - 0x30, 0x550A_403E);
+        WriteInstruction(memory, pc - 0x2C, 0xE0A4_8020);
+        WriteInstruction(memory, pc - 0x28, 0xE084_0018);
+        WriteInstruction(memory, pc - 0x24, 0x1142_521E);
+        WriteInstruction(memory, pc - 0x20, 0x1163_5A1E);
+        WriteInstruction(memory, pc - 0x1C, 0x1184_525C);
+        WriteInstruction(memory, pc - 0x18, 0x11A5_5A5C);
+        WriteInstruction(memory, pc - 0x14, 0xE506_0004);
+        WriteInstruction(memory, pc - 0x10, 0xE526_8008);
+        WriteInstruction(memory, pc - 0x0C, 0x8506_0004);
+        WriteInstruction(memory, pc - 0x08, 0x2C07_0000);
+        WriteInstruction(memory, pc - 0x04, 0x4182_003C);
+        WriteInstruction(memory, pc + 0x00, 0x1140_321C);
+        WriteInstruction(memory, pc + 0x04, 0xF585_0008);
+        WriteInstruction(memory, pc + 0x08, 0x1161_3A1C);
+        WriteInstruction(memory, pc + 0x0C, 0xF5A5_8008);
+        WriteInstruction(memory, pc + 0x10, 0x1142_521E);
+        WriteInstruction(memory, pc + 0x14, 0x9545_0010);
+        WriteInstruction(memory, pc + 0x18, 0x1163_5A1E);
+        WriteInstruction(memory, pc + 0x1C, 0xE506_0004);
+        WriteInstruction(memory, pc + 0x20, 0x1184_525C);
+        WriteInstruction(memory, pc + 0x24, 0x11A5_5A5C);
+        WriteInstruction(memory, pc + 0x28, 0xE526_8008);
+        WriteInstruction(memory, pc + 0x2C, 0x550A_403E);
+        WriteInstruction(memory, pc + 0x30, 0x8506_0004);
+        WriteInstruction(memory, pc + 0x34, 0x4200_FFCC);
+        WriteInstruction(memory, pc + 0x38, 0xF585_0008);
+        WriteInstruction(memory, pc + 0x3C, 0xF5A5_8008);
+        WriteInstruction(memory, pc + 0x40, 0x9545_0010);
+        WriteInstruction(memory, pc + 0x44, 0x4E80_0020);
     }
 
     private static void WriteIdentityByteTable(GameCubeMemory memory, uint table)
