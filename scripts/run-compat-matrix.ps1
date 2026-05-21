@@ -353,6 +353,8 @@ foreach ($target in $selectedTargets) {
             sonicPathRecordScanInstructions = ""
             sonicPairedTransform2dInstructions = ""
             sonicGxFloatStripEmitInstructions = ""
+            sonicGxDrawBeginInstructions = ""
+            sonicGxFloatTexcoordStripEmitInstructions = ""
             topPc = ""
             topPcCount = ""
             nonExternalInterruptTopPc = ""
@@ -588,6 +590,8 @@ foreach ($target in $selectedTargets) {
     $sonicPathRecordScanInstructions = Get-Value $fastForward "sonicPathRecordScanInstructions" ""
     $sonicPairedTransform2dInstructions = Get-Value $fastForward "sonicPairedTransform2dInstructions" ""
     $sonicGxFloatStripEmitInstructions = Get-Value $fastForward "sonicGxFloatStripEmitInstructions" ""
+    $sonicGxDrawBeginInstructions = Get-Value $fastForward "sonicGxDrawBeginInstructions" ""
+    $sonicGxFloatTexcoordStripEmitInstructions = Get-Value $fastForward "sonicGxFloatTexcoordStripEmitInstructions" ""
 
     $expectedMinPrsDecompressInstructions = Get-Value $expected "minPrsDecompressInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinPrsDecompressInstructions -and [long]$prsDecompressInstructions -lt [long]$expectedMinPrsDecompressInstructions) {
@@ -652,6 +656,16 @@ foreach ($target in $selectedTargets) {
     $expectedMinSonicGxFloatStripEmitInstructions = Get-Value $expected "minSonicGxFloatStripEmitInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinSonicGxFloatStripEmitInstructions -and [long]$sonicGxFloatStripEmitInstructions -lt [long]$expectedMinSonicGxFloatStripEmitInstructions) {
         $regressions.Add("sonicGxFloatStripEmitInstructions expected >= $expectedMinSonicGxFloatStripEmitInstructions got $sonicGxFloatStripEmitInstructions")
+    }
+
+    $expectedMinSonicGxDrawBeginInstructions = Get-Value $expected "minSonicGxDrawBeginInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinSonicGxDrawBeginInstructions -and [long]$sonicGxDrawBeginInstructions -lt [long]$expectedMinSonicGxDrawBeginInstructions) {
+        $regressions.Add("sonicGxDrawBeginInstructions expected >= $expectedMinSonicGxDrawBeginInstructions got $sonicGxDrawBeginInstructions")
+    }
+
+    $expectedMinSonicGxFloatTexcoordStripEmitInstructions = Get-Value $expected "minSonicGxFloatTexcoordStripEmitInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinSonicGxFloatTexcoordStripEmitInstructions -and [long]$sonicGxFloatTexcoordStripEmitInstructions -lt [long]$expectedMinSonicGxFloatTexcoordStripEmitInstructions) {
+        $regressions.Add("sonicGxFloatTexcoordStripEmitInstructions expected >= $expectedMinSonicGxFloatTexcoordStripEmitInstructions got $sonicGxFloatTexcoordStripEmitInstructions")
     }
 
     $pcProfile = Get-Value $summary "pcProfile" $null
@@ -900,6 +914,8 @@ foreach ($target in $selectedTargets) {
         sonicPathRecordScanInstructions = $sonicPathRecordScanInstructions
         sonicPairedTransform2dInstructions = $sonicPairedTransform2dInstructions
         sonicGxFloatStripEmitInstructions = $sonicGxFloatStripEmitInstructions
+        sonicGxDrawBeginInstructions = $sonicGxDrawBeginInstructions
+        sonicGxFloatTexcoordStripEmitInstructions = $sonicGxFloatTexcoordStripEmitInstructions
         topPc = $topPc
         topPcCount = $topPcCount
         nonExternalInterruptTopPc = $nonExternalInterruptTopPc

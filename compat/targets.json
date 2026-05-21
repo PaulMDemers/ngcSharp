@@ -667,18 +667,20 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "pc": "0x8011DED4",
-        "topPc": "0x801019F0",
-        "minTopPcCount": 1500,
-        "nonExternalInterruptTopPc": "0x801019F0",
-        "minNonExternalInterruptTopPcCount": 1500,
+        "pc": "0x80BCB9B4",
+        "topPc": "0x80101948",
+        "minTopPcCount": 1800,
+        "nonExternalInterruptTopPc": "0x80101948",
+        "minNonExternalInterruptTopPcCount": 1800,
         "sonicStateByte47": 0,
         "minReverseWordFillInstructions": 300000,
         "minSonicResourceFixupInstructions": 900000,
         "minSonicOverlayInactiveSlotScanInstructions": 90000,
         "minSonicPathRecordScanInstructions": 4000000,
         "minSonicPairedTransform2dInstructions": 80000,
-        "minSonicGxFloatStripEmitInstructions": 40000
+        "minSonicGxFloatStripEmitInstructions": 40000,
+        "minSonicGxDrawBeginInstructions": 80000,
+        "minSonicGxFloatTexcoordStripEmitInstructions": 140000
       }
     },
     {
