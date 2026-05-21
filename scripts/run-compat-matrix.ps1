@@ -352,6 +352,7 @@ foreach ($target in $selectedTargets) {
             sonicOverlayInactiveSlotScanInstructions = ""
             sonicPathRecordScanInstructions = ""
             sonicPairedTransform2dInstructions = ""
+            sonicGxTexObjLoadNoCallbackInstructions = ""
             sonicGxFloatStripEmitInstructions = ""
             sonicGxFloatAttributeStripEmitInstructions = ""
             sonicGxDrawBeginInstructions = ""
@@ -595,6 +596,7 @@ foreach ($target in $selectedTargets) {
     $sonicOverlayInactiveSlotScanInstructions = Get-Value $fastForward "sonicOverlayInactiveSlotScanInstructions" ""
     $sonicPathRecordScanInstructions = Get-Value $fastForward "sonicPathRecordScanInstructions" ""
     $sonicPairedTransform2dInstructions = Get-Value $fastForward "sonicPairedTransform2dInstructions" ""
+    $sonicGxTexObjLoadNoCallbackInstructions = Get-Value $fastForward "sonicGxTexObjLoadNoCallbackInstructions" ""
     $sonicGxFloatStripEmitInstructions = Get-Value $fastForward "sonicGxFloatStripEmitInstructions" ""
     $sonicGxFloatAttributeStripEmitInstructions = Get-Value $fastForward "sonicGxFloatAttributeStripEmitInstructions" ""
     $sonicGxDrawBeginInstructions = Get-Value $fastForward "sonicGxDrawBeginInstructions" ""
@@ -663,6 +665,11 @@ foreach ($target in $selectedTargets) {
     $expectedMinSonicPairedTransform2dInstructions = Get-Value $expected "minSonicPairedTransform2dInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinSonicPairedTransform2dInstructions -and [long]$sonicPairedTransform2dInstructions -lt [long]$expectedMinSonicPairedTransform2dInstructions) {
         $regressions.Add("sonicPairedTransform2dInstructions expected >= $expectedMinSonicPairedTransform2dInstructions got $sonicPairedTransform2dInstructions")
+    }
+
+    $expectedMinSonicGxTexObjLoadNoCallbackInstructions = Get-Value $expected "minSonicGxTexObjLoadNoCallbackInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinSonicGxTexObjLoadNoCallbackInstructions -and [long]$sonicGxTexObjLoadNoCallbackInstructions -lt [long]$expectedMinSonicGxTexObjLoadNoCallbackInstructions) {
+        $regressions.Add("sonicGxTexObjLoadNoCallbackInstructions expected >= $expectedMinSonicGxTexObjLoadNoCallbackInstructions got $sonicGxTexObjLoadNoCallbackInstructions")
     }
 
     $expectedMinSonicGxFloatStripEmitInstructions = Get-Value $expected "minSonicGxFloatStripEmitInstructions" $null
@@ -955,6 +962,7 @@ foreach ($target in $selectedTargets) {
         sonicOverlayInactiveSlotScanInstructions = $sonicOverlayInactiveSlotScanInstructions
         sonicPathRecordScanInstructions = $sonicPathRecordScanInstructions
         sonicPairedTransform2dInstructions = $sonicPairedTransform2dInstructions
+        sonicGxTexObjLoadNoCallbackInstructions = $sonicGxTexObjLoadNoCallbackInstructions
         sonicGxFloatStripEmitInstructions = $sonicGxFloatStripEmitInstructions
         sonicGxFloatAttributeStripEmitInstructions = $sonicGxFloatAttributeStripEmitInstructions
         sonicGxDrawBeginInstructions = $sonicGxDrawBeginInstructions

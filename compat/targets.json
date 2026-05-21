@@ -667,7 +667,7 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "pc": "0x80103868",
+        "pc": "0x80BCB210",
         "topPc": "0x80120078",
         "minTopPcCount": 1800,
         "nonExternalInterruptTopPc": "0x80120078",
@@ -678,6 +678,7 @@
         "minSonicOverlayInactiveSlotScanInstructions": 90000,
         "minSonicPathRecordScanInstructions": 4000000,
         "minSonicPairedTransform2dInstructions": 80000,
+        "minSonicGxTexObjLoadNoCallbackInstructions": 180000,
         "minSonicGxFloatStripEmitInstructions": 40000,
         "minSonicGxFloatAttributeStripEmitInstructions": 2000,
         "minSonicGxDrawBeginInstructions": 20000,

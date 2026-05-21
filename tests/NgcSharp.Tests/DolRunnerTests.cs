@@ -2279,6 +2279,77 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicGxTexObjLoadNoCallbackFastForwardMatchesInterpreterPath()
+    {
+        const uint pc = 0x8010_37A4;
+        const uint stack = 0x817F_F000;
+        const uint textureObject = 0x8035_7FB0;
+        const uint samplerObject = 0x802D_4C38;
+        const uint stateBlock = 0x803C_0000;
+        const uint textureMap = 2;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        List<MmioAccess> expectedWrites = [];
+        List<MmioAccess> actualWrites = [];
+        expectedBus.MmioAccessObserver = access =>
+        {
+            if (access.Kind == MmioAccessKind.Write && access.Address == 0xCC00_8000)
+            {
+                expectedWrites.Add(access);
+            }
+        };
+        actualBus.MmioAccessObserver = access =>
+        {
+            if (access.Kind == MmioAccessKind.Write && access.Address == 0xCC00_8000)
+            {
+                actualWrites.Add(access);
+            }
+        };
+        PowerPcState expectedState = CreateSonicGxTexObjLoadNoCallbackState(expectedBus, pc, stack, textureObject, samplerObject, stateBlock, textureMap);
+        PowerPcState actualState = CreateSonicGxTexObjLoadNoCallbackState(actualBus, pc, stack, textureObject, samplerObject, stateBlock, textureMap);
+
+        new PowerPcInterpreter().Run(expectedState, expectedBus, 92);
+        bool skipped = InvokeFastForwardSonicGxTexObjLoadNoCallback(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(92, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Lr, actualState.Lr);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        for (int register = 0; register < 32; register++)
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+
+        for (uint offset = 0; offset < 0x20; offset += sizeof(uint))
+        {
+            Assert.Equal(expectedBus.Memory.Read32(textureObject + offset), actualBus.Memory.Read32(textureObject + offset));
+        }
+
+        for (uint offset = 0; offset < 8; offset += sizeof(uint))
+        {
+            Assert.Equal(expectedBus.Memory.Read32(samplerObject + offset), actualBus.Memory.Read32(samplerObject + offset));
+        }
+
+        for (uint offset = 0; offset <= 0x30; offset += sizeof(uint))
+        {
+            Assert.Equal(expectedBus.Memory.Read32(stack - 40 + offset), actualBus.Memory.Read32(stack - 40 + offset));
+        }
+
+        foreach (uint offset in new[] { 0x45Cu + textureMap * 4, 0x47Cu + textureMap * 4, 0x4F0u })
+        {
+            Assert.Equal(expectedBus.Memory.Read32(stateBlock + offset), actualBus.Memory.Read32(stateBlock + offset));
+        }
+
+        Assert.Equal(expectedBus.Memory.Read16(stateBlock + 2), actualBus.Memory.Read16(stateBlock + 2));
+        Assert.Equal(
+            expectedWrites.Select(access => (access.Width, access.Value)).ToArray(),
+            actualWrites.Select(access => (access.Width, access.Value)).ToArray());
+    }
+
+    [Fact]
     public void SonicGxDrawBeginFastForwardMatchesCleanInterpreterPath()
     {
         const uint pc = 0x8010_1948;
@@ -3436,6 +3507,16 @@ public sealed class DolRunnerTests
         return result;
     }
 
+    private static bool InvokeFastForwardSonicGxTexObjLoadNoCallback(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGxTexObjLoadNoCallback", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic GX texture object load fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
     private static bool InvokeFastForwardSonicGxDrawBegin(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGxDrawBegin", BindingFlags.NonPublic | BindingFlags.Static)
@@ -4124,6 +4205,102 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x98, 0x4E80_0020);
     }
 
+    private static void WriteSonicGxTexObjLoadNoCallback(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x000, 0x7C08_02A6);
+        WriteInstruction(memory, pc + 0x004, 0x38ED_83A8);
+        WriteInstruction(memory, pc + 0x008, 0x9001_0004);
+        WriteInstruction(memory, pc + 0x00C, 0x9421_FFD8);
+        WriteInstruction(memory, pc + 0x010, 0x93E1_0024);
+        WriteInstruction(memory, pc + 0x014, 0x3FE0_CC01);
+        WriteInstruction(memory, pc + 0x018, 0x93C1_0020);
+        WriteInstruction(memory, pc + 0x01C, 0x3BC0_0061);
+        WriteInstruction(memory, pc + 0x020, 0x93A1_001C);
+        WriteInstruction(memory, pc + 0x024, 0x3BA5_0000);
+        WriteInstruction(memory, pc + 0x028, 0x38AD_83B8);
+        WriteInstruction(memory, pc + 0x02C, 0x9381_0018);
+        WriteInstruction(memory, pc + 0x030, 0x7C7C_1B78);
+        WriteInstruction(memory, pc + 0x034, 0x80C3_0000);
+        WriteInstruction(memory, pc + 0x038, 0x386D_8398);
+        WriteInstruction(memory, pc + 0x03C, 0x7C03_E8AE);
+        WriteInstruction(memory, pc + 0x040, 0x386D_83A0);
+        WriteInstruction(memory, pc + 0x044, 0x5400_C00E);
+        WriteInstruction(memory, pc + 0x048, 0x50C0_023E);
+        WriteInstruction(memory, pc + 0x04C, 0x901C_0000);
+        WriteInstruction(memory, pc + 0x050, 0x38CD_83B0);
+        WriteInstruction(memory, pc + 0x054, 0x7C03_E8AE);
+        WriteInstruction(memory, pc + 0x058, 0x386D_83C0);
+        WriteInstruction(memory, pc + 0x05C, 0x811C_0004);
+        WriteInstruction(memory, pc + 0x060, 0x5400_C00E);
+        WriteInstruction(memory, pc + 0x064, 0x5100_023E);
+        WriteInstruction(memory, pc + 0x068, 0x901C_0004);
+        WriteInstruction(memory, pc + 0x06C, 0x7C07_E8AE);
+        WriteInstruction(memory, pc + 0x070, 0x811C_0008);
+        WriteInstruction(memory, pc + 0x074, 0x5400_C00E);
+        WriteInstruction(memory, pc + 0x078, 0x5100_023E);
+        WriteInstruction(memory, pc + 0x07C, 0x901C_0008);
+        WriteInstruction(memory, pc + 0x080, 0x7C06_E8AE);
+        WriteInstruction(memory, pc + 0x084, 0x80E4_0000);
+        WriteInstruction(memory, pc + 0x088, 0x5400_C00E);
+        WriteInstruction(memory, pc + 0x08C, 0x50E0_023E);
+        WriteInstruction(memory, pc + 0x090, 0x9004_0000);
+        WriteInstruction(memory, pc + 0x094, 0x7C05_E8AE);
+        WriteInstruction(memory, pc + 0x098, 0x80C4_0004);
+        WriteInstruction(memory, pc + 0x09C, 0x5400_C00E);
+        WriteInstruction(memory, pc + 0x0A0, 0x50C0_023E);
+        WriteInstruction(memory, pc + 0x0A4, 0x9004_0004);
+        WriteInstruction(memory, pc + 0x0A8, 0x7C03_E8AE);
+        WriteInstruction(memory, pc + 0x0AC, 0x80BC_000C);
+        WriteInstruction(memory, pc + 0x0B0, 0x5400_C00E);
+        WriteInstruction(memory, pc + 0x0B4, 0x50A0_023E);
+        WriteInstruction(memory, pc + 0x0B8, 0x901C_000C);
+        WriteInstruction(memory, pc + 0x0BC, 0x9BDF_8000);
+        WriteInstruction(memory, pc + 0x0C0, 0x801C_0000);
+        WriteInstruction(memory, pc + 0x0C4, 0x901F_8000);
+        WriteInstruction(memory, pc + 0x0C8, 0x9BDF_8000);
+        WriteInstruction(memory, pc + 0x0CC, 0x801C_0004);
+        WriteInstruction(memory, pc + 0x0D0, 0x901F_8000);
+        WriteInstruction(memory, pc + 0x0D4, 0x9BDF_8000);
+        WriteInstruction(memory, pc + 0x0D8, 0x801C_0008);
+        WriteInstruction(memory, pc + 0x0DC, 0x901F_8000);
+        WriteInstruction(memory, pc + 0x0E0, 0x9BDF_8000);
+        WriteInstruction(memory, pc + 0x0E4, 0x8004_0000);
+        WriteInstruction(memory, pc + 0x0E8, 0x901F_8000);
+        WriteInstruction(memory, pc + 0x0EC, 0x9BDF_8000);
+        WriteInstruction(memory, pc + 0x0F0, 0x8004_0004);
+        WriteInstruction(memory, pc + 0x0F4, 0x901F_8000);
+        WriteInstruction(memory, pc + 0x0F8, 0x9BDF_8000);
+        WriteInstruction(memory, pc + 0x0FC, 0x801C_000C);
+        WriteInstruction(memory, pc + 0x100, 0x901F_8000);
+        WriteInstruction(memory, pc + 0x104, 0x881C_001F);
+        WriteInstruction(memory, pc + 0x108, 0x5400_07BD);
+        WriteInstruction(memory, pc + 0x10C, 0x4082_003C);
+        WriteInstruction(memory, pc + 0x148, 0x806D_8380);
+        WriteInstruction(memory, pc + 0x14C, 0x57A5_103A);
+        WriteInstruction(memory, pc + 0x150, 0x809C_0008);
+        WriteInstruction(memory, pc + 0x154, 0x3800_0000);
+        WriteInstruction(memory, pc + 0x158, 0x7C63_2A14);
+        WriteInstruction(memory, pc + 0x15C, 0x9083_045C);
+        WriteInstruction(memory, pc + 0x160, 0x806D_8380);
+        WriteInstruction(memory, pc + 0x164, 0x809C_0000);
+        WriteInstruction(memory, pc + 0x168, 0x7C63_2A14);
+        WriteInstruction(memory, pc + 0x16C, 0x9083_047C);
+        WriteInstruction(memory, pc + 0x170, 0x808D_8380);
+        WriteInstruction(memory, pc + 0x174, 0x8064_04F0);
+        WriteInstruction(memory, pc + 0x178, 0x6063_0001);
+        WriteInstruction(memory, pc + 0x17C, 0x9064_04F0);
+        WriteInstruction(memory, pc + 0x180, 0x806D_8380);
+        WriteInstruction(memory, pc + 0x184, 0xB003_0002);
+        WriteInstruction(memory, pc + 0x188, 0x8001_002C);
+        WriteInstruction(memory, pc + 0x18C, 0x83E1_0024);
+        WriteInstruction(memory, pc + 0x190, 0x83C1_0020);
+        WriteInstruction(memory, pc + 0x194, 0x83A1_001C);
+        WriteInstruction(memory, pc + 0x198, 0x8381_0018);
+        WriteInstruction(memory, pc + 0x19C, 0x3821_0028);
+        WriteInstruction(memory, pc + 0x1A0, 0x7C08_03A6);
+        WriteInstruction(memory, pc + 0x1A4, 0x4E80_0020);
+    }
+
     private static void WriteSonicGxVertexEmitLoop(GameCubeMemory memory, uint pc)
     {
         WriteInstruction(memory, pc + 0x00, 0xA818_0000);
@@ -4474,6 +4651,62 @@ public sealed class DolRunnerTests
         bus.Memory.Write32(state.Gpr[13] - 31872u, stateBlock);
         bus.Memory.Write32(stateBlock, 1);
         bus.Memory.Write32(stateBlock + 0x4F0, 0);
+        return state;
+    }
+
+    private static PowerPcState CreateSonicGxTexObjLoadNoCallbackState(
+        GameCubeBus bus,
+        uint pc,
+        uint stack,
+        uint textureObject,
+        uint samplerObject,
+        uint stateBlock,
+        uint textureMap)
+    {
+        WriteSonicGxTexObjLoadNoCallback(bus.Memory, pc);
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8010_3988,
+            Cr = 0x2200_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[1] = stack;
+        state.Gpr[3] = textureObject;
+        state.Gpr[4] = samplerObject;
+        state.Gpr[5] = textureMap;
+        state.Gpr[13] = 0x803B_52C0;
+        state.Gpr[28] = 0xAAAA_0001;
+        state.Gpr[29] = 0xBBBB_0002;
+        state.Gpr[30] = 0xCCCC_0003;
+        state.Gpr[31] = 0xDDDD_0004;
+        state.Spr[22] = 0xFFFF_F000;
+
+        uint[] tableBases =
+        [
+            state.Gpr[13] - 31848u,
+            state.Gpr[13] - 31840u,
+            state.Gpr[13] - 31832u,
+            state.Gpr[13] - 31824u,
+            state.Gpr[13] - 31816u,
+            state.Gpr[13] - 31808u,
+        ];
+        for (int table = 0; table < tableBases.Length; table++)
+        {
+            bus.Memory.Write8(tableBases[table] + textureMap, (byte)(0x90 + table));
+        }
+
+        bus.Memory.Write32(textureObject + 0x00, 0x0011_2233);
+        bus.Memory.Write32(textureObject + 0x04, 0x0044_5566);
+        bus.Memory.Write32(textureObject + 0x08, 0x0077_8899);
+        bus.Memory.Write32(textureObject + 0x0C, 0x00AA_BBCC);
+        bus.Memory.Write32(textureObject + 0x18, 0x1234_5678);
+        bus.Memory.Write8(textureObject + 0x1F, 0x02);
+        bus.Memory.Write32(samplerObject + 0x00, 0x00DD_EEFF);
+        bus.Memory.Write32(samplerObject + 0x04, 0x0001_0203);
+        bus.Memory.Write32(state.Gpr[13] - 31872u, stateBlock);
+        bus.Memory.Write32(stateBlock + 0x4F0, 0x40);
+        bus.Memory.Write16(stateBlock + 2, 0x1234);
         return state;
     }
 

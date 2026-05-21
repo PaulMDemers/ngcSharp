@@ -17,6 +17,8 @@ public sealed class DolRunner
     private const uint SonicTrigTableInstructionsPerEntry = 180;
     private const uint SonicBitUnpackInstructionsPerRow = 400;
     private const uint SonicGxVertexEmitInstructionsPerVertex = 24;
+    private const uint SonicGxTexObjLoadNoCallbackPc = 0x8010_37A4;
+    private const uint SonicGxTexObjLoadNoCallbackInstructions = 92;
     private const uint SonicPathLookupEntryPc = 0x800E_ECFC;
     private const uint SonicPathLookupByteTablePc = 0x8010_BA44;
     private const int SonicPathLookupStackWindowBytes = 0xA0;
@@ -183,6 +185,7 @@ public sealed class DolRunner
         ulong bitPlaneCropFastForwardInstructions = 0;
         ulong byteTableLookupFastForwardInstructions = 0;
         ulong gxVertexEmitFastForwardInstructions = 0;
+        ulong sonicGxTexObjLoadNoCallbackFastForwardInstructions = 0;
         ulong normalizedStringScanFastForwardInstructions = 0;
         ulong sonicResourceModeQueryFastForwardInstructions = 0;
         ulong sonicResourceStatePollFastForwardInstructions = 0;
@@ -725,6 +728,7 @@ public sealed class DolRunner
                         bitPlaneCropInstructions = bitPlaneCropFastForwardInstructions,
                         byteTableLookupInstructions = byteTableLookupFastForwardInstructions,
                         gxVertexEmitInstructions = gxVertexEmitFastForwardInstructions,
+                        sonicGxTexObjLoadNoCallbackInstructions = sonicGxTexObjLoadNoCallbackFastForwardInstructions,
                         normalizedStringScanInstructions = normalizedStringScanFastForwardInstructions,
                         sonicResourceModeQueryInstructions = sonicResourceModeQueryFastForwardInstructions,
                         sonicResourceStatePollInstructions = sonicResourceStatePollFastForwardInstructions,
@@ -1145,6 +1149,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxVertexEmitLoop(state, bus, out skippedInstructions))
                 {
                     gxVertexEmitFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxTexObjLoadNoCallback(state, bus, out skippedInstructions))
+                {
+                    sonicGxTexObjLoadNoCallbackFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1648,6 +1659,11 @@ public sealed class DolRunner
             if (gxVertexEmitFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {gxVertexEmitFastForwardInstructions} GX vertex emission instruction(s).");
+            }
+
+            if (sonicGxTexObjLoadNoCallbackFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {sonicGxTexObjLoadNoCallbackFastForwardInstructions} Sonic GX texture object load instruction(s).");
             }
 
             if (normalizedStringScanFastForwardInstructions != 0)
@@ -5017,6 +5033,233 @@ public sealed class DolRunner
         && bus.Read32(pc + 0x80) == 0x9803_04EE
         && bus.Read32(pc + 0x84) == 0x4E80_0020;
 
+    private static bool TryFastForwardSonicGxTexObjLoadNoCallback(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (!MatchesSonicGxTexObjLoadNoCallback(bus, state.Pc)
+            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: SonicGxTexObjLoadNoCallbackInstructions, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        uint textureObject = state.Gpr[3];
+        uint samplerObject = state.Gpr[4];
+        uint textureMap = state.Gpr[5];
+        if (textureMap > 7
+            || !bus.Memory.IsMainRamAddress(textureObject, 0x20)
+            || !bus.Memory.IsMainRamAddress(samplerObject, 8))
+        {
+            return false;
+        }
+
+        byte objectFlags = bus.Memory.Read8(textureObject + 0x1F);
+        if ((objectFlags & 0x02) == 0)
+        {
+            return false;
+        }
+
+        uint stackPointer = state.Gpr[1];
+        uint newStackPointer = unchecked(stackPointer - 40);
+        if (!bus.Memory.IsMainRamAddress(newStackPointer, 48))
+        {
+            return false;
+        }
+
+        uint stateBlockPointerAddress = unchecked(state.Gpr[13] + 0xFFFF_8380u);
+        if (!bus.Memory.IsMainRamAddress(stateBlockPointerAddress, sizeof(uint)))
+        {
+            return false;
+        }
+
+        uint stateBlock = bus.Memory.Read32(stateBlockPointerAddress);
+        if (!bus.Memory.IsMainRamAddress(stateBlock, 0x4F4))
+        {
+            return false;
+        }
+
+        uint table0 = unchecked(state.Gpr[13] + 0xFFFF_8398u);
+        uint table1 = unchecked(state.Gpr[13] + 0xFFFF_83A0u);
+        uint table2 = unchecked(state.Gpr[13] + 0xFFFF_83A8u);
+        uint table3 = unchecked(state.Gpr[13] + 0xFFFF_83B0u);
+        uint table4 = unchecked(state.Gpr[13] + 0xFFFF_83B8u);
+        uint table5 = unchecked(state.Gpr[13] + 0xFFFF_83C0u);
+        if (!bus.Memory.IsMainRamAddress(table0 + textureMap, 1)
+            || !bus.Memory.IsMainRamAddress(table1 + textureMap, 1)
+            || !bus.Memory.IsMainRamAddress(table2 + textureMap, 1)
+            || !bus.Memory.IsMainRamAddress(table3 + textureMap, 1)
+            || !bus.Memory.IsMainRamAddress(table4 + textureMap, 1)
+            || !bus.Memory.IsMainRamAddress(table5 + textureMap, 1))
+        {
+            return false;
+        }
+
+        uint oldLr = state.Lr;
+        uint oldR28 = state.Gpr[28];
+        uint oldR29 = state.Gpr[29];
+        uint oldR30 = state.Gpr[30];
+        uint oldR31 = state.Gpr[31];
+
+        bus.Write32(stackPointer + 4, oldLr);
+        bus.Write32(newStackPointer, stackPointer);
+        bus.Write32(newStackPointer + 36, oldR31);
+        bus.Write32(newStackPointer + 32, oldR30);
+        bus.Write32(newStackPointer + 28, oldR29);
+        bus.Write32(newStackPointer + 24, oldR28);
+
+        uint originalWord8 = bus.Memory.Read32(textureObject + 0x08);
+        uint originalSampler0 = bus.Memory.Read32(samplerObject + 0x00);
+        uint originalSampler4 = bus.Memory.Read32(samplerObject + 0x04);
+        uint word0 = ReplaceTopByte(bus.Memory.Read32(textureObject + 0x00), bus.Memory.Read8(table0 + textureMap));
+        uint word4 = ReplaceTopByte(bus.Memory.Read32(textureObject + 0x04), bus.Memory.Read8(table1 + textureMap));
+        uint word8 = ReplaceTopByte(originalWord8, bus.Memory.Read8(table2 + textureMap));
+        uint sampler0 = ReplaceTopByte(originalSampler0, bus.Memory.Read8(table3 + textureMap));
+        uint sampler4 = ReplaceTopByte(originalSampler4, bus.Memory.Read8(table4 + textureMap));
+        uint word12 = ReplaceTopByte(bus.Memory.Read32(textureObject + 0x0C), bus.Memory.Read8(table5 + textureMap));
+
+        bus.Memory.Write32(textureObject + 0x00, word0);
+        bus.Memory.Write32(textureObject + 0x04, word4);
+        bus.Memory.Write32(textureObject + 0x08, word8);
+        bus.Memory.Write32(samplerObject + 0x00, sampler0);
+        bus.Memory.Write32(samplerObject + 0x04, sampler4);
+        bus.Memory.Write32(textureObject + 0x0C, word12);
+
+        const uint fifo = 0xCC00_8000;
+        bus.Write8(fifo, 0x61);
+        bus.Write32(fifo, word0);
+        bus.Write8(fifo, 0x61);
+        bus.Write32(fifo, word4);
+        bus.Write8(fifo, 0x61);
+        bus.Write32(fifo, word8);
+        bus.Write8(fifo, 0x61);
+        bus.Write32(fifo, sampler0);
+        bus.Write8(fifo, 0x61);
+        bus.Write32(fifo, sampler4);
+        bus.Write8(fifo, 0x61);
+        bus.Write32(fifo, word12);
+
+        uint textureMapOffset = textureMap << 2;
+        bus.Memory.Write32(stateBlock + 0x45C + textureMapOffset, word8);
+        bus.Memory.Write32(stateBlock + 0x47C + textureMapOffset, word0);
+        uint dirtyFlags = bus.Memory.Read32(stateBlock + 0x4F0) | 1u;
+        bus.Memory.Write32(stateBlock + 0x4F0, dirtyFlags);
+        bus.Memory.Write16(stateBlock + 2, 0);
+
+        state.Gpr[0] = oldLr;
+        state.Gpr[1] = stackPointer;
+        state.Gpr[3] = stateBlock;
+        state.Gpr[4] = stateBlock;
+        state.Gpr[5] = textureMapOffset;
+        state.Gpr[6] = originalSampler4;
+        state.Gpr[7] = originalSampler0;
+        state.Gpr[8] = originalWord8;
+        state.Gpr[28] = oldR28;
+        state.Gpr[29] = oldR29;
+        state.Gpr[30] = oldR30;
+        state.Gpr[31] = oldR31;
+        state.Lr = oldLr;
+        state.Pc = oldLr & 0xFFFF_FFFCu;
+        SetCr0(state, (uint)(objectFlags & 0x02));
+
+        AdvanceFastForwardedInstructions(state, bus, SonicGxTexObjLoadNoCallbackInstructions);
+        skippedInstructions = checked((int)SonicGxTexObjLoadNoCallbackInstructions);
+        return true;
+    }
+
+    private static bool MatchesSonicGxTexObjLoadNoCallback(GameCubeBus bus, uint pc) =>
+        pc == SonicGxTexObjLoadNoCallbackPc
+        && bus.Read32(pc + 0x00) == 0x7C08_02A6
+        && bus.Read32(pc + 0x04) == 0x38ED_83A8
+        && bus.Read32(pc + 0x08) == 0x9001_0004
+        && bus.Read32(pc + 0x0C) == 0x9421_FFD8
+        && bus.Read32(pc + 0x10) == 0x93E1_0024
+        && bus.Read32(pc + 0x14) == 0x3FE0_CC01
+        && bus.Read32(pc + 0x18) == 0x93C1_0020
+        && bus.Read32(pc + 0x1C) == 0x3BC0_0061
+        && bus.Read32(pc + 0x20) == 0x93A1_001C
+        && bus.Read32(pc + 0x24) == 0x3BA5_0000
+        && bus.Read32(pc + 0x28) == 0x38AD_83B8
+        && bus.Read32(pc + 0x2C) == 0x9381_0018
+        && bus.Read32(pc + 0x30) == 0x7C7C_1B78
+        && bus.Read32(pc + 0x34) == 0x80C3_0000
+        && bus.Read32(pc + 0x38) == 0x386D_8398
+        && bus.Read32(pc + 0x3C) == 0x7C03_E8AE
+        && bus.Read32(pc + 0x40) == 0x386D_83A0
+        && bus.Read32(pc + 0x44) == 0x5400_C00E
+        && bus.Read32(pc + 0x48) == 0x50C0_023E
+        && bus.Read32(pc + 0x4C) == 0x901C_0000
+        && bus.Read32(pc + 0x50) == 0x38CD_83B0
+        && bus.Read32(pc + 0x54) == 0x7C03_E8AE
+        && bus.Read32(pc + 0x58) == 0x386D_83C0
+        && bus.Read32(pc + 0x5C) == 0x811C_0004
+        && bus.Read32(pc + 0x60) == 0x5400_C00E
+        && bus.Read32(pc + 0x64) == 0x5100_023E
+        && bus.Read32(pc + 0x68) == 0x901C_0004
+        && bus.Read32(pc + 0x6C) == 0x7C07_E8AE
+        && bus.Read32(pc + 0x70) == 0x811C_0008
+        && bus.Read32(pc + 0x74) == 0x5400_C00E
+        && bus.Read32(pc + 0x78) == 0x5100_023E
+        && bus.Read32(pc + 0x7C) == 0x901C_0008
+        && bus.Read32(pc + 0x80) == 0x7C06_E8AE
+        && bus.Read32(pc + 0x84) == 0x80E4_0000
+        && bus.Read32(pc + 0x88) == 0x5400_C00E
+        && bus.Read32(pc + 0x8C) == 0x50E0_023E
+        && bus.Read32(pc + 0x90) == 0x9004_0000
+        && bus.Read32(pc + 0x94) == 0x7C05_E8AE
+        && bus.Read32(pc + 0x98) == 0x80C4_0004
+        && bus.Read32(pc + 0x9C) == 0x5400_C00E
+        && bus.Read32(pc + 0xA0) == 0x50C0_023E
+        && bus.Read32(pc + 0xA4) == 0x9004_0004
+        && bus.Read32(pc + 0xA8) == 0x7C03_E8AE
+        && bus.Read32(pc + 0xAC) == 0x80BC_000C
+        && bus.Read32(pc + 0xB0) == 0x5400_C00E
+        && bus.Read32(pc + 0xB4) == 0x50A0_023E
+        && bus.Read32(pc + 0xB8) == 0x901C_000C
+        && bus.Read32(pc + 0xBC) == 0x9BDF_8000
+        && bus.Read32(pc + 0xC0) == 0x801C_0000
+        && bus.Read32(pc + 0xC4) == 0x901F_8000
+        && bus.Read32(pc + 0xC8) == 0x9BDF_8000
+        && bus.Read32(pc + 0xCC) == 0x801C_0004
+        && bus.Read32(pc + 0xD0) == 0x901F_8000
+        && bus.Read32(pc + 0xD4) == 0x9BDF_8000
+        && bus.Read32(pc + 0xD8) == 0x801C_0008
+        && bus.Read32(pc + 0xDC) == 0x901F_8000
+        && bus.Read32(pc + 0xE0) == 0x9BDF_8000
+        && bus.Read32(pc + 0xE4) == 0x8004_0000
+        && bus.Read32(pc + 0xE8) == 0x901F_8000
+        && bus.Read32(pc + 0xEC) == 0x9BDF_8000
+        && bus.Read32(pc + 0xF0) == 0x8004_0004
+        && bus.Read32(pc + 0xF4) == 0x901F_8000
+        && bus.Read32(pc + 0xF8) == 0x9BDF_8000
+        && bus.Read32(pc + 0xFC) == 0x801C_000C
+        && bus.Read32(pc + 0x100) == 0x901F_8000
+        && bus.Read32(pc + 0x104) == 0x881C_001F
+        && bus.Read32(pc + 0x108) == 0x5400_07BD
+        && bus.Read32(pc + 0x10C) == 0x4082_003C
+        && bus.Read32(pc + 0x148) == 0x806D_8380
+        && bus.Read32(pc + 0x14C) == 0x57A5_103A
+        && bus.Read32(pc + 0x150) == 0x809C_0008
+        && bus.Read32(pc + 0x154) == 0x3800_0000
+        && bus.Read32(pc + 0x158) == 0x7C63_2A14
+        && bus.Read32(pc + 0x15C) == 0x9083_045C
+        && bus.Read32(pc + 0x160) == 0x806D_8380
+        && bus.Read32(pc + 0x164) == 0x809C_0000
+        && bus.Read32(pc + 0x168) == 0x7C63_2A14
+        && bus.Read32(pc + 0x16C) == 0x9083_047C
+        && bus.Read32(pc + 0x170) == 0x808D_8380
+        && bus.Read32(pc + 0x174) == 0x8064_04F0
+        && bus.Read32(pc + 0x178) == 0x6063_0001
+        && bus.Read32(pc + 0x17C) == 0x9064_04F0
+        && bus.Read32(pc + 0x180) == 0x806D_8380
+        && bus.Read32(pc + 0x184) == 0xB003_0002
+        && bus.Read32(pc + 0x188) == 0x8001_002C
+        && bus.Read32(pc + 0x18C) == 0x83E1_0024
+        && bus.Read32(pc + 0x190) == 0x83C1_0020
+        && bus.Read32(pc + 0x194) == 0x83A1_001C
+        && bus.Read32(pc + 0x198) == 0x8381_0018
+        && bus.Read32(pc + 0x19C) == 0x3821_0028
+        && bus.Read32(pc + 0x1A0) == 0x7C08_03A6
+        && bus.Read32(pc + 0x1A4) == 0x4E80_0020;
+
     private static bool TryFastForwardSonicGxVertexEmitLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         skippedInstructions = 0;
@@ -5786,6 +6029,9 @@ public sealed class DolRunner
 
     private static double SingleBitsToFprDouble(uint value) =>
         BitConverter.Int32BitsToSingle(unchecked((int)value));
+
+    private static uint ReplaceTopByte(uint value, byte topByte) =>
+        ((uint)topByte << 24) | (value & 0x00FF_FFFF);
 
     private static bool TryFastForwardSonicBitPlaneCrop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
