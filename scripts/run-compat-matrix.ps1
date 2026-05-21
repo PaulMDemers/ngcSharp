@@ -353,7 +353,10 @@ foreach ($target in $selectedTargets) {
             sonicPathRecordScanInstructions = ""
             sonicPairedTransform2dInstructions = ""
             sonicGxFloatStripEmitInstructions = ""
+            sonicGxFloatAttributeStripEmitInstructions = ""
             sonicGxDrawBeginInstructions = ""
+            sonicGxIndexedStripDrawBeginInstructions = ""
+            sonicGxIndexedStripTailInstructions = ""
             sonicGxFloatTexcoordStripEmitInstructions = ""
             sonicPairedTransform4dInstructions = ""
             sonicVectorBlendCopyInstructions = ""
@@ -593,7 +596,10 @@ foreach ($target in $selectedTargets) {
     $sonicPathRecordScanInstructions = Get-Value $fastForward "sonicPathRecordScanInstructions" ""
     $sonicPairedTransform2dInstructions = Get-Value $fastForward "sonicPairedTransform2dInstructions" ""
     $sonicGxFloatStripEmitInstructions = Get-Value $fastForward "sonicGxFloatStripEmitInstructions" ""
+    $sonicGxFloatAttributeStripEmitInstructions = Get-Value $fastForward "sonicGxFloatAttributeStripEmitInstructions" ""
     $sonicGxDrawBeginInstructions = Get-Value $fastForward "sonicGxDrawBeginInstructions" ""
+    $sonicGxIndexedStripDrawBeginInstructions = Get-Value $fastForward "sonicGxIndexedStripDrawBeginInstructions" ""
+    $sonicGxIndexedStripTailInstructions = Get-Value $fastForward "sonicGxIndexedStripTailInstructions" ""
     $sonicGxFloatTexcoordStripEmitInstructions = Get-Value $fastForward "sonicGxFloatTexcoordStripEmitInstructions" ""
     $sonicPairedTransform4dInstructions = Get-Value $fastForward "sonicPairedTransform4dInstructions" ""
     $sonicVectorBlendCopyInstructions = Get-Value $fastForward "sonicVectorBlendCopyInstructions" ""
@@ -664,9 +670,24 @@ foreach ($target in $selectedTargets) {
         $regressions.Add("sonicGxFloatStripEmitInstructions expected >= $expectedMinSonicGxFloatStripEmitInstructions got $sonicGxFloatStripEmitInstructions")
     }
 
+    $expectedMinSonicGxFloatAttributeStripEmitInstructions = Get-Value $expected "minSonicGxFloatAttributeStripEmitInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinSonicGxFloatAttributeStripEmitInstructions -and [long]$sonicGxFloatAttributeStripEmitInstructions -lt [long]$expectedMinSonicGxFloatAttributeStripEmitInstructions) {
+        $regressions.Add("sonicGxFloatAttributeStripEmitInstructions expected >= $expectedMinSonicGxFloatAttributeStripEmitInstructions got $sonicGxFloatAttributeStripEmitInstructions")
+    }
+
     $expectedMinSonicGxDrawBeginInstructions = Get-Value $expected "minSonicGxDrawBeginInstructions" $null
     if ($status -eq "ok" -and $null -ne $expectedMinSonicGxDrawBeginInstructions -and [long]$sonicGxDrawBeginInstructions -lt [long]$expectedMinSonicGxDrawBeginInstructions) {
         $regressions.Add("sonicGxDrawBeginInstructions expected >= $expectedMinSonicGxDrawBeginInstructions got $sonicGxDrawBeginInstructions")
+    }
+
+    $expectedMinSonicGxIndexedStripDrawBeginInstructions = Get-Value $expected "minSonicGxIndexedStripDrawBeginInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinSonicGxIndexedStripDrawBeginInstructions -and [long]$sonicGxIndexedStripDrawBeginInstructions -lt [long]$expectedMinSonicGxIndexedStripDrawBeginInstructions) {
+        $regressions.Add("sonicGxIndexedStripDrawBeginInstructions expected >= $expectedMinSonicGxIndexedStripDrawBeginInstructions got $sonicGxIndexedStripDrawBeginInstructions")
+    }
+
+    $expectedMinSonicGxIndexedStripTailInstructions = Get-Value $expected "minSonicGxIndexedStripTailInstructions" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinSonicGxIndexedStripTailInstructions -and [long]$sonicGxIndexedStripTailInstructions -lt [long]$expectedMinSonicGxIndexedStripTailInstructions) {
+        $regressions.Add("sonicGxIndexedStripTailInstructions expected >= $expectedMinSonicGxIndexedStripTailInstructions got $sonicGxIndexedStripTailInstructions")
     }
 
     $expectedMinSonicGxFloatTexcoordStripEmitInstructions = Get-Value $expected "minSonicGxFloatTexcoordStripEmitInstructions" $null
@@ -935,7 +956,10 @@ foreach ($target in $selectedTargets) {
         sonicPathRecordScanInstructions = $sonicPathRecordScanInstructions
         sonicPairedTransform2dInstructions = $sonicPairedTransform2dInstructions
         sonicGxFloatStripEmitInstructions = $sonicGxFloatStripEmitInstructions
+        sonicGxFloatAttributeStripEmitInstructions = $sonicGxFloatAttributeStripEmitInstructions
         sonicGxDrawBeginInstructions = $sonicGxDrawBeginInstructions
+        sonicGxIndexedStripDrawBeginInstructions = $sonicGxIndexedStripDrawBeginInstructions
+        sonicGxIndexedStripTailInstructions = $sonicGxIndexedStripTailInstructions
         sonicGxFloatTexcoordStripEmitInstructions = $sonicGxFloatTexcoordStripEmitInstructions
         sonicPairedTransform4dInstructions = $sonicPairedTransform4dInstructions
         sonicVectorBlendCopyInstructions = $sonicVectorBlendCopyInstructions
