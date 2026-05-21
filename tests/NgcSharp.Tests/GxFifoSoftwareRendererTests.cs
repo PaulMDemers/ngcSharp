@@ -2159,7 +2159,7 @@ public sealed class GxFifoSoftwareRendererTests
     }
 
     [Fact]
-    public void AutoGxFrameSourceFallsBackToLastNonBlackDisplayCopy()
+    public void AutoGxFrameSourceFallsBackToLargestDisplayCopy()
     {
         string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
         GameCubeMemory memory = new();
@@ -2198,12 +2198,69 @@ public sealed class GxFifoSoftwareRendererTests
 
             Assert.True(rendered, error);
             Assert.NotNull(result);
-            Assert.Equal(GxFrameDumpSource.LastNonBlackDisplayCopy, result.Source);
+            Assert.Equal(GxFrameDumpSource.LargestDisplayCopy, result.Source);
             Assert.Equal(1, result.SourceCopyIndex);
             (byte r, byte g, byte b) = ReadPngPixel(path, x: 3, y: 3, width: 7, height: 7);
             Assert.True(r > 200, $"Expected auto-selected display-copy red pixel, got ({r},{g},{b}).");
             Assert.True(g < 80, $"Expected auto-selected display-copy red pixel, got ({r},{g},{b}).");
             Assert.True(b < 80, $"Expected auto-selected display-copy red pixel, got ({r},{g},{b}).");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void AutoGxFrameSourcePrefersLargestDisplayCopyOverLaterSmallerCopy()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
+        GameCubeMemory memory = new();
+        try
+        {
+            List<byte> bytes =
+            [
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x80, 0x00, 0x04,
+            ];
+            AddVertex(bytes, 0, 0, 255, 0, 0, 255);
+            AddVertex(bytes, 7, 0, 255, 0, 0, 255);
+            AddVertex(bytes, 7, 7, 255, 0, 0, 255);
+            AddVertex(bytes, 0, 7, 255, 0, 0, 255);
+            bytes.AddRange(
+            [
+                0x61, 0x49, 0x00, 0x00, 0x00,
+                0x61, 0x4A, 0x00, 0x18, 0x06,
+                0x61, 0x4B, 0x00, 0x10, 0x00,
+                0x61, 0x4D, 0x00, 0x00, 0x00,
+                0x61, 0x52, 0x00, 0x48, 0x03,
+                0x80, 0x00, 0x04,
+            ]);
+            AddVertex(bytes, 3, 3, 0, 0, 255, 255);
+            AddVertex(bytes, 4, 3, 0, 0, 255, 255);
+            AddVertex(bytes, 4, 4, 0, 0, 255, 255);
+            AddVertex(bytes, 3, 4, 0, 0, 255, 255);
+            bytes.AddRange(
+            [
+                0x61, 0x52, 0x00, 0x48, 0x03,
+            ]);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool rendered = GxFifoSoftwareRenderer.TryRender(accesses, memory, path, width: 7, height: 7, maxDraws: null, skipDraws: 0, stopAfterMaxDraws: false, maxRasterizedPixels: null, ignoreEfbCopyClear: false, source: GxFrameDumpSource.Auto, out GxFifoSoftwareRenderResult? result, out string? error);
+
+            Assert.True(rendered, error);
+            Assert.NotNull(result);
+            Assert.Equal(GxFrameDumpSource.LargestDisplayCopy, result.Source);
+            Assert.Equal(1, result.SourceCopyIndex);
         }
         finally
         {

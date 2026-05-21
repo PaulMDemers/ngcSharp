@@ -17,3 +17,4 @@ TestResults/
 *.nkit.iso
 *.wad
 *.raw
+/.vs

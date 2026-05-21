@@ -397,6 +397,8 @@ foreach ($targetName in $Targets) {
     $gxFrameReplayMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.replayMs } else { "" }
     $gxFrameVertexDecodeMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.vertexDecodeMs } else { "" }
     $gxFrameRasterizeMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.rasterizeMs } else { "" }
+    $gxFrameRasterTevTextureMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.rasterTevTextureMs } else { "" }
+    $gxFrameRasterBlendWriteMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.rasterBlendWriteMs } else { "" }
     $gxFrameEfbCopyMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.efbCopyMs } else { "" }
     $gxFramePngWriteMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.pngWriteMs } else { "" }
     $summaryRows.Add([pscustomobject]@{
@@ -419,6 +421,8 @@ foreach ($targetName in $Targets) {
         gxFrameReplayMs = $gxFrameReplayMs
         gxFrameVertexDecodeMs = $gxFrameVertexDecodeMs
         gxFrameRasterizeMs = $gxFrameRasterizeMs
+        gxFrameRasterTevTextureMs = $gxFrameRasterTevTextureMs
+        gxFrameRasterBlendWriteMs = $gxFrameRasterBlendWriteMs
         gxFrameEfbCopyMs = $gxFrameEfbCopyMs
         gxFramePngWriteMs = $gxFramePngWriteMs
         frameBytes = $frameBytes

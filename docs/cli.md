@@ -68,7 +68,13 @@ Run a bounded disc probe:
 dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "path\to\game.rvz" --max-instructions 3000000 --fast-forward-idle --run-summary artifacts/run-summary.json --no-registers --quiet
 ```
 
-`--run-summary <json-path>` writes a compact JSON ledger with the executed instruction count, final PC, stop reason, selected registers, GX FIFO byte count, and fast-forward counters. It is the preferred way to compare bounded probes without scraping console output.
+`--run-summary <json-path>` writes a compact JSON ledger with the executed instruction count, final PC, stop reason, selected scalar registers, full GPR values, paired-single FPR lanes, GX FIFO byte count, and fast-forward counters. It is the preferred way to compare bounded probes without scraping console output.
+
+`--dump-disasm <addr> <count>` disassembles live emulated RAM after a bounded run or stop condition. This is useful for DVD-loaded overlays that are not visible through static `disc-disasm`.
+
+`--di-command-latency-cycles <n>` overrides the default scheduled DVD command latency for diagnostic runs. Without an override, DVD reads use transfer-size-aware latency; use the override with `--run-summary` or the compatibility matrix to sweep whether a retail title is sensitive to DI completion timing.
+
+`--profile-after <n>` scopes PC, branch-site, PC/LR, and indirect-call-site profile collection to a later instruction window. This is useful when an early hot loop otherwise dominates the profile for a longer compatibility probe.
 
 Enable a formatted memory card in Slot A:
 
@@ -96,6 +102,14 @@ SI and EXI MMIO traces:
 ```powershell
 dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "path\to\game.rvz" --max-instructions 12000000 --trace-si artifacts/si.csv --trace-exi artifacts/exi.csv --quiet --no-registers
 ```
+
+Sonic path lookup differential trace:
+
+```powershell
+dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz" --max-instructions 20000000 --memory-card-a --controller-button a --fast-forward-idle --fast-forward-write-watch --trace-sonic-path-lookup artifacts/sonic-path-lookup.csv --run-summary artifacts/sonic-path-lookup-summary.json --no-registers
+```
+
+`--trace-sonic-path-lookup <csv-path>` observes Sonic Adventure 2 Battle's live `0x800EECFC` resource pathname lookup without skipping it. The CSV compares the C# table-walk model against the PPC routine's real return value, records volatile register/CR side effects, captures full GPR and caller-stack snapshots, reports interpreter-loop and elapsed timebase counts, estimates lookup cycles from table-walk metrics, counts interrupt entries during the call, and marks whether the current guard would consider the call fast-forward eligible. Use this before enabling any routine-level skip so scheduler timing stays explainable.
 
 Stop and watch examples:
 
@@ -138,6 +152,13 @@ Run the default short compatibility checks for Sonic and Pikmin:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run-retail-benchmarks.ps1
+```
+
+Run the curated compatibility matrix:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-compat-matrix.ps1 -Suites quick -NoBuild -SkipMissing
+powershell -ExecutionPolicy Bypass -File scripts/run-compat-matrix.ps1 -Targets sonic-20m,pikmin-5m -NoBuild -SkipMissing
 ```
 
 The default suite keeps long Sonic probes lightweight enough to finish under the watchdog. Use `-DeepGx` when you explicitly want heavyweight GX copy CSVs for every target:

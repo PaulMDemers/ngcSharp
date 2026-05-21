@@ -6,7 +6,9 @@ Start here if you are new to ngcSharp:
 - [Development guide](development.md): build, test, fixture, benchmark, and debugging workflows.
 - [CLI guide](cli.md): common `ngcsharp` commands and diagnostic options.
 - [Compatibility status](compatibility.md): current emulator capability and benchmark state.
+- [Compatibility matrix](compat-matrix.md): curated local target manifest, inventory, and unified regression runner.
 - [Legal and research guidelines](legal.md): asset rules and acceptable research practices.
+- [Next emulator project playbook](next-project/README.md): transferable process, tooling, and architecture lessons for future emulator projects.
 
 Subsystem and benchmark notes:
 
@@ -18,4 +20,3 @@ Subsystem and benchmark notes:
 - [Build devkitPro fixtures](build-devkitpro-fixtures.md)
 
 The detailed notes are intentionally practical and sometimes chronological. Public-facing summaries live in the files listed at the top of this page.
-

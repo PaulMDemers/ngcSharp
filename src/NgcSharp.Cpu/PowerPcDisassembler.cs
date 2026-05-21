@@ -16,9 +16,9 @@ public static class PowerPcDisassembler
             13 => $"addic. r{Rd(instruction)}, r{Ra(instruction)}, {SignExtend16(instruction)}",
             14 => $"addi r{Rd(instruction)}, r{Ra(instruction)}, {SignExtend16(instruction)}",
             15 => $"addis r{Rd(instruction)}, r{Ra(instruction)}, {SignExtend16(instruction)}",
-            16 => $"bc {(instruction >> 21) & 0x1F}, {(instruction >> 16) & 0x1F}, 0x{BranchConditionalOffset(instruction):X8}",
+            16 => $"bc{LinkSuffix(instruction)} {(instruction >> 21) & 0x1F}, {(instruction >> 16) & 0x1F}, 0x{BranchConditionalOffset(instruction):X8}",
             17 => "sc",
-            18 => $"b 0x{BranchOffset(instruction):X8}",
+            18 => $"b{LinkSuffix(instruction)} 0x{BranchOffset(instruction):X8}",
             20 => $"rlwimi r{Ra(instruction)}, r{Rs(instruction)}, {(instruction >> 11) & 0x1F}, {(instruction >> 6) & 0x1F}, {(instruction >> 1) & 0x1F}",
             21 => $"rlwinm r{Ra(instruction)}, r{Rs(instruction)}, {(instruction >> 11) & 0x1F}, {(instruction >> 6) & 0x1F}, {(instruction >> 1) & 0x1F}",
             24 => $"ori r{Ra(instruction)}, r{Rs(instruction)}, 0x{instruction & 0xFFFF:X4}",
@@ -373,4 +373,6 @@ public static class PowerPcDisassembler
     }
 
     private static uint BranchConditionalOffset(uint instruction) => unchecked((uint)(short)(instruction & 0xFFFC));
+
+    private static string LinkSuffix(uint instruction) => (instruction & 1) != 0 ? "l" : string.Empty;
 }

@@ -16,7 +16,10 @@ public sealed class GameCubeBus : IMemoryBus
     private const uint ArqRequestMagic = 0x1234_5678;
     private const ulong ArqRequestLatencyCycles = 512;
     private const ulong DirectAramDmaBaseLatencyCycles = 512;
-    private const ulong DiscInterfaceCommandLatencyCycles = 10_000;
+    private const ulong DiscInterfaceBaseLatencyCycles = 4_096;
+    private const uint DiscInterfaceLatencyChunkBytes = 0x8000;
+    private const ulong DiscInterfaceLatencyCyclesPerChunk = 1_792;
+    private const int DiscInterfaceCommandHistoryLimit = 24;
     private const uint DiscInterfaceErrorOk = 0x0000_0000;
     private const uint DiscInterfaceErrorNoDisc = 0x0302_3A00;
     private const uint DiscInterfaceErrorMotorStopped = 0x0402_0400;
@@ -162,6 +165,8 @@ public sealed class GameCubeBus : IMemoryBus
     private bool _discInterfaceAudioStreaming;
     private PendingDiscCommand? _pendingDiscCommand;
     private ulong _pendingDiscCommandCycles;
+    private ulong _discInterfaceCommandSequence;
+    private readonly Queue<DiscInterfaceCommandDebugSnapshot> _discInterfaceCommandHistory = [];
     private PendingDirectAramDma? _pendingDirectAramDma;
     private GxFifoParserState _gxFifoParserState;
     private ulong _gxFifoRecentBytes;
@@ -237,12 +242,105 @@ public sealed class GameCubeBus : IMemoryBus
 
     public uint PendingProcessorInterrupts => ProcessorInterruptCause & ProcessorInterruptMask;
 
+    public ulong? DiscInterfaceCommandLatencyOverrideCycles { get; set; }
+
+    public ulong DiscInterfaceCommandLatencyCycles
+    {
+        get => DiscInterfaceCommandLatencyOverrideCycles ?? DiscInterfaceBaseLatencyCycles;
+        set => DiscInterfaceCommandLatencyOverrideCycles = value;
+    }
+
     public bool HasPendingExternalInterrupt
     {
         get
         {
             return PendingProcessorInterrupts != 0;
         }
+    }
+
+    public ExternalInterfaceDebugSnapshot GetExternalInterfaceDebugSnapshot()
+    {
+        ExternalInterfaceChannelDebugSnapshot[] channels = new ExternalInterfaceChannelDebugSnapshot[_externalInterfaceChannels.Length];
+        for (int channel = 0; channel < channels.Length; channel++)
+        {
+            uint baseAddress = ExternalInterfaceChannelBaseAddress(channel);
+            uint parameter = NormalizeExternalInterfaceRead(baseAddress, ReadMmioValue(baseAddress));
+            uint dmaAddress = NormalizeExternalInterfaceRead(baseAddress + 0x04, ReadMmioValue(baseAddress + 0x04));
+            uint dmaLength = NormalizeExternalInterfaceRead(baseAddress + 0x08, ReadMmioValue(baseAddress + 0x08));
+            uint control = NormalizeExternalInterfaceRead(baseAddress + 0x0C, ReadMmioValue(baseAddress + 0x0C));
+            uint data = ReadMmioValue(baseAddress + 0x10);
+            TryDecodeSelectedExternalInterfaceDevice(parameter, out int selectedDevice);
+            ExternalInterfaceChannelState state = _externalInterfaceChannels[channel];
+            channels[channel] = new ExternalInterfaceChannelDebugSnapshot(
+                channel,
+                parameter,
+                dmaAddress,
+                dmaLength,
+                control,
+                data,
+                selectedDevice,
+                (parameter & ExternalInterfaceDeviceConnected) != 0,
+                (parameter & ExternalInterfaceTransferCompleteStatus) != 0,
+                (parameter & ExternalInterfaceTransferCompleteMask) != 0,
+                (parameter & ExternalInterfaceInterruptStatus) != 0,
+                (parameter & ExternalInterfaceInterruptMask) != 0,
+                (parameter & ExternalInterfaceExternalInterruptStatus) != 0,
+                (parameter & ExternalInterfaceExternalInterruptMask) != 0,
+                state.Command,
+                state.HasCommand,
+                state.PendingImmediateWrite,
+                state.PendingWriteOffset,
+                state.MemoryCardCommand.ToString(),
+                state.MemoryCardCommandStarted,
+                state.MemoryCardCommandByteCount,
+                state.MemoryCardAddressBytesReceived,
+                state.MemoryCardAddress,
+                state.MemoryCardOffset,
+                state.MemoryCardDataBytesTransferred,
+                state.MemoryCardStatus,
+                state.MemoryCardInterruptEnabled);
+        }
+
+        return new ExternalInterfaceDebugSnapshot(
+            ProcessorInterruptCause,
+            ProcessorInterruptMask,
+            HasPendingExternalInterrupt,
+            channels);
+    }
+
+    public DiscInterfaceDebugSnapshot GetDiscInterfaceDebugSnapshot()
+    {
+        uint status = NormalizeDiscInterfaceRead(0xCC00_6000, ReadMmioValue(0xCC00_6000));
+        uint cover = NormalizeDiscInterfaceRead(0xCC00_6004, ReadMmioValue(0xCC00_6004));
+        uint control = NormalizeDiscInterfaceRead(0xCC00_601C, ReadMmioValue(0xCC00_601C));
+        DiscInterfacePendingCommandDebugSnapshot? pendingCommand = _pendingDiscCommand is PendingDiscCommand pending
+            ? BuildPendingDiscInterfaceCommandSnapshot(pending)
+            : null;
+        return new DiscInterfaceDebugSnapshot(
+            ProcessorInterruptCause,
+            ProcessorInterruptMask,
+            HasPendingExternalInterrupt,
+            status,
+            cover,
+            ReadMmioValue(0xCC00_6008),
+            ReadMmioValue(0xCC00_600C),
+            ReadMmioValue(0xCC00_6010),
+            ReadMmioValue(0xCC00_6014),
+            NormalizeDiscInterfaceRead(0xCC00_6018, ReadMmioValue(0xCC00_6018)),
+            control,
+            ReadMmioValue(0xCC00_6020),
+            DiscInterfaceConfiguration,
+            _pendingDiscCommand is not null,
+            _pendingDiscCommandCycles,
+            _discInterfaceLastError,
+            (status & DiscInterfaceDeviceErrorInterruptStatus) != 0,
+            (status & DiscInterfaceDeviceErrorInterruptMask) != 0,
+            (status & DiscInterfaceTransferComplete) != 0,
+            (status & DiscInterfaceInterruptMask) != 0,
+            (status & DiscInterfaceBreakInterruptStatus) != 0,
+            (status & DiscInterfaceBreakInterruptMask) != 0,
+            pendingCommand,
+            _discInterfaceCommandHistory.ToArray());
     }
 
     public byte Read8(uint address)
@@ -1967,7 +2065,7 @@ public sealed class GameCubeBus : IMemoryBus
             }
 
             uint nextValue = interruptStatus | (value & DiscInterfaceInterruptMaskBits);
-            SetDiscProcessorInterrupt(DiscProcessorInterruptPending(nextValue));
+            RefreshDiscProcessorInterrupt(nextValue);
             return nextValue;
         }
 
@@ -1977,7 +2075,7 @@ public sealed class GameCubeBus : IMemoryBus
             uint interruptStatus = existing & DiscInterfaceCoverInterruptStatus;
             interruptStatus &= ~(value & DiscInterfaceCoverInterruptStatus);
             uint nextValue = interruptStatus | (value & DiscInterfaceCoverInterruptMask);
-            SetDiscProcessorInterrupt(DiscProcessorInterruptPending(ReadMmioValue(0xCC00_6000)) || DiscCoverProcessorInterruptPending(nextValue));
+            RefreshDiscProcessorInterrupt(coverStatus: nextValue);
             return nextValue;
         }
 
@@ -2044,8 +2142,17 @@ public sealed class GameCubeBus : IMemoryBus
         _mmioValues.TryGetValue(0xCC00_6014, out uint dmaAddress);
         _mmioValues.TryGetValue(0xCC00_6018, out uint dmaLength);
 
-        _pendingDiscCommand = new PendingDiscCommand(command0, command1, command2, dmaAddress, dmaLength);
-        _pendingDiscCommandCycles = DiscInterfaceCommandLatencyCycles;
+        ulong latency = CalculateDiscInterfaceCommandLatency(command0, command2, dmaLength);
+        _pendingDiscCommand = new PendingDiscCommand(
+            command0,
+            command1,
+            command2,
+            dmaAddress,
+            dmaLength,
+            ++_discInterfaceCommandSequence,
+            _videoCycles,
+            latency);
+        _pendingDiscCommandCycles = latency;
     }
 
     private void CancelPendingDiscInterfaceCommand()
@@ -2078,13 +2185,17 @@ public sealed class GameCubeBus : IMemoryBus
             ReadMmioValue(0xCC00_600C),
             ReadMmioValue(0xCC00_6010),
             ReadMmioValue(0xCC00_6014),
-            ReadMmioValue(0xCC00_6018));
+            ReadMmioValue(0xCC00_6018),
+            ++_discInterfaceCommandSequence,
+            _videoCycles,
+            0);
 
         _pendingDiscCommand = null;
         _pendingDiscCommandCycles = 0;
         _mmioValues[0xCC00_601C] = ReadMmioValue(0xCC00_601C) & ~1u;
 
         ExecuteDiscInterfaceCommand(commandRegisters);
+        RecordCompletedDiscInterfaceCommand(commandRegisters);
     }
 
     private void ExecuteDiscInterfaceCommand(PendingDiscCommand commandRegisters)
@@ -2257,7 +2368,7 @@ public sealed class GameCubeBus : IMemoryBus
         status = (status | DiscInterfaceTransferComplete) & DiscInterfaceStatusMask;
         _mmioValues[0xCC00_6000] = status;
 
-        SetDiscProcessorInterrupt(DiscProcessorInterruptPending(status));
+        RefreshDiscProcessorInterrupt(status);
     }
 
     private void SignalDiscInterfaceDeviceError(uint error)
@@ -2267,7 +2378,109 @@ public sealed class GameCubeBus : IMemoryBus
         _mmioValues.TryGetValue(0xCC00_6000, out uint status);
         status = (status | DiscInterfaceDeviceErrorInterruptStatus) & DiscInterfaceStatusMask;
         _mmioValues[0xCC00_6000] = status;
-        SetDiscProcessorInterrupt(DiscProcessorInterruptPending(status));
+        RefreshDiscProcessorInterrupt(status);
+    }
+
+    private void RecordCompletedDiscInterfaceCommand(PendingDiscCommand command)
+    {
+        uint status = NormalizeDiscInterfaceRead(0xCC00_6000, ReadMmioValue(0xCC00_6000));
+        DiscInterfaceCommandDebugSnapshot snapshot = new(
+            command.Sequence,
+            command.StartCycle,
+            _videoCycles,
+            command.LatencyCycles,
+            command.Command0,
+            command.Command1,
+            command.Command2,
+            command.DmaAddress,
+            command.DmaLength,
+            DecodeDiscInterfaceCommandName(command.Command0),
+            DecodeDiscInterfaceDiscOffset(command.Command0, command.Command1),
+            DecodeDiscInterfaceCommandLength(command.Command0, command.Command2, command.DmaLength),
+            status,
+            _discInterfaceLastError,
+            DiscProcessorInterruptPending(status));
+
+        _discInterfaceCommandHistory.Enqueue(snapshot);
+        while (_discInterfaceCommandHistory.Count > DiscInterfaceCommandHistoryLimit)
+        {
+            _discInterfaceCommandHistory.Dequeue();
+        }
+    }
+
+    private DiscInterfacePendingCommandDebugSnapshot BuildPendingDiscInterfaceCommandSnapshot(PendingDiscCommand command)
+    {
+        ulong elapsedCycles = _videoCycles >= command.StartCycle ? _videoCycles - command.StartCycle : 0;
+        return new DiscInterfacePendingCommandDebugSnapshot(
+            command.Sequence,
+            command.StartCycle,
+            elapsedCycles,
+            _pendingDiscCommandCycles,
+            command.LatencyCycles,
+            command.Command0,
+            command.Command1,
+            command.Command2,
+            command.DmaAddress,
+            command.DmaLength,
+            DecodeDiscInterfaceCommandName(command.Command0),
+            DecodeDiscInterfaceDiscOffset(command.Command0, command.Command1),
+            DecodeDiscInterfaceCommandLength(command.Command0, command.Command2, command.DmaLength));
+    }
+
+    private static string DecodeDiscInterfaceCommandName(uint command0)
+    {
+        return (byte)(command0 >> 24) switch
+        {
+            0x12 => "Inquiry",
+            0xA8 when (command0 & 0xFF) == 0x40 => "ReadDiscId",
+            0xA8 => "Read",
+            0xAB => "Seek",
+            0xE0 => "RequestError",
+            0xE1 => "AudioStream",
+            0xE2 => "AudioStatus",
+            0xE3 => "StopMotor",
+            0xE4 => "AudioEnable",
+            _ => "Unknown",
+        };
+    }
+
+    private static uint DecodeDiscInterfaceDiscOffset(uint command0, uint command1)
+    {
+        return (byte)(command0 >> 24) switch
+        {
+            0xA8 when (command0 & 0xFF) != 0x40 => command1 << 2,
+            0xAB => command1 << 2,
+            0xE1 => command1 << 2,
+            _ => 0,
+        };
+    }
+
+    private static uint DecodeDiscInterfaceCommandLength(uint command0, uint command2, uint dmaLength)
+    {
+        return (byte)(command0 >> 24) switch
+        {
+            0xA8 when (command0 & 0xFF) == 0x40 => Math.Min(dmaLength, 0x20),
+            0xA8 => command2 == 0 ? dmaLength : command2,
+            0xE1 => command2,
+            _ => 0,
+        };
+    }
+
+    private ulong CalculateDiscInterfaceCommandLatency(uint command0, uint command2, uint dmaLength)
+    {
+        if (DiscInterfaceCommandLatencyOverrideCycles is ulong overrideCycles)
+        {
+            return overrideCycles;
+        }
+
+        uint commandLength = DecodeDiscInterfaceCommandLength(command0, command2, dmaLength);
+        if (commandLength == 0)
+        {
+            return DiscInterfaceBaseLatencyCycles;
+        }
+
+        ulong chunks = ((ulong)commandLength + DiscInterfaceLatencyChunkBytes - 1) / DiscInterfaceLatencyChunkBytes;
+        return DiscInterfaceBaseLatencyCycles + (chunks * DiscInterfaceLatencyCyclesPerChunk);
     }
 
     private bool EnsureDiscAvailable()
@@ -2324,6 +2537,13 @@ public sealed class GameCubeBus : IMemoryBus
         {
             _processorInterruptCause &= ~ProcessorInterfaceDiscInterrupt;
         }
+    }
+
+    private void RefreshDiscProcessorInterrupt(uint? commandStatus = null, uint? coverStatus = null)
+    {
+        uint status = commandStatus ?? ReadMmioValue(0xCC00_6000);
+        uint cover = coverStatus ?? DiscInterfaceCoverRegister();
+        SetDiscProcessorInterrupt(DiscProcessorInterruptPending(status) || DiscCoverProcessorInterruptPending(cover));
     }
 
     private static bool DiscProcessorInterruptPending(uint status) =>
@@ -3856,7 +4076,15 @@ public sealed class GameCubeBus : IMemoryBus
         };
     }
 
-    private readonly record struct PendingDiscCommand(uint Command0, uint Command1, uint Command2, uint DmaAddress, uint DmaLength);
+    private readonly record struct PendingDiscCommand(
+        uint Command0,
+        uint Command1,
+        uint Command2,
+        uint DmaAddress,
+        uint DmaLength,
+        ulong Sequence,
+        ulong StartCycle,
+        ulong LatencyCycles);
 
     private readonly record struct ArqDescriptor(uint Address, uint MainAddress, uint AramAddress, uint Length, uint CallbackAddress, bool AramToMain, bool IsLinkedQueueDescriptor);
 
@@ -3937,3 +4165,96 @@ public sealed class GameCubeBus : IMemoryBus
         public GxFifoPayloadKind PendingPayloadKind;
     }
 }
+
+public sealed record ExternalInterfaceDebugSnapshot(
+    uint ProcessorInterruptCause,
+    uint ProcessorInterruptMask,
+    bool HasPendingExternalInterrupt,
+    ExternalInterfaceChannelDebugSnapshot[] Channels);
+
+public sealed record ExternalInterfaceChannelDebugSnapshot(
+    int Channel,
+    uint Parameter,
+    uint DmaAddress,
+    uint DmaLength,
+    uint Control,
+    uint Data,
+    int SelectedDevice,
+    bool DeviceConnected,
+    bool TransferCompleteStatus,
+    bool TransferCompleteMask,
+    bool InterruptStatus,
+    bool InterruptMask,
+    bool ExternalInterruptStatus,
+    bool ExternalInterruptMask,
+    uint Command,
+    bool HasCommand,
+    bool PendingImmediateWrite,
+    uint PendingWriteOffset,
+    string MemoryCardCommand,
+    bool MemoryCardCommandStarted,
+    int MemoryCardCommandByteCount,
+    int MemoryCardAddressBytesReceived,
+    uint MemoryCardAddress,
+    uint MemoryCardOffset,
+    int MemoryCardDataBytesTransferred,
+    byte MemoryCardStatus,
+    bool MemoryCardInterruptEnabled);
+
+public sealed record DiscInterfaceDebugSnapshot(
+    uint ProcessorInterruptCause,
+    uint ProcessorInterruptMask,
+    bool HasPendingExternalInterrupt,
+    uint Status,
+    uint Cover,
+    uint Command0,
+    uint Command1,
+    uint Command2,
+    uint DmaAddress,
+    uint DmaLength,
+    uint Control,
+    uint ImmediateData,
+    uint Configuration,
+    bool HasPendingCommand,
+    ulong PendingCommandCycles,
+    uint LastError,
+    bool DeviceErrorStatus,
+    bool DeviceErrorMask,
+    bool TransferCompleteStatus,
+    bool TransferCompleteMask,
+    bool BreakStatus,
+    bool BreakMask,
+    DiscInterfacePendingCommandDebugSnapshot? PendingCommand,
+    DiscInterfaceCommandDebugSnapshot[] CommandHistory);
+
+public sealed record DiscInterfacePendingCommandDebugSnapshot(
+    ulong Sequence,
+    ulong StartCycle,
+    ulong ElapsedCycles,
+    ulong RemainingCycles,
+    ulong LatencyCycles,
+    uint Command0,
+    uint Command1,
+    uint Command2,
+    uint DmaAddress,
+    uint DmaLength,
+    string CommandName,
+    uint DiscOffset,
+    uint CommandLength);
+
+public sealed record DiscInterfaceCommandDebugSnapshot(
+    ulong Sequence,
+    ulong StartCycle,
+    ulong CompleteCycle,
+    ulong LatencyCycles,
+    uint Command0,
+    uint Command1,
+    uint Command2,
+    uint DmaAddress,
+    uint DmaLength,
+    string CommandName,
+    uint DiscOffset,
+    uint CommandLength,
+    uint Status,
+    uint LastError,
+    bool ProcessorInterruptPending);

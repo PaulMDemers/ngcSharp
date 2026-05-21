@@ -5,8 +5,10 @@ using NgcSharp.Core;
 
 namespace NgcSharp.App;
 
-public sealed record GxFifoSoftwareRenderTimings(double TotalMs, double FifoExpansionMs, double BufferInitMs, double ViResolveMs, double ReplayMs, double RegisterWriteMs, double VertexDecodeMs, double RasterizeMs, double EfbCoverageMs, double EfbCopyMs, double SourceCaptureMs, double DisplayCaptureMs, double SourceSelectionMs, double PngWriteMs);
-public sealed record GxFifoSoftwareRenderResult(string Path, int Width, int Height, int Draws, int RenderedQuads, int DegenerateQuads, int RenderedTriangles = 0, int DegenerateTriangles = 0, GxFrameDumpSource Source = GxFrameDumpSource.Efb, uint? SourceAddress = null, FramebufferPixelFormat? SourceFormat = null, int? SourceCopyIndex = null, bool RasterBudgetExhausted = false, GxFifoSoftwareRenderTimings? Timings = null);
+public sealed record GxFifoSoftwareRenderTimings(double TotalMs, double FifoExpansionMs, double BufferInitMs, double ViResolveMs, double ReplayMs, double RegisterWriteMs, double VertexDecodeMs, double RasterizeMs, double RasterSetupMs, double RasterCoverageMs, double RasterDepthTestMs, double RasterTevTextureMs, double RasterAlphaTestMs, double RasterBlendWriteMs, double EfbCoverageMs, double EfbCopyMs, double SourceCaptureMs, double DisplayCaptureMs, double SourceSelectionMs, double PngWriteMs);
+public sealed record GxFifoSoftwareRenderFastPathStats(long SingleStageTevFastTriangles, long SingleStageTevFastPixels, long DirectTextureSamplerTriangles, long DirectTextureSamplerPixels, long GenericTevPixels, long LegacyTextureFallbackPixels, IReadOnlyDictionary<string, long> DirectTextureFormats, IReadOnlyDictionary<string, long> TextureSamplerFallbacks);
+public sealed record GxFifoSoftwareRenderEfbCopyStats(long DisplayCopies, long DirectDisplayCopies, long FilteredDisplayCopies, long TextureCopies, long Clears, long DepthClears, double DisplayCopyMs, double TextureCopyMs, double ColorClearMs, double DepthClearMs, IReadOnlyDictionary<string, long> DisplayCopyModes, IReadOnlyDictionary<string, long> TextureCopyFormats);
+public sealed record GxFifoSoftwareRenderResult(string Path, int Width, int Height, int Draws, int RenderedQuads, int DegenerateQuads, int RenderedTriangles = 0, int DegenerateTriangles = 0, GxFrameDumpSource Source = GxFrameDumpSource.Efb, uint? SourceAddress = null, FramebufferPixelFormat? SourceFormat = null, int? SourceCopyIndex = null, bool RasterBudgetExhausted = false, GxFifoSoftwareRenderTimings? Timings = null, GxFifoSoftwareRenderFastPathStats? FastPathStats = null, GxFifoSoftwareRenderEfbCopyStats? EfbCopyStats = null);
 public sealed record GxFifoDrawDiagnosticResult(string Path, int TotalDraws, int DrawsWritten);
 public sealed record GxFifoCopyDiagnosticResult(string Path, int CopiesWritten, int TotalDraws, bool RasterBudgetExhausted = false);
 public sealed record GxFifoCoverageDiagnosticResult(string Path, int DrawsWritten, int CopiesSeen, bool RasterBudgetExhausted);
@@ -113,12 +115,15 @@ public static class GxFifoSoftwareRenderer
         long registerWriteTicks = 0;
         long vertexDecodeTicks = 0;
         long rasterizeTicks = 0;
+        RasterTimingAccumulator rasterTimings = new();
         long efbCoverageTicks = 0;
         long efbCopyTicks = 0;
         long sourceCaptureTicks = 0;
         long displayCaptureTicks = 0;
         long sourceSelectionTicks = 0;
         long pngWriteTicks = 0;
+        FastPathDiagnosticCounters fastPathCounters = new();
+        EfbCopyDiagnosticCounters efbCopyCounters = new();
 
         GxFifoSoftwareRenderTimings BuildTimings()
         {
@@ -131,6 +136,12 @@ public static class GxFifoSoftwareRenderer
                 RegisterWriteMs: RoundMilliseconds(StopwatchTicksToMilliseconds(registerWriteTicks)),
                 VertexDecodeMs: RoundMilliseconds(StopwatchTicksToMilliseconds(vertexDecodeTicks)),
                 RasterizeMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterizeTicks)),
+                RasterSetupMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterTimings.SetupTicks)),
+                RasterCoverageMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterTimings.CoverageTicks)),
+                RasterDepthTestMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterTimings.DepthTestTicks)),
+                RasterTevTextureMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterTimings.TevTextureTicks)),
+                RasterAlphaTestMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterTimings.AlphaTestTicks)),
+                RasterBlendWriteMs: RoundMilliseconds(StopwatchTicksToMilliseconds(rasterTimings.BlendWriteTicks)),
                 EfbCoverageMs: RoundMilliseconds(StopwatchTicksToMilliseconds(efbCoverageTicks)),
                 EfbCopyMs: RoundMilliseconds(StopwatchTicksToMilliseconds(efbCopyTicks)),
                 SourceCaptureMs: RoundMilliseconds(StopwatchTicksToMilliseconds(sourceCaptureTicks)),
@@ -346,7 +357,7 @@ public static class GxFifoSoftwareRenderer
                         }
 
                         long efbCopyStart = Stopwatch.GetTimestamp();
-                        if (state.TryCopyEfb(memory, rgb, alpha, depth, width, height, clearAfterCopy: !ignoreEfbCopyClear, out DisplayCopyResult? displayCopy))
+                        if (state.TryCopyEfb(memory, rgb, alpha, depth, width, height, clearAfterCopy: !ignoreEfbCopyClear, out DisplayCopyResult? displayCopy, efbCopyCounters))
                         {
                             efbCopyTicks += Stopwatch.GetTimestamp() - efbCopyStart;
                             if (displayCopy is DisplayCopyResult capturedCopy)
@@ -358,7 +369,7 @@ public static class GxFifoSoftwareRenderer
                                 {
                                     GxFrameDumpSource.Auto => hasNonBlackCoverage,
                                     GxFrameDumpSource.LastNonBlackDisplayCopy => hasNonBlackCoverage,
-                                    GxFrameDumpSource.LargestDisplayCopy => hasNonBlackCoverage && (largestDisplayCopy is not SelectedDisplayCopy largest || coverage.NonBlackPixels > largest.Coverage.NonBlackPixels),
+                                    GxFrameDumpSource.LargestDisplayCopy => hasNonBlackCoverage,
                                     GxFrameDumpSource.LastNonBlackViFramebuffer => hasNonBlackCoverage && requestedViAddress == capturedCopy.DestinationAddress,
                                     GxFrameDumpSource.CopyIndex => copiesSeen == displayCopyIndex,
                                     GxFrameDumpSource.Efb => false,
@@ -369,10 +380,11 @@ public static class GxFifoSoftwareRenderer
                                     && TryTimedCaptureDisplayCopyRgb(memory, capturedCopy, ref displayCaptureTicks, out byte[]? displayRgb)
                                     && displayRgb is not null)
                                 {
-                                    SelectedDisplayCopy selected = new(copiesSeen, capturedCopy, coverage, displayRgb);
+                                    EfbCoverage capturedCoverage = CountNonBlackRgb(displayRgb, capturedCopy.Width, capturedCopy.Height);
+                                    SelectedDisplayCopy selected = new(copiesSeen, capturedCopy, capturedCoverage, displayRgb);
                                     if (source == GxFrameDumpSource.LastNonBlackViFramebuffer
                                         && requestedViAddress == capturedCopy.DestinationAddress
-                                        && RgbHasNonBlackPixels(displayRgb))
+                                        && capturedCoverage.NonBlackPixels > 0)
                                     {
                                         lastNonBlackViDisplayCopy = selected;
                                     }
@@ -384,12 +396,12 @@ public static class GxFifoSoftwareRenderer
                                     else
                                     {
                                         lastDisplayCopy = selected;
-                                        if (coverage.NonBlackPixels > 0)
+                                        if (capturedCoverage.NonBlackPixels > 0)
                                         {
                                             lastNonBlackDisplayCopy = selected;
                                         }
 
-                                        if (largestDisplayCopy is not SelectedDisplayCopy largest || coverage.NonBlackPixels > largest.Coverage.NonBlackPixels)
+                                        if (largestDisplayCopy is not SelectedDisplayCopy largest || capturedCoverage.NonBlackPixels > largest.Coverage.NonBlackPixels)
                                         {
                                             largestDisplayCopy = selected;
                                         }
@@ -467,7 +479,7 @@ public static class GxFifoSoftwareRenderer
                 if (decodedVertices)
                 {
                     long rasterizeStart = Stopwatch.GetTimestamp();
-                    RenderPrimitiveBounds(rgb, alpha, depth, width, height, command, vertices, state, memory, ref renderedQuads, ref degenerateQuads, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters: null);
+                    RenderPrimitiveBounds(rgb, alpha, depth, width, height, command, vertices, state, memory, ref renderedQuads, ref degenerateQuads, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters: null, rasterTimings, fastPathCounters);
                     rasterizeTicks += Stopwatch.GetTimestamp() - rasterizeStart;
                 }
             }
@@ -496,17 +508,6 @@ public static class GxFifoSoftwareRenderer
             {
                 resultSource = GxFrameDumpSource.Efb;
             }
-            else if (lastNonBlackDisplayCopy is SelectedDisplayCopy selectedNonBlackDisplay)
-            {
-                DisplayCopyResult copy = selectedNonBlackDisplay.Copy;
-                rgb = selectedNonBlackDisplay.Rgb;
-                outputWidth = copy.Width;
-                outputHeight = copy.Height;
-                sourceAddress = copy.DestinationAddress;
-                sourceFormat = copy.Format;
-                sourceCopyIndex = selectedNonBlackDisplay.CopyIndex;
-                resultSource = GxFrameDumpSource.LastNonBlackDisplayCopy;
-            }
             else if (largestDisplayCopy is SelectedDisplayCopy selectedLargestDisplay)
             {
                 DisplayCopyResult copy = selectedLargestDisplay.Copy;
@@ -517,6 +518,17 @@ public static class GxFifoSoftwareRenderer
                 sourceFormat = copy.Format;
                 sourceCopyIndex = selectedLargestDisplay.CopyIndex;
                 resultSource = GxFrameDumpSource.LargestDisplayCopy;
+            }
+            else if (lastNonBlackDisplayCopy is SelectedDisplayCopy selectedNonBlackDisplay)
+            {
+                DisplayCopyResult copy = selectedNonBlackDisplay.Copy;
+                rgb = selectedNonBlackDisplay.Rgb;
+                outputWidth = copy.Width;
+                outputHeight = copy.Height;
+                sourceAddress = copy.DestinationAddress;
+                sourceFormat = copy.Format;
+                sourceCopyIndex = selectedNonBlackDisplay.CopyIndex;
+                resultSource = GxFrameDumpSource.LastNonBlackDisplayCopy;
             }
             else if (lastDisplayCopy is SelectedDisplayCopy selectedLastDisplay)
             {
@@ -568,7 +580,7 @@ public static class GxFifoSoftwareRenderer
                     long pngWriteStart = Stopwatch.GetTimestamp();
                     FramebufferDumper.WriteRgbPng(fullPath, outputWidth, outputHeight, rgb);
                     pngWriteTicks += Stopwatch.GetTimestamp() - pngWriteStart;
-                    result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, source, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0, BuildTimings());
+                    result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, source, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0, BuildTimings(), fastPathCounters.ToStats(), efbCopyCounters.ToStats());
                     return true;
                 }
 
@@ -668,7 +680,7 @@ public static class GxFifoSoftwareRenderer
         long finalPngWriteStart = Stopwatch.GetTimestamp();
         FramebufferDumper.WriteRgbPng(fullPath, outputWidth, outputHeight, rgb);
         pngWriteTicks += Stopwatch.GetTimestamp() - finalPngWriteStart;
-        result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, resultSource, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0, BuildTimings());
+        result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, resultSource, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0, BuildTimings(), fastPathCounters.ToStats(), efbCopyCounters.ToStats());
         return true;
     }
 
@@ -698,6 +710,59 @@ public static class GxFifoSoftwareRenderer
         }
 
         return false;
+    }
+
+    private static EfbCoverage CountNonBlackRgb(byte[] rgb, int width, int height)
+    {
+        int pixels = 0;
+        int nonBlack = 0;
+        int minX = int.MaxValue;
+        int minY = int.MaxValue;
+        int maxX = int.MinValue;
+        int maxY = int.MinValue;
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                pixels++;
+                int offset = (y * width + x) * 3;
+                if (rgb[offset] == 0 && rgb[offset + 1] == 0 && rgb[offset + 2] == 0)
+                {
+                    continue;
+                }
+
+                nonBlack++;
+                if (x < minX)
+                {
+                    minX = x;
+                }
+                if (y < minY)
+                {
+                    minY = y;
+                }
+                if (x > maxX)
+                {
+                    maxX = x;
+                }
+                if (y > maxY)
+                {
+                    maxY = y;
+                }
+            }
+        }
+
+        return new EfbCoverage(
+            pixels,
+            nonBlack,
+            nonBlack,
+            nonBlack == 0 ? -1 : minX,
+            nonBlack == 0 ? -1 : minY,
+            nonBlack == 0 ? -1 : maxX,
+            nonBlack == 0 ? -1 : maxY,
+            nonBlack == 0 ? -1 : minX,
+            nonBlack == 0 ? -1 : minY,
+            nonBlack == 0 ? -1 : maxX,
+            nonBlack == 0 ? -1 : maxY);
     }
 
     private static bool TryCaptureDisplayCopyRgb(GameCubeMemory? memory, DisplayCopyResult copy, out byte[]? rgb)
@@ -2469,6 +2534,180 @@ public static class GxFifoSoftwareRenderer
         public void RecordDepthUpdate() => DepthUpdates++;
     }
 
+    private sealed class RasterTimingAccumulator
+    {
+        public long SetupTicks;
+        public long CoverageTicks;
+        public long DepthTestTicks;
+        public long TevTextureTicks;
+        public long AlphaTestTicks;
+        public long BlendWriteTicks;
+    }
+
+    private sealed class FastPathDiagnosticCounters
+    {
+        private readonly Dictionary<string, long> _directTextureFormats = [];
+        private readonly Dictionary<string, long> _textureSamplerFallbacks = [];
+
+        public long SingleStageTevFastTriangles { get; private set; }
+        public long SingleStageTevFastPixels { get; private set; }
+        public long DirectTextureSamplerTriangles { get; private set; }
+        public long DirectTextureSamplerPixels { get; private set; }
+        public long GenericTevPixels { get; private set; }
+        public long LegacyTextureFallbackPixels { get; private set; }
+
+        public void RecordSingleStageTevFastTriangle(bool hasDirectTextureSampler, int textureFormat, string? samplerFallbackReason)
+        {
+            SingleStageTevFastTriangles++;
+            if (hasDirectTextureSampler)
+            {
+                DirectTextureSamplerTriangles++;
+                Add(_directTextureFormats, TextureFormatName(textureFormat));
+            }
+            else if (!string.IsNullOrEmpty(samplerFallbackReason))
+            {
+                Add(_textureSamplerFallbacks, samplerFallbackReason);
+            }
+        }
+
+        public void RecordSingleStageTevFastPixel(bool usedDirectTextureSampler)
+        {
+            SingleStageTevFastPixels++;
+            if (usedDirectTextureSampler)
+            {
+                DirectTextureSamplerPixels++;
+            }
+        }
+
+        public void RecordGenericTevPixel() => GenericTevPixels++;
+
+        public void RecordLegacyTextureFallbackPixel() => LegacyTextureFallbackPixels++;
+
+        public GxFifoSoftwareRenderFastPathStats ToStats() =>
+            new(
+                SingleStageTevFastTriangles,
+                SingleStageTevFastPixels,
+                DirectTextureSamplerTriangles,
+                DirectTextureSamplerPixels,
+                GenericTevPixels,
+                LegacyTextureFallbackPixels,
+                new Dictionary<string, long>(_directTextureFormats),
+                new Dictionary<string, long>(_textureSamplerFallbacks));
+
+        private static void Add(Dictionary<string, long> counters, string key)
+        {
+            counters.TryGetValue(key, out long count);
+            counters[key] = count + 1;
+        }
+
+        private static string TextureFormatName(int format) =>
+            format switch
+            {
+                0 => "I4",
+                1 => "I8",
+                2 => "IA4",
+                3 => "IA8",
+                4 => "RGB565",
+                5 => "RGB5A3",
+                6 => "RGBA8",
+                8 => "CI4",
+                9 => "CI8",
+                14 => "CMPR",
+                _ => $"fmt{format}",
+            };
+    }
+
+    private sealed class EfbCopyDiagnosticCounters
+    {
+        private readonly Dictionary<string, long> _displayCopyModes = [];
+        private readonly Dictionary<string, long> _textureCopyFormats = [];
+
+        public long DisplayCopies { get; private set; }
+        public long DirectDisplayCopies { get; private set; }
+        public long FilteredDisplayCopies { get; private set; }
+        public long TextureCopies { get; private set; }
+        public long Clears { get; private set; }
+        public long DepthClears { get; private set; }
+        public long DisplayCopyTicks { get; private set; }
+        public long TextureCopyTicks { get; private set; }
+        public long ColorClearTicks { get; private set; }
+        public long DepthClearTicks { get; private set; }
+
+        public void RecordDisplayCopy(long ticks, bool direct, int sourceWidth, int sourceHeight, int destinationWidth, int destinationHeight, int yScale, int[] verticalFilter, int gamma)
+        {
+            DisplayCopies++;
+            DisplayCopyTicks += ticks;
+            if (direct)
+            {
+                DirectDisplayCopies++;
+            }
+            else
+            {
+                FilteredDisplayCopies++;
+            }
+
+            Add(
+                _displayCopyModes,
+                $"{sourceWidth}x{sourceHeight}->{destinationWidth}x{destinationHeight};ys={yScale};vf={FormatFilterSignature(verticalFilter)};gamma={gamma};direct={direct}");
+        }
+
+        public void RecordTextureCopy(long ticks, int format)
+        {
+            TextureCopies++;
+            TextureCopyTicks += ticks;
+            Add(_textureCopyFormats, CopyTextureFormatName(format));
+        }
+
+        public void RecordColorClear(long ticks)
+        {
+            Clears++;
+            ColorClearTicks += ticks;
+        }
+
+        public void RecordDepthClear(long ticks)
+        {
+            DepthClears++;
+            DepthClearTicks += ticks;
+        }
+
+        public GxFifoSoftwareRenderEfbCopyStats ToStats() =>
+            new(
+                DisplayCopies,
+                DirectDisplayCopies,
+                FilteredDisplayCopies,
+                TextureCopies,
+                Clears,
+                DepthClears,
+                RoundMilliseconds(StopwatchTicksToMilliseconds(DisplayCopyTicks)),
+                RoundMilliseconds(StopwatchTicksToMilliseconds(TextureCopyTicks)),
+                RoundMilliseconds(StopwatchTicksToMilliseconds(ColorClearTicks)),
+                RoundMilliseconds(StopwatchTicksToMilliseconds(DepthClearTicks)),
+                new Dictionary<string, long>(_displayCopyModes),
+                new Dictionary<string, long>(_textureCopyFormats));
+
+        private static string FormatFilterSignature(int[] filter) =>
+            string.Join("/", filter);
+
+        private static string CopyTextureFormatName(int format) =>
+            format switch
+            {
+                0 => "I4",
+                1 => "I8",
+                2 => "IA4",
+                3 => "IA8",
+                4 => "RGB565",
+                5 => "RGB5A3",
+                6 => "RGBA8",
+                _ => $"fmt{format}",
+            };
+
+        private static void Add(Dictionary<string, long> counters, string key)
+        {
+            counters.TryGetValue(key, out long count);
+            counters[key] = count + 1;
+        }
+    }
+
     private static void RenderPrimitiveBounds(
         byte[] rgb,
         byte[] alpha,
@@ -2484,14 +2723,16 @@ public static class GxFifoSoftwareRenderer
         ref int renderedTriangles,
         ref int degenerateTriangles,
         ref int rasterPixelsRemaining,
-        RasterDiagnosticCounters? counters)
+        RasterDiagnosticCounters? counters,
+        RasterTimingAccumulator? timings = null,
+        FastPathDiagnosticCounters? fastPathCounters = null)
     {
         switch (command & 0xF8)
         {
             case 0x80:
                 for (int vertex = 0; vertex + 3 < vertices.Length; vertex += 4)
                 {
-                    if (FillQuadBounds(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], vertices[vertex + 3], state, memory, ref rasterPixelsRemaining, counters))
+                    if (FillQuadBounds(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], vertices[vertex + 3], state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters))
                     {
                         renderedQuads++;
                     }
@@ -2505,7 +2746,7 @@ public static class GxFifoSoftwareRenderer
             case 0x90:
                 for (int vertex = 0; vertex + 2 < vertices.Length; vertex += 3)
                 {
-                    FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters);
+                    FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
                 }
 
                 break;
@@ -2514,11 +2755,11 @@ public static class GxFifoSoftwareRenderer
                 {
                     if ((vertex & 1) == 0)
                     {
-                        FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters);
+                        FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
                     }
                     else
                     {
-                        FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex + 1], vertices[vertex], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters);
+                        FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex + 1], vertices[vertex], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
                     }
                 }
 
@@ -2526,16 +2767,16 @@ public static class GxFifoSoftwareRenderer
             case 0xA0:
                 for (int vertex = 1; vertex + 1 < vertices.Length; vertex++)
                 {
-                    FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[0], vertices[vertex], vertices[vertex + 1], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters);
+                    FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[0], vertices[vertex], vertices[vertex + 1], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
                 }
 
                 break;
         }
     }
 
-    private static void FillTriangleOrCount(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int renderedTriangles, ref int degenerateTriangles, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters)
+    private static void FillTriangleOrCount(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int renderedTriangles, ref int degenerateTriangles, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings, FastPathDiagnosticCounters? fastPathCounters = null)
     {
-        if (FillTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters))
+        if (FillTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters))
         {
             renderedTriangles++;
         }
@@ -2545,23 +2786,34 @@ public static class GxFifoSoftwareRenderer
         }
     }
 
-    private static bool FillQuadBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertex d, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters)
+    private static bool FillQuadBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertex d, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings, FastPathDiagnosticCounters? fastPathCounters = null)
     {
-        bool first = FillTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters);
-        bool second = FillTriangleBounds(rgb, alpha, depth, width, height, a, c, d, state, memory, ref rasterPixelsRemaining, counters);
+        bool first = FillTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
+        bool second = FillTriangleBounds(rgb, alpha, depth, width, height, a, c, d, state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
         return first || second;
     }
 
-    private static bool FillTriangleBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters)
+    private static bool FillTriangleBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings, FastPathDiagnosticCounters? fastPathCounters = null)
     {
+        long setupStart = timings is null ? 0 : Stopwatch.GetTimestamp();
         if (rasterPixelsRemaining <= 0)
         {
+            if (timings is not null)
+            {
+                timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+            }
+
             return false;
         }
 
         if (a.ClipRejected || b.ClipRejected || c.ClipRejected)
         {
-            return FillNearClippedTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters);
+            if (timings is not null)
+            {
+                timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+            }
+
+            return FillNearClippedTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
         }
 
         float minX = MathF.Min(MathF.Min(a.X, b.X), c.X);
@@ -2571,11 +2823,21 @@ public static class GxFifoSoftwareRenderer
 
         if (!float.IsFinite(minX) || !float.IsFinite(maxX) || !float.IsFinite(minY) || !float.IsFinite(maxY))
         {
+            if (timings is not null)
+            {
+                timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+            }
+
             return false;
         }
 
         if (maxX <= minX || maxY <= minY)
         {
+            if (timings is not null)
+            {
+                timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+            }
+
             return false;
         }
 
@@ -2608,6 +2870,11 @@ public static class GxFifoSoftwareRenderer
 
         if (right <= left || bottom <= top)
         {
+            if (timings is not null)
+            {
+                timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+            }
+
             return false;
         }
 
@@ -2620,6 +2887,11 @@ public static class GxFifoSoftwareRenderer
         float area = Edge(ax, ay, bx, by, cx, cy);
         if (MathF.Abs(area) < 0.0001f)
         {
+            if (timings is not null)
+            {
+                timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+            }
+
             return false;
         }
 
@@ -2641,6 +2913,17 @@ public static class GxFifoSoftwareRenderer
             && b.TryGetTexCoord(texCoord, out bTexS, out bTexT)
             && c.TryGetTexCoord(texCoord, out cTexS, out cTexT);
         GxTevStage0Mode stage0Mode = state.Stage0Mode;
+        bool canEvaluateSingleTevStageFast = state.TryCreateSingleTevStageFastEvaluator(memory, out GxVertexState.SingleTevStageFastEvaluator singleTevStageFast);
+        if (canEvaluateSingleTevStageFast)
+        {
+            fastPathCounters?.RecordSingleStageTevFastTriangle(singleTevStageFast.TextureSampler.IsValid, singleTevStageFast.TextureFormat, singleTevStageFast.TextureSamplerFallbackReason);
+        }
+
+        if (timings is not null)
+        {
+            timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
+        }
+
         bool wrotePixel = false;
         for (int y = top; y <= bottom; y++)
         {
@@ -2659,8 +2942,14 @@ public static class GxFifoSoftwareRenderer
                 }
 
                 rasterPixelsRemaining--;
+                long coverageStart = timings is null ? 0 : Stopwatch.GetTimestamp();
                 if (!InsideTriangle(w0, w1, w2, area))
                 {
+                    if (timings is not null)
+                    {
+                        timings.CoverageTicks += Stopwatch.GetTimestamp() - coverageStart;
+                    }
+
                     w0 += w0StepX;
                     w1 += w1StepX;
                     w2 += w2StepX;
@@ -2672,10 +2961,21 @@ public static class GxFifoSoftwareRenderer
                 float aWeight = w0 * inverseArea;
                 float bWeight = w1 * inverseArea;
                 float cWeight = w2 * inverseArea;
+                if (timings is not null)
+                {
+                    timings.CoverageTicks += Stopwatch.GetTimestamp() - coverageStart;
+                }
+
+                long depthTestStart = timings is null ? 0 : Stopwatch.GetTimestamp();
                 float z = a.Z * aWeight + b.Z * bWeight + c.Z * cWeight;
                 int depthIndex = depthRow + x;
                 if (!state.DepthTestPasses(z, depth[depthIndex]))
                 {
+                    if (timings is not null)
+                    {
+                        timings.DepthTestTicks += Stopwatch.GetTimestamp() - depthTestStart;
+                    }
+
                     counters?.RecordDepthRejected();
                     w0 += w0StepX;
                     w1 += w1StepX;
@@ -2683,6 +2983,12 @@ public static class GxFifoSoftwareRenderer
                     continue;
                 }
 
+                if (timings is not null)
+                {
+                    timings.DepthTestTicks += Stopwatch.GetTimestamp() - depthTestStart;
+                }
+
+                long tevTextureStart = timings is null ? 0 : Stopwatch.GetTimestamp();
                 byte r = InterpolateByte(a.R, b.R, c.R, aWeight, bWeight, cWeight);
                 byte g = InterpolateByte(a.G, b.G, c.G, aWeight, bWeight, cWeight);
                 byte bValue = InterpolateByte(a.B, b.B, c.B, aWeight, bWeight, cWeight);
@@ -2691,17 +2997,35 @@ public static class GxFifoSoftwareRenderer
                 byte rasterG = g;
                 byte rasterB = bValue;
                 byte rasterA = sourceAlpha;
-                if (!state.TryEvaluateTevStages(memory, a, b, c, aWeight, bWeight, cWeight, rasterR, rasterG, rasterB, rasterA, out r, out g, out bValue, out sourceAlpha)
-                    && canSampleTexture)
+                bool tevEvaluated = false;
+                if (canEvaluateSingleTevStageFast)
                 {
-                    float perspectiveWeight = a.InvW * aWeight + b.InvW * bWeight + c.InvW * cWeight;
-                    float s = aTexS * aWeight + bTexS * bWeight + cTexS * cWeight;
-                    float t = aTexT * aWeight + bTexT * bWeight + cTexT * cWeight;
-                    if (MathF.Abs(perspectiveWeight) > 0.000001f)
+                    bool hasFastTexCoord = singleTevStageFast.Order.TextureEnabled && canSampleTexture;
+                    float fastTexS = 0;
+                    float fastTexT = 0;
+                    if (hasFastTexCoord && singleTevStageFast.TextureSampler.IsValid)
                     {
-                        s = (aTexS * a.InvW * aWeight + bTexS * b.InvW * bWeight + cTexS * c.InvW * cWeight) / perspectiveWeight;
-                        t = (aTexT * a.InvW * aWeight + bTexT * b.InvW * bWeight + cTexT * c.InvW * cWeight) / perspectiveWeight;
+                        InterpolateTexCoordValues(a, b, c, aWeight, bWeight, cWeight, aTexS, aTexT, bTexS, bTexT, cTexS, cTexT, out fastTexS, out fastTexT);
                     }
+
+                    singleTevStageFast.Evaluate(state, memory, a, b, c, aWeight, bWeight, cWeight, hasFastTexCoord, fastTexS, fastTexT, rasterR, rasterG, rasterB, rasterA, out r, out g, out bValue, out sourceAlpha, out bool usedDirectTextureSampler);
+                    fastPathCounters?.RecordSingleStageTevFastPixel(usedDirectTextureSampler);
+                    tevEvaluated = true;
+                }
+
+                if (!tevEvaluated)
+                {
+                    tevEvaluated = state.TryEvaluateTevStages(memory, a, b, c, aWeight, bWeight, cWeight, rasterR, rasterG, rasterB, rasterA, out r, out g, out bValue, out sourceAlpha);
+                    if (tevEvaluated)
+                    {
+                        fastPathCounters?.RecordGenericTevPixel();
+                    }
+                }
+
+                if (!tevEvaluated && canSampleTexture)
+                {
+                    fastPathCounters?.RecordLegacyTextureFallbackPixel();
+                    InterpolateTexCoordValues(a, b, c, aWeight, bWeight, cWeight, aTexS, aTexT, bTexS, bTexT, cTexS, cTexT, out float s, out float t);
 
                     if (state.TrySampleTexture(memory, textureMap, s, t, out byte sampledR, out byte sampledG, out byte sampledB, out byte sampledA))
                     {
@@ -2709,8 +3033,19 @@ public static class GxFifoSoftwareRenderer
                     }
                 }
 
+                if (timings is not null)
+                {
+                    timings.TevTextureTicks += Stopwatch.GetTimestamp() - tevTextureStart;
+                }
+
+                long alphaTestStart = timings is null ? 0 : Stopwatch.GetTimestamp();
                 if (!state.AlphaTestPasses(sourceAlpha))
                 {
+                    if (timings is not null)
+                    {
+                        timings.AlphaTestTicks += Stopwatch.GetTimestamp() - alphaTestStart;
+                    }
+
                     counters?.RecordAlphaRejected();
                     w0 += w0StepX;
                     w1 += w1StepX;
@@ -2718,6 +3053,12 @@ public static class GxFifoSoftwareRenderer
                     continue;
                 }
 
+                if (timings is not null)
+                {
+                    timings.AlphaTestTicks += Stopwatch.GetTimestamp() - alphaTestStart;
+                }
+
+                long blendWriteStart = timings is null ? 0 : Stopwatch.GetTimestamp();
                 if (state.ColorUpdateEnabled)
                 {
                     state.ApplyBlend(rgb, alpha, index, depthIndex, ref r, ref g, ref bValue, ref sourceAlpha);
@@ -2744,6 +3085,11 @@ public static class GxFifoSoftwareRenderer
                 }
 
                 wrotePixel = true;
+                if (timings is not null)
+                {
+                    timings.BlendWriteTicks += Stopwatch.GetTimestamp() - blendWriteStart;
+                }
+
                 w0 += w0StepX;
                 w1 += w1StepX;
                 w2 += w2StepX;
@@ -2753,7 +3099,7 @@ public static class GxFifoSoftwareRenderer
         return wrotePixel;
     }
 
-    private static bool FillNearClippedTriangleBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters)
+    private static bool FillNearClippedTriangleBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings, FastPathDiagnosticCounters? fastPathCounters = null)
     {
         if (!a.HasViewPosition || !b.HasViewPosition || !c.HasViewPosition)
         {
@@ -2763,9 +3109,9 @@ public static class GxFifoSoftwareRenderer
         List<GxVertex> clipped = ClipTriangleToNearPlane([a, b, c], state);
         return clipped.Count switch
         {
-            3 => FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[1], clipped[2], state, memory, ref rasterPixelsRemaining, counters),
-            4 => FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[1], clipped[2], state, memory, ref rasterPixelsRemaining, counters)
-                | FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[2], clipped[3], state, memory, ref rasterPixelsRemaining, counters),
+            3 => FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[1], clipped[2], state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters),
+            4 => FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[1], clipped[2], state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters)
+                | FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[2], clipped[3], state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters),
             _ => false,
         };
     }
@@ -2870,6 +3216,32 @@ public static class GxFifoSoftwareRenderer
         (byte)Math.Clamp((int)MathF.Round(Lerp(a, b, t)), 0, 255);
 
     private static float Lerp(float a, float b, float t) => a + (b - a) * t;
+
+    private static void InterpolateTexCoordValues(
+        GxVertex a,
+        GxVertex b,
+        GxVertex c,
+        float aWeight,
+        float bWeight,
+        float cWeight,
+        float aTexS,
+        float aTexT,
+        float bTexS,
+        float bTexT,
+        float cTexS,
+        float cTexT,
+        out float s,
+        out float t)
+    {
+        float perspectiveWeight = a.InvW * aWeight + b.InvW * bWeight + c.InvW * cWeight;
+        s = aTexS * aWeight + bTexS * bWeight + cTexS * cWeight;
+        t = aTexT * aWeight + bTexT * bWeight + cTexT * cWeight;
+        if (MathF.Abs(perspectiveWeight) > 0.000001f)
+        {
+            s = (aTexS * a.InvW * aWeight + bTexS * b.InvW * bWeight + cTexS * c.InvW * cWeight) / perspectiveWeight;
+            t = (aTexT * a.InvW * aWeight + bTexT * b.InvW * bWeight + cTexT * c.InvW * cWeight) / perspectiveWeight;
+        }
+    }
 
     private static void ApplyStage0Mode(GxTevStage0Mode mode, ref byte r, ref byte g, ref byte b, ref byte a, byte textureR, byte textureG, byte textureB, byte textureA)
     {
@@ -3575,15 +3947,15 @@ public static class GxFifoSoftwareRenderer
 
         public bool TryCopyEfb(GameCubeMemory? memory, byte[] rgb, byte[] alpha, int frameWidth, int frameHeight, bool clearAfterCopy = true)
         {
-            return TryCopyEfb(memory, rgb, alpha, depth: null, frameWidth, frameHeight, clearAfterCopy, out _);
+            return TryCopyEfb(memory, rgb, alpha, depth: null, frameWidth, frameHeight, clearAfterCopy, out _, counters: null);
         }
 
         public bool TryCopyEfb(GameCubeMemory? memory, byte[] rgb, byte[] alpha, int frameWidth, int frameHeight, bool clearAfterCopy, out DisplayCopyResult? displayCopy)
         {
-            return TryCopyEfb(memory, rgb, alpha, depth: null, frameWidth, frameHeight, clearAfterCopy, out displayCopy);
+            return TryCopyEfb(memory, rgb, alpha, depth: null, frameWidth, frameHeight, clearAfterCopy, out displayCopy, counters: null);
         }
 
-        public bool TryCopyEfb(GameCubeMemory? memory, byte[] rgb, byte[] alpha, float[]? depth, int frameWidth, int frameHeight, bool clearAfterCopy, out DisplayCopyResult? displayCopy)
+        public bool TryCopyEfb(GameCubeMemory? memory, byte[] rgb, byte[] alpha, float[]? depth, int frameWidth, int frameHeight, bool clearAfterCopy, out DisplayCopyResult? displayCopy, EfbCopyDiagnosticCounters? counters = null)
         {
             displayCopy = null;
             if (memory is null
@@ -3611,22 +3983,30 @@ public static class GxFifoSoftwareRenderer
                 if ((control & 0x4000) != 0)
                 {
                     DisplayCopyOptions options = GetDisplayCopyOptions(copyWidth, copyHeight, control);
-                    WriteEfbDisplayCopy(memory, destinationAddress, rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, options);
+                    long copyStart = counters is null ? 0 : Stopwatch.GetTimestamp();
+                    bool direct = WriteEfbDisplayCopy(memory, destinationAddress, rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, options);
+                    counters?.RecordDisplayCopy(Stopwatch.GetTimestamp() - copyStart, direct, copyWidth, copyHeight, options.DestinationWidth, options.DestinationHeight, options.YScale, options.VerticalFilter, options.Gamma);
                     displayCopy = new DisplayCopyResult(destinationAddress, options.DestinationWidth, options.DestinationHeight, FramebufferPixelFormat.Yuyv);
                 }
                 else
                 {
                     int destinationWidth = GetTextureCopyDestinationWidth(format, copyWidth);
+                    long copyStart = counters is null ? 0 : Stopwatch.GetTimestamp();
                     WriteEfbCopyTexture(memory, destinationAddress, rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, destinationWidth, format);
+                    counters?.RecordTextureCopy(Stopwatch.GetTimestamp() - copyStart, format);
                 }
 
                 if (clearAfterCopy && (control & 0x0800) != 0)
                 {
                     GetCopyClearColor(out byte clearR, out byte clearG, out byte clearB, out byte clearA);
+                    long clearStart = counters is null ? 0 : Stopwatch.GetTimestamp();
                     ClearEfbRegion(rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, clearR, clearG, clearB, clearA);
+                    counters?.RecordColorClear(Stopwatch.GetTimestamp() - clearStart);
                     if (depth is not null)
                     {
+                        long depthClearStart = counters is null ? 0 : Stopwatch.GetTimestamp();
                         ClearEfbDepthRegion(depth, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, GetCopyClearDepth());
+                        counters?.RecordDepthClear(Stopwatch.GetTimestamp() - depthClearStart);
                     }
                 }
 
@@ -3842,6 +4222,17 @@ public static class GxFifoSoftwareRenderer
             int destinationWidth,
             int format)
         {
+            if (format == 0
+                && sourceLeft >= 0
+                && sourceTop >= 0
+                && sourceLeft + copyWidth <= frameWidth
+                && sourceTop + copyHeight <= frameHeight
+                && (copyWidth & 1) == 0)
+            {
+                WriteEfbCopyTextureI4(memory, destinationAddress, rgb, frameWidth, sourceLeft, sourceTop, copyWidth, copyHeight, destinationWidth);
+                return;
+            }
+
             for (int y = 0; y < copyHeight; y++)
             {
                 for (int x = 0; x < copyWidth; x++)
@@ -3852,7 +4243,40 @@ public static class GxFifoSoftwareRenderer
             }
         }
 
-        private static void WriteEfbDisplayCopy(
+        private static void WriteEfbCopyTextureI4(
+            GameCubeMemory memory,
+            uint destinationAddress,
+            byte[] rgb,
+            int frameWidth,
+            int sourceLeft,
+            int sourceTop,
+            int copyWidth,
+            int copyHeight,
+            int destinationWidth)
+        {
+            int blockColumns = (destinationWidth + 7) / 8;
+            int blockRows = (copyHeight + 7) / 8;
+            byte[] output = new byte[checked(blockColumns * blockRows * 32)];
+            for (int y = 0; y < copyHeight; y++)
+            {
+                int sourceRgb = ((sourceTop + y) * frameWidth + sourceLeft) * 3;
+                int rowBlock = (y / 8) * blockColumns;
+                int rowInBlock = (y & 7) * 4;
+                for (int x = 0; x < copyWidth; x += 2)
+                {
+                    int rgb0 = sourceRgb + x * 3;
+                    int rgb1 = rgb0 + 3;
+                    int nibble0 = Luma(rgb[rgb0], rgb[rgb0 + 1], rgb[rgb0 + 2]) >> 4;
+                    int nibble1 = Luma(rgb[rgb1], rgb[rgb1 + 1], rgb[rgb1 + 2]) >> 4;
+                    int offset = (rowBlock + x / 8) * 32 + rowInBlock + (x & 7) / 2;
+                    output[offset] = (byte)((nibble0 << 4) | nibble1);
+                }
+            }
+
+            memory.Load(destinationAddress, output);
+        }
+
+        private static bool WriteEfbDisplayCopy(
             GameCubeMemory memory,
             uint destinationAddress,
             byte[] rgb,
@@ -3865,6 +4289,53 @@ public static class GxFifoSoftwareRenderer
             int copyHeight,
             DisplayCopyOptions options)
         {
+            if (!options.VerticalFilterEnabled
+                && options.DestinationWidth == copyWidth
+                && options.DestinationHeight == copyHeight
+                && sourceLeft >= 0
+                && sourceTop >= 0
+                && sourceLeft + copyWidth <= frameWidth
+                && sourceTop + copyHeight <= frameHeight)
+            {
+                WriteEfbDisplayCopyDirect(memory, destinationAddress, rgb, frameWidth, sourceLeft, sourceTop, copyWidth, copyHeight, options.Gamma);
+                return true;
+            }
+
+            if (options.VerticalFilterEnabled
+                && options.DestinationWidth == copyWidth
+                && options.DestinationHeight == copyHeight
+                && options.Gamma == 0
+                && sourceLeft >= 0
+                && sourceTop >= 0
+                && sourceLeft + copyWidth <= frameWidth
+                && sourceTop + copyHeight <= frameHeight)
+            {
+                if (IsSonicDisplayFilter(options.VerticalFilter))
+                {
+                    WriteEfbDisplayCopySonicFilter(memory, destinationAddress, rgb, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight);
+                    return false;
+                }
+
+                if (IsPikminDisplayFilter(options.VerticalFilter))
+                {
+                    WriteEfbDisplayCopyPikminFilter(memory, destinationAddress, rgb, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight);
+                    return false;
+                }
+            }
+
+            if (options.VerticalFilterEnabled
+                && options.DestinationWidth == copyWidth
+                && options.DestinationHeight == copyHeight
+                && sourceLeft >= 0
+                && sourceTop >= 0
+                && sourceLeft + copyWidth <= frameWidth
+                && sourceTop + copyHeight <= frameHeight)
+            {
+                WriteEfbDisplayCopyFilteredNoScale(memory, destinationAddress, rgb, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, options);
+                return false;
+            }
+
+            byte[] row = new byte[((options.DestinationWidth + 1) / 2) * 4];
             for (int y = 0; y < options.DestinationHeight; y++)
             {
                 for (int x = 0; x < options.DestinationWidth; x += 2)
@@ -3878,13 +4349,293 @@ public static class GxFifoSoftwareRenderer
                     }
                     RgbToYcbcr(r0, g0, b0, out byte y0, out byte cb0, out byte cr0);
                     RgbToYcbcr(r1, g1, b1, out byte y1, out byte cb1, out byte cr1);
-                    uint address = destinationAddress + (uint)((y * ((options.DestinationWidth + 1) / 2) + x / 2) * 4);
-                    memory.Write8(address, y0);
-                    memory.Write8(address + 1, (byte)((cb0 + cb1 + 1) / 2));
-                    memory.Write8(address + 2, y1);
-                    memory.Write8(address + 3, (byte)((cr0 + cr1 + 1) / 2));
+                    int rowOffset = (x / 2) * 4;
+                    row[rowOffset] = y0;
+                    row[rowOffset + 1] = (byte)((cb0 + cb1 + 1) / 2);
+                    row[rowOffset + 2] = y1;
+                    row[rowOffset + 3] = (byte)((cr0 + cr1 + 1) / 2);
                 }
+
+                memory.Load(destinationAddress + (uint)(y * row.Length), row);
             }
+
+            return false;
+        }
+
+        private static void WriteEfbDisplayCopyDirect(
+            GameCubeMemory memory,
+            uint destinationAddress,
+            byte[] rgb,
+            int frameWidth,
+            int sourceLeft,
+            int sourceTop,
+            int width,
+            int height,
+            int gamma)
+        {
+            int destinationStridePairs = (width + 1) / 2;
+            byte[] row = new byte[destinationStridePairs * 4];
+            for (int y = 0; y < height; y++)
+            {
+                int sourcePixel = (sourceTop + y) * frameWidth + sourceLeft;
+                for (int x = 0; x < width; x += 2)
+                {
+                    int pixel0 = sourcePixel + x;
+                    int pixel1 = sourcePixel + Math.Min(x + 1, width - 1);
+                    int rgb0 = pixel0 * 3;
+                    int rgb1 = pixel1 * 3;
+                    byte r0 = rgb[rgb0];
+                    byte g0 = rgb[rgb0 + 1];
+                    byte b0 = rgb[rgb0 + 2];
+                    byte r1 = rgb[rgb1];
+                    byte g1 = rgb[rgb1 + 1];
+                    byte b1 = rgb[rgb1 + 2];
+                    if (gamma != 0)
+                    {
+                        ApplyCopyGamma(gamma, ref r0, ref g0, ref b0);
+                        ApplyCopyGamma(gamma, ref r1, ref g1, ref b1);
+                    }
+
+                    RgbToYcbcr(r0, g0, b0, out byte y0, out byte cb0, out byte cr0);
+                    RgbToYcbcr(r1, g1, b1, out byte y1, out byte cb1, out byte cr1);
+                    int rowOffset = (x / 2) * 4;
+                    row[rowOffset] = y0;
+                    row[rowOffset + 1] = (byte)((cb0 + cb1 + 1) / 2);
+                    row[rowOffset + 2] = y1;
+                    row[rowOffset + 3] = (byte)((cr0 + cr1 + 1) / 2);
+                }
+
+                memory.Load(destinationAddress + (uint)(y * row.Length), row);
+            }
+        }
+
+        private static bool IsSonicDisplayFilter(int[] filter) =>
+            filter.Length == 7
+            && filter[0] == 8
+            && filter[1] == 8
+            && filter[2] == 10
+            && filter[3] == 12
+            && filter[4] == 10
+            && filter[5] == 8
+            && filter[6] == 8;
+
+        private static bool IsPikminDisplayFilter(int[] filter) =>
+            filter.Length == 7
+            && filter[0] == 5
+            && filter[1] == 6
+            && filter[2] == 14
+            && filter[3] == 14
+            && filter[4] == 14
+            && filter[5] == 6
+            && filter[6] == 5;
+
+        private static void WriteEfbDisplayCopySonicFilter(
+            GameCubeMemory memory,
+            uint destinationAddress,
+            byte[] rgb,
+            int frameWidth,
+            int frameHeight,
+            int sourceLeft,
+            int sourceTop,
+            int width,
+            int height)
+        {
+            int destinationStridePairs = (width + 1) / 2;
+            byte[] row = new byte[destinationStridePairs * 4];
+            Span<int> tapRows = stackalloc int[7];
+            for (int y = 0; y < height; y++)
+            {
+                for (int tap = 0; tap < 7; tap++)
+                {
+                    int tapY = Math.Clamp(sourceTop + y + tap - 3, 0, frameHeight - 1);
+                    tapRows[tap] = (tapY * frameWidth + sourceLeft) * 3;
+                }
+
+                for (int x = 0; x < width; x += 2)
+                {
+                    SampleSonicFilterPixel(rgb, tapRows, x, out byte r0, out byte g0, out byte b0);
+                    SampleSonicFilterPixel(rgb, tapRows, Math.Min(x + 1, width - 1), out byte r1, out byte g1, out byte b1);
+                    RgbToYcbcr(r0, g0, b0, out byte y0, out byte cb0, out byte cr0);
+                    RgbToYcbcr(r1, g1, b1, out byte y1, out byte cb1, out byte cr1);
+                    int rowOffset = (x / 2) * 4;
+                    row[rowOffset] = y0;
+                    row[rowOffset + 1] = (byte)((cb0 + cb1 + 1) / 2);
+                    row[rowOffset + 2] = y1;
+                    row[rowOffset + 3] = (byte)((cr0 + cr1 + 1) / 2);
+                }
+
+                memory.Load(destinationAddress + (uint)(y * row.Length), row);
+            }
+        }
+
+        private static void SampleSonicFilterPixel(byte[] rgb, ReadOnlySpan<int> tapRows, int x, out byte r, out byte g, out byte b)
+        {
+            int xOffset = x * 3;
+            int o0 = tapRows[0] + xOffset;
+            int o1 = tapRows[1] + xOffset;
+            int o2 = tapRows[2] + xOffset;
+            int o3 = tapRows[3] + xOffset;
+            int o4 = tapRows[4] + xOffset;
+            int o5 = tapRows[5] + xOffset;
+            int o6 = tapRows[6] + xOffset;
+            r = (byte)((rgb[o0] * 8 + rgb[o1] * 8 + rgb[o2] * 10 + rgb[o3] * 12 + rgb[o4] * 10 + rgb[o5] * 8 + rgb[o6] * 8 + 32) >> 6);
+            g = (byte)((rgb[o0 + 1] * 8 + rgb[o1 + 1] * 8 + rgb[o2 + 1] * 10 + rgb[o3 + 1] * 12 + rgb[o4 + 1] * 10 + rgb[o5 + 1] * 8 + rgb[o6 + 1] * 8 + 32) >> 6);
+            b = (byte)((rgb[o0 + 2] * 8 + rgb[o1 + 2] * 8 + rgb[o2 + 2] * 10 + rgb[o3 + 2] * 12 + rgb[o4 + 2] * 10 + rgb[o5 + 2] * 8 + rgb[o6 + 2] * 8 + 32) >> 6);
+        }
+
+        private static void WriteEfbDisplayCopyPikminFilter(
+            GameCubeMemory memory,
+            uint destinationAddress,
+            byte[] rgb,
+            int frameWidth,
+            int frameHeight,
+            int sourceLeft,
+            int sourceTop,
+            int width,
+            int height)
+        {
+            int destinationStridePairs = (width + 1) / 2;
+            byte[] row = new byte[destinationStridePairs * 4];
+            Span<int> tapRows = stackalloc int[7];
+            for (int y = 0; y < height; y++)
+            {
+                for (int tap = 0; tap < 7; tap++)
+                {
+                    int tapY = Math.Clamp(sourceTop + y + tap - 3, 0, frameHeight - 1);
+                    tapRows[tap] = (tapY * frameWidth + sourceLeft) * 3;
+                }
+
+                for (int x = 0; x < width; x += 2)
+                {
+                    SamplePikminFilterPixel(rgb, tapRows, x, out byte r0, out byte g0, out byte b0);
+                    SamplePikminFilterPixel(rgb, tapRows, Math.Min(x + 1, width - 1), out byte r1, out byte g1, out byte b1);
+                    RgbToYcbcr(r0, g0, b0, out byte y0, out byte cb0, out byte cr0);
+                    RgbToYcbcr(r1, g1, b1, out byte y1, out byte cb1, out byte cr1);
+                    int rowOffset = (x / 2) * 4;
+                    row[rowOffset] = y0;
+                    row[rowOffset + 1] = (byte)((cb0 + cb1 + 1) / 2);
+                    row[rowOffset + 2] = y1;
+                    row[rowOffset + 3] = (byte)((cr0 + cr1 + 1) / 2);
+                }
+
+                memory.Load(destinationAddress + (uint)(y * row.Length), row);
+            }
+        }
+
+        private static void SamplePikminFilterPixel(byte[] rgb, ReadOnlySpan<int> tapRows, int x, out byte r, out byte g, out byte b)
+        {
+            int xOffset = x * 3;
+            int o0 = tapRows[0] + xOffset;
+            int o1 = tapRows[1] + xOffset;
+            int o2 = tapRows[2] + xOffset;
+            int o3 = tapRows[3] + xOffset;
+            int o4 = tapRows[4] + xOffset;
+            int o5 = tapRows[5] + xOffset;
+            int o6 = tapRows[6] + xOffset;
+            r = (byte)((rgb[o0] * 5 + rgb[o1] * 6 + rgb[o2] * 14 + rgb[o3] * 14 + rgb[o4] * 14 + rgb[o5] * 6 + rgb[o6] * 5 + 32) >> 6);
+            g = (byte)((rgb[o0 + 1] * 5 + rgb[o1 + 1] * 6 + rgb[o2 + 1] * 14 + rgb[o3 + 1] * 14 + rgb[o4 + 1] * 14 + rgb[o5 + 1] * 6 + rgb[o6 + 1] * 5 + 32) >> 6);
+            b = (byte)((rgb[o0 + 2] * 5 + rgb[o1 + 2] * 6 + rgb[o2 + 2] * 14 + rgb[o3 + 2] * 14 + rgb[o4 + 2] * 14 + rgb[o5 + 2] * 6 + rgb[o6 + 2] * 5 + 32) >> 6);
+        }
+
+        private static void WriteEfbDisplayCopyFilteredNoScale(
+            GameCubeMemory memory,
+            uint destinationAddress,
+            byte[] rgb,
+            int frameWidth,
+            int frameHeight,
+            int sourceLeft,
+            int sourceTop,
+            int width,
+            int height,
+            DisplayCopyOptions options)
+        {
+            int destinationStridePairs = (width + 1) / 2;
+            byte[] row = new byte[destinationStridePairs * 4];
+            int[] tapRowOffsets = new int[7];
+            int[] tapWeights = new int[7];
+            int filterWeightSum = 0;
+            for (int index = 0; index < options.VerticalFilter.Length; index++)
+            {
+                filterWeightSum += options.VerticalFilter[index];
+            }
+
+            for (int y = 0; y < height; y++)
+            {
+                tapRowOffsets[0] = ((sourceTop + y) * frameWidth + sourceLeft) * 3;
+                int activeTaps = 0;
+                for (int tap = 0; tap < options.VerticalFilter.Length; tap++)
+                {
+                    int weight = options.VerticalFilter[tap];
+                    if (weight == 0)
+                    {
+                        continue;
+                    }
+
+                    int tapY = Math.Clamp(sourceTop + y + tap - 3, 0, frameHeight - 1);
+                    tapRowOffsets[activeTaps] = (tapY * frameWidth + sourceLeft) * 3;
+                    tapWeights[activeTaps] = weight;
+                    activeTaps++;
+                }
+
+                for (int x = 0; x < width; x += 2)
+                {
+                    SampleFilteredNoScalePixel(rgb, tapRowOffsets, tapWeights, activeTaps, filterWeightSum, x, out byte r0, out byte g0, out byte b0);
+                    SampleFilteredNoScalePixel(rgb, tapRowOffsets, tapWeights, activeTaps, filterWeightSum, Math.Min(x + 1, width - 1), out byte r1, out byte g1, out byte b1);
+                    if (options.Gamma != 0)
+                    {
+                        ApplyCopyGamma(options.Gamma, ref r0, ref g0, ref b0);
+                        ApplyCopyGamma(options.Gamma, ref r1, ref g1, ref b1);
+                    }
+
+                    RgbToYcbcr(r0, g0, b0, out byte y0, out byte cb0, out byte cr0);
+                    RgbToYcbcr(r1, g1, b1, out byte y1, out byte cb1, out byte cr1);
+                    int rowOffset = (x / 2) * 4;
+                    row[rowOffset] = y0;
+                    row[rowOffset + 1] = (byte)((cb0 + cb1 + 1) / 2);
+                    row[rowOffset + 2] = y1;
+                    row[rowOffset + 3] = (byte)((cr0 + cr1 + 1) / 2);
+                }
+
+                memory.Load(destinationAddress + (uint)(y * row.Length), row);
+            }
+        }
+
+        private static void SampleFilteredNoScalePixel(
+            byte[] rgb,
+            ReadOnlySpan<int> tapRowOffsets,
+            ReadOnlySpan<int> tapWeights,
+            int activeTaps,
+            int weightSum,
+            int x,
+            out byte r,
+            out byte g,
+            out byte b)
+        {
+            if (weightSum == 0)
+            {
+                int rgbOffset = tapRowOffsets[0] + x * 3;
+                r = rgb[rgbOffset];
+                g = rgb[rgbOffset + 1];
+                b = rgb[rgbOffset + 2];
+                return;
+            }
+
+            int accumR = 0;
+            int accumG = 0;
+            int accumB = 0;
+            int xOffset = x * 3;
+            for (int tap = 0; tap < activeTaps; tap++)
+            {
+                int weight = tapWeights[tap];
+                int rgbOffset = tapRowOffsets[tap] + xOffset;
+                accumR += rgb[rgbOffset] * weight;
+                accumG += rgb[rgbOffset + 1] * weight;
+                accumB += rgb[rgbOffset + 2] * weight;
+            }
+
+            r = Clamp8((accumR + weightSum / 2) / weightSum);
+            g = Clamp8((accumG + weightSum / 2) / weightSum);
+            b = Clamp8((accumB + weightSum / 2) / weightSum);
         }
 
         private static void SampleDisplayCopyPixel(
@@ -3983,6 +4734,27 @@ public static class GxFifoSoftwareRenderer
 
         private static void ClearEfbRegion(byte[] rgb, byte[] alpha, int frameWidth, int frameHeight, int left, int top, int width, int height, byte clearR, byte clearG, byte clearB, byte clearA)
         {
+            int clampedLeft = Math.Clamp(left, 0, frameWidth);
+            int clampedTop = Math.Clamp(top, 0, frameHeight);
+            int clampedRight = Math.Clamp(left + width, 0, frameWidth);
+            int clampedBottom = Math.Clamp(top + height, 0, frameHeight);
+            int clampedWidth = clampedRight - clampedLeft;
+            if (clampedWidth <= 0 || clampedBottom <= clampedTop)
+            {
+                return;
+            }
+
+            if (clearR == clearG && clearG == clearB)
+            {
+                for (int py = clampedTop; py < clampedBottom; py++)
+                {
+                    rgb.AsSpan((py * frameWidth + clampedLeft) * 3, clampedWidth * 3).Fill(clearR);
+                    alpha.AsSpan(py * frameWidth + clampedLeft, clampedWidth).Fill(clearA);
+                }
+
+                return;
+            }
+
             for (int y = 0; y < height; y++)
             {
                 int py = top + y;
@@ -4011,24 +4783,19 @@ public static class GxFifoSoftwareRenderer
 
         private static void ClearEfbDepthRegion(float[] depth, int frameWidth, int frameHeight, int left, int top, int width, int height, float clearDepth)
         {
-            for (int y = 0; y < height; y++)
+            int clampedLeft = Math.Clamp(left, 0, frameWidth);
+            int clampedTop = Math.Clamp(top, 0, frameHeight);
+            int clampedRight = Math.Clamp(left + width, 0, frameWidth);
+            int clampedBottom = Math.Clamp(top + height, 0, frameHeight);
+            int clampedWidth = clampedRight - clampedLeft;
+            if (clampedWidth <= 0 || clampedBottom <= clampedTop)
             {
-                int py = top + y;
-                if (py < 0 || py >= frameHeight)
-                {
-                    continue;
-                }
+                return;
+            }
 
-                for (int x = 0; x < width; x++)
-                {
-                    int px = left + x;
-                    if (px < 0 || px >= frameWidth)
-                    {
-                        continue;
-                    }
-
-                    depth[py * frameWidth + px] = clearDepth;
-                }
+            for (int py = clampedTop; py < clampedBottom; py++)
+            {
+                depth.AsSpan(py * frameWidth + clampedLeft, clampedWidth).Fill(clearDepth);
             }
         }
 
@@ -4982,6 +5749,409 @@ public static class GxFifoSoftwareRenderer
             };
         }
 
+        public bool TryCreateSingleTevStageFastEvaluator(GameCubeMemory? memory, out SingleTevStageFastEvaluator evaluator)
+        {
+            evaluator = default;
+            if (TevStageCount != 1
+                || TryGetIndirectTevStage(0, out _))
+            {
+                return false;
+            }
+
+            bool hasColorEnv = TryGetTevColorEnv(0, out uint colorEnv);
+            bool hasAlphaEnv = TryGetTevAlphaEnv(0, out uint alphaEnv);
+            if ((!hasColorEnv && !hasAlphaEnv)
+                || (hasColorEnv && (TevDestination(colorEnv) != 0 || !CanFastEvaluateTevColorEnv(colorEnv)))
+                || (hasAlphaEnv && (TevDestination(alphaEnv) != 0 || !CanFastEvaluateTevAlphaEnv(alphaEnv))))
+            {
+                return false;
+            }
+
+            TevOrder order = GetTevOrder(0);
+            TryCreateFastTextureSampler(memory, order.TexMap, out FastTextureSampler textureSampler, out string? textureSamplerFallbackReason);
+            int textureFormat = order.TexMap is >= 0 and < 8 ? _textures[order.TexMap].Format : -1;
+            bool textureFallbackIsOne = !order.TextureEnabled
+                || order.TexMap is < 0 or >= 8
+                || textureSamplerFallbackReason == "incomplete-texture";
+            evaluator = new SingleTevStageFastEvaluator(
+                order,
+                hasColorEnv,
+                colorEnv,
+                hasAlphaEnv,
+                alphaEnv,
+                GetTevSwapTable(TevRasterSwapTable(alphaEnv)),
+                GetTevSwapTable(TevTextureSwapTable(alphaEnv)),
+                GetKonstColor(0),
+                GetKonstAlpha(0),
+                textureSampler,
+                textureFormat,
+                textureFallbackIsOne,
+                textureSamplerFallbackReason);
+            return true;
+        }
+
+        private bool TryCreateFastTextureSampler(GameCubeMemory? memory, int textureMap, out FastTextureSampler sampler, out string? fallbackReason)
+        {
+            sampler = default;
+            fallbackReason = null;
+            if (memory is null && MemorySnapshots is null)
+            {
+                fallbackReason = "no-memory";
+                return false;
+            }
+
+            if (textureMap is < 0 or >= 8)
+            {
+                fallbackReason = "invalid-texture-map";
+                return false;
+            }
+
+            GxTextureState texture = _textures[textureMap];
+            int sourceByteLength = TextureSourceByteLength(texture.Width, texture.Height, texture.Format);
+            if (!texture.HasImage0
+                || !texture.HasImage3
+                || texture.Width <= 0
+                || texture.Height <= 0
+                || sourceByteLength <= 0)
+            {
+                fallbackReason = "incomplete-texture";
+                return false;
+            }
+
+            byte[]? sourceBytes = null;
+            int sourceOffset;
+            if (MemorySnapshots is not null)
+            {
+                if (!MemorySnapshots.TryGetRange(CurrentFifoOffset, texture.SourceAddress, sourceByteLength, out sourceBytes, out sourceOffset))
+                {
+                    fallbackReason = "snapshot-texture-range";
+                    return false;
+                }
+            }
+            else if (memory is null
+                || !GameCubeAddress.TryTranslateMainRam(texture.SourceAddress, out sourceOffset)
+                || sourceOffset > GameCubeAddress.MainRamSize - sourceByteLength)
+            {
+                fallbackReason = "texture-range";
+                return false;
+            }
+
+            int paletteSourceOffset = -1;
+            int paletteEntries = 0;
+            int paletteFormat = texture.TlutFormat;
+            byte[]? paletteBytes = null;
+            if (texture.Format is 8 or 9)
+            {
+                int requiredEntries = texture.Format == 8 ? 16 : 256;
+                if (!texture.HasTlut
+                    || !_tlutLoads.TryGetValue(texture.TlutBaseIndex, out GxTlutLoadState tlut)
+                    || tlut.Entries < requiredEntries)
+                {
+                    fallbackReason = "palette-range";
+                    return false;
+                }
+
+                int paletteByteLength = requiredEntries * sizeof(ushort);
+                if (MemorySnapshots is not null)
+                {
+                    if (!MemorySnapshots.TryGetRange(CurrentFifoOffset, tlut.SourceAddress, paletteByteLength, out paletteBytes, out paletteSourceOffset))
+                    {
+                        fallbackReason = "snapshot-palette-range";
+                        return false;
+                    }
+                }
+                else if (memory is null
+                    || !GameCubeAddress.TryTranslateMainRam(tlut.SourceAddress, out paletteSourceOffset)
+                    || paletteSourceOffset > GameCubeAddress.MainRamSize - paletteByteLength)
+                {
+                    fallbackReason = "palette-range";
+                    return false;
+                }
+
+                paletteEntries = tlut.Entries;
+            }
+
+            sampler = new FastTextureSampler(
+                sourceBytes,
+                sourceOffset,
+                texture.Width,
+                texture.Height,
+                texture.Format,
+                texture.WrapS,
+                texture.WrapT,
+                texture.MagFilter,
+                paletteBytes,
+                paletteSourceOffset,
+                paletteEntries,
+                paletteFormat);
+            return true;
+        }
+
+        public readonly record struct SingleTevStageFastEvaluator(
+            TevOrder Order,
+            bool HasColorEnv,
+            uint ColorEnv,
+            bool HasAlphaEnv,
+            uint AlphaEnv,
+            TevSwapTable RasterSwap,
+            TevSwapTable TextureSwap,
+            GxTevColor KonstColor,
+            int KonstAlpha,
+            FastTextureSampler TextureSampler,
+            int TextureFormat,
+            bool TextureFallbackIsOne,
+            string? TextureSamplerFallbackReason)
+        {
+            public void Evaluate(
+                GxVertexState state,
+                GameCubeMemory? memory,
+                GxVertex a,
+                GxVertex b,
+                GxVertex c,
+                float aWeight,
+                float bWeight,
+                float cWeight,
+                bool hasTexCoord,
+                float texS,
+                float texT,
+                byte rasterR,
+                byte rasterG,
+                byte rasterB,
+                byte rasterA,
+                out byte r,
+                out byte g,
+                out byte bValue,
+                out byte alpha,
+                out bool usedDirectTextureSampler)
+            {
+                r = rasterR;
+                g = rasterG;
+                bValue = rasterB;
+                alpha = rasterA;
+                usedDirectTextureSampler = TextureSampler.IsValid && Order.TextureEnabled && hasTexCoord;
+
+                GxTevColor previous = new(rasterR, rasterG, rasterB, rasterA);
+                IndirectOffsetState indirectOffset = default;
+                GxTevColor texture = usedDirectTextureSampler
+                    ? TextureSampler.Sample(memory, texS, texT)
+                    : TextureFallbackIsOne
+                        || (Order.TextureEnabled && !hasTexCoord)
+                        ? GxTevColor.One
+                    : state.SampleTevTexture(memory, 0, Order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset);
+                GxTevColor raster = SelectTevRasterColor(0, Order, previous, indirectOffset);
+                raster = ApplyTevSwap(raster, RasterSwap);
+                texture = ApplyTevSwap(texture, TextureSwap);
+
+                if (HasColorEnv)
+                {
+                    EvaluateTevColorFast(ColorEnv, previous, texture, raster, KonstColor, out r, out g, out bValue);
+                }
+
+                if (HasAlphaEnv)
+                {
+                    alpha = EvaluateTevAlphaFast(AlphaEnv, previous, texture, raster, KonstAlpha);
+                }
+            }
+        }
+
+        public readonly record struct FastTextureSampler(
+            byte[]? SourceBytes,
+            int SourceOffset,
+            int Width,
+            int Height,
+            int Format,
+            int WrapS,
+            int WrapT,
+            int MagFilter,
+            byte[]? PaletteBytes,
+            int PaletteSourceOffset,
+            int PaletteEntries,
+            int PaletteFormat)
+        {
+            public bool IsValid => Width > 0 && Height > 0;
+
+            public GxTevColor Sample(GameCubeMemory? memory, float s, float t)
+            {
+                ReadOnlySpan<byte> textureBytes = SourceBytes ?? memory!.MainRam.Span;
+                ReadOnlySpan<byte> paletteBytes = PaletteBytes ?? memory!.MainRam.Span;
+                if (MagFilter == 1)
+                {
+                    SampleCoordinate sampleS = TextureCoordinateToLinearSample(s, Width, WrapS);
+                    SampleCoordinate sampleT = TextureCoordinateToLinearSample(t, Height, WrapT);
+                    GxTevColor c00 = SampleTexel(textureBytes, paletteBytes, sampleS.Index0, sampleT.Index0);
+                    GxTevColor c10 = SampleTexel(textureBytes, paletteBytes, sampleS.Index1, sampleT.Index0);
+                    GxTevColor c01 = SampleTexel(textureBytes, paletteBytes, sampleS.Index0, sampleT.Index1);
+                    GxTevColor c11 = SampleTexel(textureBytes, paletteBytes, sampleS.Index1, sampleT.Index1);
+                    return new GxTevColor(
+                        BilinearByte(c00.R, c10.R, c01.R, c11.R, sampleS.Fraction, sampleT.Fraction),
+                        BilinearByte(c00.G, c10.G, c01.G, c11.G, sampleS.Fraction, sampleT.Fraction),
+                        BilinearByte(c00.B, c10.B, c01.B, c11.B, sampleS.Fraction, sampleT.Fraction),
+                        BilinearByte(c00.A, c10.A, c01.A, c11.A, sampleS.Fraction, sampleT.Fraction));
+                }
+
+                int x = TextureCoordinateToIndex(s, Width, WrapS);
+                int y = TextureCoordinateToIndex(t, Height, WrapT);
+                return SampleTexel(textureBytes, paletteBytes, x, y);
+            }
+
+            private GxTevColor SampleTexel(ReadOnlySpan<byte> textureBytes, ReadOnlySpan<byte> paletteBytes, int x, int y) =>
+                Format switch
+                {
+                    0 => SampleI4(textureBytes, x, y),
+                    1 => SampleI8(textureBytes, x, y),
+                    2 => SampleIA4(textureBytes, x, y),
+                    3 => SampleIA8(textureBytes, x, y),
+                    4 => SampleRgb565(textureBytes, x, y),
+                    5 => SampleRgb5A3(textureBytes, x, y),
+                    6 => SampleRgba8(textureBytes, x, y),
+                    8 => SampleCI4(textureBytes, paletteBytes, x, y),
+                    9 => SampleCI8(textureBytes, paletteBytes, x, y),
+                    14 => SampleCmpr(textureBytes, x, y),
+                    _ => GxTevColor.One,
+                };
+
+            private GxTevColor SampleI4(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                int blockColumns = (Width + 7) / 8;
+                int block = (y / 8) * blockColumns + x / 8;
+                int offset = block * 32 + (y & 7) * 4 + (x & 7) / 2;
+                byte packed = ram[SourceOffset + offset];
+                int nibble = (x & 1) == 0 ? packed >> 4 : packed & 0x0F;
+                byte intensity = Expand4(nibble);
+                return new GxTevColor(intensity, intensity, intensity, 255);
+            }
+
+            private GxTevColor SampleI8(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                int blockColumns = (Width + 7) / 8;
+                int block = (y / 4) * blockColumns + x / 8;
+                int offset = block * 32 + (y & 3) * 8 + (x & 7);
+                byte intensity = ram[SourceOffset + offset];
+                return new GxTevColor(intensity, intensity, intensity, 255);
+            }
+
+            private GxTevColor SampleIA4(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                int blockColumns = (Width + 7) / 8;
+                int block = (y / 4) * blockColumns + x / 8;
+                int offset = block * 32 + (y & 3) * 8 + (x & 7);
+                byte packed = ram[SourceOffset + offset];
+                byte intensity = Expand4(packed & 0x0F);
+                return new GxTevColor(intensity, intensity, intensity, Expand4(packed >> 4));
+            }
+
+            private GxTevColor SampleIA8(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                ushort value = ReadTiled16(ram, x, y);
+                byte intensity = (byte)value;
+                return new GxTevColor(intensity, intensity, intensity, (byte)(value >> 8));
+            }
+
+            private GxTevColor SampleRgb565(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                DecodeRgb565(ReadTiled16(ram, x, y), out byte r, out byte g, out byte b);
+                return new GxTevColor(r, g, b, 255);
+            }
+
+            private GxTevColor SampleRgb5A3(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                DecodeRgb5A3(ReadTiled16(ram, x, y), out byte r, out byte g, out byte b, out byte a);
+                return new GxTevColor(r, g, b, a);
+            }
+
+            private GxTevColor SampleRgba8(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                int blockColumns = (Width + 3) / 4;
+                int block = (y / 4) * blockColumns + x / 4;
+                int texel = (y & 3) * 4 + (x & 3);
+                int offset = SourceOffset + block * 64 + texel * 2;
+                return new GxTevColor(ram[offset + 1], ram[offset + 32], ram[offset + 33], ram[offset]);
+            }
+
+            private GxTevColor SampleCI4(ReadOnlySpan<byte> ram, ReadOnlySpan<byte> paletteBytes, int x, int y)
+            {
+                int blockColumns = (Width + 7) / 8;
+                int block = (y / 8) * blockColumns + x / 8;
+                int offset = block * 32 + (y & 7) * 4 + (x & 7) / 2;
+                byte packed = ram[SourceOffset + offset];
+                int index = (x & 1) == 0 ? packed >> 4 : packed & 0x0F;
+                return SamplePalette(paletteBytes, index);
+            }
+
+            private GxTevColor SampleCI8(ReadOnlySpan<byte> ram, ReadOnlySpan<byte> paletteBytes, int x, int y)
+            {
+                int blockColumns = (Width + 7) / 8;
+                int block = (y / 4) * blockColumns + x / 8;
+                int offset = block * 32 + (y & 3) * 8 + (x & 7);
+                return SamplePalette(paletteBytes, ram[SourceOffset + offset]);
+            }
+
+            private GxTevColor SamplePalette(ReadOnlySpan<byte> ram, int index)
+            {
+                if (PaletteSourceOffset < 0 || index >= PaletteEntries)
+                {
+                    return GxTevColor.One;
+                }
+
+                ushort value = ReadUInt16(ram, PaletteSourceOffset + index * sizeof(ushort));
+                switch (PaletteFormat)
+                {
+                    case 0:
+                    {
+                        byte intensity = (byte)value;
+                        return new GxTevColor(intensity, intensity, intensity, (byte)(value >> 8));
+                    }
+                    case 1:
+                        DecodeRgb565(value, out byte r, out byte g, out byte b);
+                        return new GxTevColor(r, g, b, 255);
+                    case 2:
+                        DecodeRgb5A3(value, out r, out g, out b, out byte a);
+                        return new GxTevColor(r, g, b, a);
+                    default:
+                        return GxTevColor.One;
+                }
+            }
+
+            private GxTevColor SampleCmpr(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                int blockColumns = (Width + 7) / 8;
+                int block = (y / 8) * blockColumns + x / 8;
+                int subBlock = ((y >> 2) & 1) * 2 + ((x >> 2) & 1);
+                int offset = SourceOffset + block * 32 + subBlock * 8;
+                ushort color0 = ReadUInt16(ram, offset);
+                ushort color1 = ReadUInt16(ram, offset + 2);
+                uint selectors = ReadUInt32(ram, offset + 4);
+                int selectorShift = 30 - 2 * (((y & 3) * 4) + (x & 3));
+                int selector = (int)((selectors >> selectorShift) & 3);
+
+                DecodeRgb565(color0, out byte r0, out byte g0, out byte b0);
+                DecodeRgb565(color1, out byte r1, out byte g1, out byte b1);
+                return selector switch
+                {
+                    0 => new GxTevColor(r0, g0, b0, 255),
+                    1 => new GxTevColor(r1, g1, b1, 255),
+                    2 when color0 > color1 => new GxTevColor((byte)((2 * r0 + r1) / 3), (byte)((2 * g0 + g1) / 3), (byte)((2 * b0 + b1) / 3), 255),
+                    3 when color0 > color1 => new GxTevColor((byte)((r0 + 2 * r1) / 3), (byte)((g0 + 2 * g1) / 3), (byte)((b0 + 2 * b1) / 3), 255),
+                    2 => new GxTevColor((byte)((r0 + r1) / 2), (byte)((g0 + g1) / 2), (byte)((b0 + b1) / 2), 255),
+                    _ => GxTevColor.Zero,
+                };
+            }
+
+            private ushort ReadTiled16(ReadOnlySpan<byte> ram, int x, int y)
+            {
+                int blockColumns = (Width + 3) / 4;
+                int block = (y / 4) * blockColumns + x / 4;
+                int offset = SourceOffset + block * 32 + ((y & 3) * 4 + (x & 3)) * 2;
+                return ReadUInt16(ram, offset);
+            }
+
+            private static ushort ReadUInt16(ReadOnlySpan<byte> ram, int offset) =>
+                (ushort)((ram[offset] << 8) | ram[offset + 1]);
+
+            private static uint ReadUInt32(ReadOnlySpan<byte> ram, int offset) =>
+                ((uint)ram[offset] << 24) | ((uint)ram[offset + 1] << 16) | ((uint)ram[offset + 2] << 8) | ram[offset + 3];
+        }
+
         public bool TryEvaluateTevStages(
             GameCubeMemory? memory,
             GxVertex a,
@@ -5740,13 +6910,15 @@ public static class GxFifoSoftwareRenderer
 
         private GxTevColor ApplyTevSwap(GxTevColor input, int table)
         {
-            TevSwapTable swap = GetTevSwapTable(table);
-            return new GxTevColor(
+            return ApplyTevSwap(input, GetTevSwapTable(table));
+        }
+
+        private static GxTevColor ApplyTevSwap(GxTevColor input, TevSwapTable swap) =>
+            new(
                 SwapComponent(input, swap.R),
                 SwapComponent(input, swap.G),
                 SwapComponent(input, swap.B),
                 SwapComponent(input, swap.A));
-        }
 
         private TevSwapTable GetTevSwapTable(int table)
         {
@@ -5833,6 +7005,73 @@ public static class GxFifoSoftwareRenderer
                 : ApplyTevArithmetic(env, a, b, c, d);
         }
 
+        private static byte EvaluateTevColorChannelFast(uint env, int channel, GxTevColor previous, GxTevColor texture, GxTevColor raster, GxTevColor konst)
+        {
+            GxTevColor a = ColorInputFast((int)((env >> 12) & 0xF), previous, texture, raster, konst);
+            GxTevColor b = ColorInputFast((int)((env >> 8) & 0xF), previous, texture, raster, konst);
+            GxTevColor c = ColorInputFast((int)((env >> 4) & 0xF), previous, texture, raster, konst);
+            GxTevColor d = ColorInputFast((int)(env & 0xF), previous, texture, raster, konst);
+            if (IsTevCompareOperation(env))
+            {
+                return ApplyTevColorCompare(env, channel, a, b, c, d);
+            }
+
+            return ApplyTevArithmetic(
+                env,
+                ColorComponent(a, channel),
+                ColorComponent(b, channel),
+                ColorComponent(c, channel),
+                ColorComponent(d, channel));
+        }
+
+        private static void EvaluateTevColorFast(uint env, GxTevColor previous, GxTevColor texture, GxTevColor raster, GxTevColor konst, out byte r, out byte g, out byte bValue)
+        {
+            GxTevColor a = ColorInputFast((int)((env >> 12) & 0xF), previous, texture, raster, konst);
+            GxTevColor b = ColorInputFast((int)((env >> 8) & 0xF), previous, texture, raster, konst);
+            GxTevColor c = ColorInputFast((int)((env >> 4) & 0xF), previous, texture, raster, konst);
+            GxTevColor d = ColorInputFast((int)(env & 0xF), previous, texture, raster, konst);
+            if (IsTevCompareOperation(env))
+            {
+                r = ApplyTevColorCompare(env, channel: 0, a, b, c, d);
+                g = ApplyTevColorCompare(env, channel: 1, a, b, c, d);
+                bValue = ApplyTevColorCompare(env, channel: 2, a, b, c, d);
+                return;
+            }
+
+            r = ApplyTevArithmetic(env, a.R, b.R, c.R, d.R);
+            g = ApplyTevArithmetic(env, a.G, b.G, c.G, d.G);
+            bValue = ApplyTevArithmetic(env, a.B, b.B, c.B, d.B);
+        }
+
+        private static byte EvaluateTevAlphaFast(uint env, GxTevColor previous, GxTevColor texture, GxTevColor raster, int konst)
+        {
+            int a = AlphaInputFast((int)((env >> 13) & 7), previous, texture, raster, konst);
+            int b = AlphaInputFast((int)((env >> 10) & 7), previous, texture, raster, konst);
+            int c = AlphaInputFast((int)((env >> 7) & 7), previous, texture, raster, konst);
+            int d = AlphaInputFast((int)((env >> 4) & 7), previous, texture, raster, konst);
+            return IsTevCompareOperation(env)
+                ? ApplyTevScalarCompare(env, a, b, c, d)
+                : ApplyTevArithmetic(env, a, b, c, d);
+        }
+
+        private static bool CanFastEvaluateTevColorEnv(uint env) =>
+            IsFastColorInput((int)((env >> 12) & 0xF))
+            && IsFastColorInput((int)((env >> 8) & 0xF))
+            && IsFastColorInput((int)((env >> 4) & 0xF))
+            && IsFastColorInput((int)(env & 0xF));
+
+        private static bool CanFastEvaluateTevAlphaEnv(uint env) =>
+            IsFastAlphaInput((int)((env >> 13) & 7))
+            && IsFastAlphaInput((int)((env >> 10) & 7))
+            && IsFastAlphaInput((int)((env >> 7) & 7))
+            && IsFastAlphaInput((int)((env >> 4) & 7));
+
+        private static bool IsFastColorInput(int selector) =>
+            selector is 0 or 1 or 8 or 9 or 10 or 11 or 12 or 13 or 14 or 15;
+
+        private static bool IsFastAlphaInput(int selector) =>
+            selector is 0 or 4 or 5 or 6 or 7;
+
         private static GxTevColor ColorInput(int selector, GxTevColor previous, GxTevColor[] registers, GxTevColor texture, GxTevColor raster, GxTevColor konst) =>
             selector switch
             {
@@ -5855,6 +7094,22 @@ public static class GxFifoSoftwareRenderer
                 _ => GxTevColor.Zero,
             };
 
+        private static GxTevColor ColorInputFast(int selector, GxTevColor previous, GxTevColor texture, GxTevColor raster, GxTevColor konst) =>
+            selector switch
+            {
+                0 => previous,
+                1 => ReplicateAlpha(previous.A),
+                8 => texture,
+                9 => ReplicateAlpha(texture.A),
+                10 => raster,
+                11 => ReplicateAlpha(raster.A),
+                12 => GxTevColor.One,
+                13 => GxTevColor.Half,
+                14 => konst,
+                15 => GxTevColor.Zero,
+                _ => GxTevColor.Zero,
+            };
+
         private static int AlphaInput(int selector, GxTevColor previous, GxTevColor[] registers, GxTevColor texture, GxTevColor raster, int konst) =>
             selector switch
             {
@@ -5862,6 +7117,17 @@ public static class GxFifoSoftwareRenderer
                 1 => registers[1].A,
                 2 => registers[2].A,
                 3 => registers[3].A,
+                4 => texture.A,
+                5 => raster.A,
+                6 => konst,
+                7 => 0,
+                _ => 0,
+            };
+
+        private static int AlphaInputFast(int selector, GxTevColor previous, GxTevColor texture, GxTevColor raster, int konst) =>
+            selector switch
+            {
+                0 => previous.A,
                 4 => texture.A,
                 5 => raster.A,
                 6 => konst,
@@ -5950,9 +7216,9 @@ public static class GxFifoSoftwareRenderer
         private static byte ClampTevResult(uint env, int value) =>
             (byte)Math.Clamp(((env >> 19) & 1) != 0 ? Math.Clamp(value, 0, 255) : value, 0, 255);
 
-        private readonly record struct TevOrder(int TexMap, int TexCoord, bool TextureEnabled, int ColorChannel);
+        public readonly record struct TevOrder(int TexMap, int TexCoord, bool TextureEnabled, int ColorChannel);
 
-        private readonly record struct TevSwapTable(int R, int G, int B, int A);
+        public readonly record struct TevSwapTable(int R, int G, int B, int A);
 
         private readonly record struct IndirectOffsetState(float S, float T, int BumpAlphaBits);
 

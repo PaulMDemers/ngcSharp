@@ -48,9 +48,13 @@ public sealed record RunDolOptions(
     int? DumpMemoryLength = null,
     IReadOnlyList<MemoryDumpRequest>? DumpMemoryRequests = null,
     IReadOnlyList<PointerTableDumpRequest>? PointerTableDumpRequests = null,
+    IReadOnlyList<DisassemblyDumpRequest>? DumpDisassemblyRequests = null,
     int? PcProfileTop = null,
+    int? ProfileAfter = null,
     uint? IndirectCallSiteProfileAddress = null,
     int? IndirectCallSiteProfileTop = null,
+    IReadOnlyList<BranchSiteProfileRequest>? BranchSiteProfiles = null,
+    IReadOnlyList<PcLrProfileRequest>? PcLrProfiles = null,
     uint? StopOnPc = null,
     int? StopOnPcAfter = null,
     IReadOnlyList<uint>? TracePcAddresses = null,
@@ -89,7 +93,9 @@ public sealed record RunDolOptions(
     int GxDrawMaxDraws = 10,
     bool TracePrsDecompress = false,
     string? SchedulerTracePath = null,
-    string? RunSummaryPath = null)
+    string? RunSummaryPath = null,
+    ulong? DiscCommandLatencyCycles = null,
+    string? SonicPathLookupTracePath = null)
 {
     public const int DefaultGxFrameMaxDraws = 500;
     public const int DefaultGxFrameMaxRasterPixels = 8_000_000;
@@ -140,9 +146,13 @@ public sealed record RunDolOptions(
         int? dumpMemoryLength = null;
         List<MemoryDumpRequest> dumpMemoryRequests = [];
         List<PointerTableDumpRequest> pointerTableDumpRequests = [];
+        List<DisassemblyDumpRequest> dumpDisassemblyRequests = [];
         int? pcProfileTop = null;
+        int? profileAfter = null;
         uint? indirectCallSiteProfileAddress = null;
         int? indirectCallSiteProfileTop = null;
+        List<BranchSiteProfileRequest> branchSiteProfiles = [];
+        List<PcLrProfileRequest> pcLrProfiles = [];
         uint? stopOnPc = null;
         int? stopOnPcAfter = null;
         List<uint> tracePcAddresses = [];
@@ -180,6 +190,8 @@ public sealed record RunDolOptions(
         int gxDrawMaxDraws = DefaultGxDrawMaxDraws;
         string? gxTextureDumpPath = null;
         bool tracePrsDecompress = false;
+        ulong? discCommandLatencyCycles = null;
+        string? sonicPathLookupTracePath = null;
 
         for (int index = 2; index < args.Length; index++)
         {
@@ -516,6 +528,15 @@ public sealed record RunDolOptions(
 
                     pointerTableDumpRequests.Add(new PointerTableDumpRequest(parsedPointerTableAddress, parsedPointerTableCount, parsedPointerTableStride, parsedPointerTablePointerOffset, parsedPointerTableTargetWords));
                     break;
+                case "--dump-disasm":
+                    if (index + 2 >= args.Length || !TryParseUInt32(args[++index], out uint parsedDisasmAddress) || !TryParsePositiveInt32(args[++index], out int parsedDisasmInstructionCount))
+                    {
+                        error.WriteLine("--dump-disasm requires an address and positive instruction count.");
+                        return false;
+                    }
+
+                    dumpDisassemblyRequests.Add(new DisassemblyDumpRequest(parsedDisasmAddress, parsedDisasmInstructionCount));
+                    break;
                 case "--profile-pc":
                     if (index + 1 >= args.Length || !int.TryParse(args[++index], out int parsedPcProfileTop))
                     {
@@ -524,6 +545,15 @@ public sealed record RunDolOptions(
                     }
 
                     pcProfileTop = parsedPcProfileTop;
+                    break;
+                case "--profile-after":
+                    if (index + 1 >= args.Length || !TryParseNonNegativeInt32(args[++index], out int parsedProfileAfter))
+                    {
+                        error.WriteLine("--profile-after requires a non-negative decimal or 0x-prefixed instruction count.");
+                        return false;
+                    }
+
+                    profileAfter = parsedProfileAfter;
                     break;
                 case "--profile-indirect-call-site":
                     if (index + 2 >= args.Length || !TryParseUInt32(args[++index], out uint parsedIndirectCallSite) || !TryParsePositiveInt32(args[++index], out int parsedIndirectCallSiteTop))
@@ -534,6 +564,24 @@ public sealed record RunDolOptions(
 
                     indirectCallSiteProfileAddress = parsedIndirectCallSite;
                     indirectCallSiteProfileTop = parsedIndirectCallSiteTop;
+                    break;
+                case "--profile-branch-site":
+                    if (index + 2 >= args.Length || !TryParseUInt32(args[++index], out uint parsedBranchSite) || !TryParsePositiveInt32(args[++index], out int parsedBranchSiteTop))
+                    {
+                        error.WriteLine("--profile-branch-site requires a branch-site address and positive top count.");
+                        return false;
+                    }
+
+                    branchSiteProfiles.Add(new BranchSiteProfileRequest(parsedBranchSite, parsedBranchSiteTop));
+                    break;
+                case "--profile-pc-lr":
+                    if (index + 2 >= args.Length || !TryParseUInt32(args[++index], out uint parsedPcLrSite) || !TryParsePositiveInt32(args[++index], out int parsedPcLrTop))
+                    {
+                        error.WriteLine("--profile-pc-lr requires a PC address and positive top count.");
+                        return false;
+                    }
+
+                    pcLrProfiles.Add(new PcLrProfileRequest(parsedPcLrSite, parsedPcLrTop));
                     break;
                 case "--stop-on-pc":
                     if (index + 1 >= args.Length || !TryParseUInt32(args[++index], out uint parsedStopOnPc))
@@ -691,6 +739,24 @@ public sealed record RunDolOptions(
                 case "--trace-prs-decompress":
                     tracePrsDecompress = true;
                     break;
+                case "--trace-sonic-path-lookup":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-sonic-path-lookup requires a CSV path.");
+                        return false;
+                    }
+
+                    sonicPathLookupTracePath = args[++index];
+                    break;
+                case "--di-command-latency-cycles":
+                    if (index + 1 >= args.Length || !TryParseUInt64(args[++index], out ulong parsedDiscCommandLatencyCycles))
+                    {
+                        error.WriteLine("--di-command-latency-cycles requires a non-negative decimal or 0x-prefixed integer value.");
+                        return false;
+                    }
+
+                    discCommandLatencyCycles = parsedDiscCommandLatencyCycles;
+                    break;
                 case "--controller-buttons":
                 case "--controller-button":
                     if (index + 1 >= args.Length || !TryParseControllerButtons(args[++index], out ushort parsedControllerButtons))
@@ -796,7 +862,7 @@ public sealed record RunDolOptions(
             return false;
         }
 
-        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, pcProfileTop, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath);
+        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, dumpDisassemblyRequests, pcProfileTop, profileAfter, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, branchSiteProfiles, pcLrProfiles, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath, discCommandLatencyCycles, sonicPathLookupTracePath);
         return true;
     }
 

@@ -115,6 +115,8 @@ powershell -ExecutionPolicy Bypass -File scripts/run-retail-reference-compare.ps
 
 More command examples are in [docs/cli.md](docs/cli.md), [docs/gx-fixtures.md](docs/gx-fixtures.md), and [docs/retail-benchmarks.md](docs/retail-benchmarks.md).
 
+For console-agnostic lessons from this project, see the [next emulator project playbook](docs/next-project/README.md).
+
 ## Legal And Assets
 
 This repository must not include copyrighted Nintendo IPL/BIOS files, SDK files, commercial game images, or assets extracted from commercial games.
