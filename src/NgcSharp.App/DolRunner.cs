@@ -38,6 +38,7 @@ public sealed class DolRunner
     private const uint SonicGxCommandDispatchHeaderPc = 0x8011_CD40;
     private const uint SonicGxCommandDispatchHighRangePc = 0x8011_CDE8;
     private const uint SonicGxCommandDispatchExtendedRangePc = 0x8011_CE20;
+    private const uint SonicGxCommandMetadataHeaderPc = 0x8011_CE60;
     private const uint SonicGprSaveTailPc = 0x8010_AFCC;
     private const uint SonicGprRestoreTailPc = 0x8010_B018;
     private const uint SonicGxAttributeStateSetterPc = 0x8010_0D44;
@@ -6699,6 +6700,29 @@ public sealed class DolRunner
             return true;
         }
 
+        if (MatchesSonicGxCommandMetadataHeader(bus, state.Pc))
+        {
+            const uint skipped = 8;
+            uint stream = state.Gpr[20];
+            if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: skipped, extraInstructions: 0)
+                || !bus.Memory.IsMainRamAddress(stream, 4))
+            {
+                return false;
+            }
+
+            uint signedPayload = unchecked((uint)(int)(short)bus.Memory.Read16(stream + 2));
+            state.Gpr[3] = stream;
+            state.Gpr[20] = unchecked(stream + 4);
+            state.Gpr[27] = bus.Memory.Read16(stream);
+            state.Gpr[0] = signedPayload;
+            state.Gpr[26] = signedPayload;
+            SetCr0ForSignedCompareImmediate(state, state.Gpr[24], 0);
+            state.Pc = unchecked((int)state.Gpr[24]) <= 0 ? SonicGxCommandMetadataHeaderPc + 0x60 : SonicGxCommandMetadataHeaderPc + 0x20;
+            AdvanceFastForwardedInstructions(state, bus, skipped);
+            skippedInstructions = checked((int)skipped);
+            return true;
+        }
+
         return false;
     }
 
@@ -6724,6 +6748,17 @@ public sealed class DolRunner
         && bus.Read32(pc + 0x04) == 0x4080_003C
         && bus.Read32(pc + 0x08) == 0xAB34_0000
         && bus.Read32(pc + 0x40) == 0x7E83_A378;
+
+    private static bool MatchesSonicGxCommandMetadataHeader(GameCubeBus bus, uint pc) =>
+        pc == SonicGxCommandMetadataHeaderPc
+        && bus.Read32(pc + 0x00) == 0x7E83_A378
+        && bus.Read32(pc + 0x04) == 0x3A94_0002
+        && bus.Read32(pc + 0x08) == 0xA363_0000
+        && bus.Read32(pc + 0x0C) == 0xA814_0000
+        && bus.Read32(pc + 0x10) == 0x3A94_0002
+        && bus.Read32(pc + 0x14) == 0x7C1A_0378
+        && bus.Read32(pc + 0x18) == 0x2C18_0000
+        && bus.Read32(pc + 0x1C) == 0x4081_0044;
 
     private static bool TryFastForwardSonicGprSaveRestoreTail(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {

@@ -2785,6 +2785,7 @@ public sealed class DolRunnerTests
         const uint headerPc = 0x8011_CD40;
         const uint highRangePc = 0x8011_CDE8;
         const uint extendedRangePc = 0x8011_CE20;
+        const uint metadataHeaderPc = 0x8011_CE60;
         foreach (uint command in new[] { 0x04u, 0x11u })
         {
             GameCubeBus expectedBus = new();
@@ -2847,6 +2848,43 @@ public sealed class DolRunnerTests
             Assert.Equal(expectedState.Pc, actualState.Pc);
             Assert.Equal(expectedState.Cr, actualState.Cr);
             Assert.Equal(expectedState.Gpr[25], actualState.Gpr[25]);
+            Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+            Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        }
+
+        foreach ((uint activeBatchDepth, ushort count, ushort payload) in new[]
+        {
+            (0u, (ushort)0x0241, (ushort)0x0009),
+            (1u, (ushort)0x0003, (ushort)0xFFF8),
+        })
+        {
+            const uint stream = 0x8131_930A;
+            GameCubeBus expectedBus = new();
+            GameCubeBus actualBus = new();
+            WriteSonicGxCommandDispatch(expectedBus.Memory);
+            WriteSonicGxCommandDispatch(actualBus.Memory);
+            expectedBus.Memory.Write16(stream, count);
+            expectedBus.Memory.Write16(stream + 2, payload);
+            actualBus.Memory.Write16(stream, count);
+            actualBus.Memory.Write16(stream + 2, payload);
+            PowerPcState expectedState = CreateSonicGxCommandDispatchState(metadataHeaderPc, 0x41);
+            PowerPcState actualState = CreateSonicGxCommandDispatchState(metadataHeaderPc, 0x41);
+            expectedState.Gpr[20] = stream;
+            expectedState.Gpr[24] = activeBatchDepth;
+            actualState.Gpr[20] = stream;
+            actualState.Gpr[24] = activeBatchDepth;
+
+            new PowerPcInterpreter().Run(expectedState, expectedBus, 8);
+            bool skipped = InvokeFastForwardSonicGxCommandDispatch(actualState, actualBus, out int skippedInstructions);
+
+            Assert.True(skipped);
+            Assert.Equal(8, skippedInstructions);
+            Assert.Equal(expectedState.Pc, actualState.Pc);
+            Assert.Equal(expectedState.Cr, actualState.Cr);
+            foreach (int register in new[] { 0, 3, 20, 24, 26, 27 })
+            {
+                Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+            }
             Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
             Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
         }
@@ -5185,6 +5223,16 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, extendedRangePc + 0x04, 0x4080_003C);
         WriteInstruction(memory, extendedRangePc + 0x08, 0xAB34_0000);
         WriteInstruction(memory, extendedRangePc + 0x40, 0x7E83_A378);
+
+        const uint metadataHeaderPc = 0x8011_CE60;
+        WriteInstruction(memory, metadataHeaderPc + 0x00, 0x7E83_A378);
+        WriteInstruction(memory, metadataHeaderPc + 0x04, 0x3A94_0002);
+        WriteInstruction(memory, metadataHeaderPc + 0x08, 0xA363_0000);
+        WriteInstruction(memory, metadataHeaderPc + 0x0C, 0xA814_0000);
+        WriteInstruction(memory, metadataHeaderPc + 0x10, 0x3A94_0002);
+        WriteInstruction(memory, metadataHeaderPc + 0x14, 0x7C1A_0378);
+        WriteInstruction(memory, metadataHeaderPc + 0x18, 0x2C18_0000);
+        WriteInstruction(memory, metadataHeaderPc + 0x1C, 0x4081_0044);
     }
 
     private static void WriteSonicGprSaveRestoreTail(GameCubeMemory memory)
