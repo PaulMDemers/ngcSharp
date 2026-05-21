@@ -2661,6 +2661,44 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicGxCommandListTerminalFastForwardMatchesInterpreterEpilogue()
+    {
+        const uint pc = 0x8011_D184;
+        const uint stack = 0x817F_F000;
+        const uint stream = 0x8132_A728;
+        const uint returnAddress = 0x8012_3454;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        WriteSonicGxCommandListTerminal(expectedBus.Memory, pc);
+        WriteSonicGxCommandListTerminal(actualBus.Memory, pc);
+        PowerPcState expectedState = CreateSonicGxCommandListTerminalState(expectedBus, pc, stack, stream, returnAddress);
+        PowerPcState actualState = CreateSonicGxCommandListTerminalState(actualBus, pc, stack, stream, returnAddress);
+
+        PowerPcInterpreter interpreter = new();
+        int expectedInstructions = 0;
+        while (expectedState.Pc != returnAddress && expectedInstructions < 64)
+        {
+            interpreter.Step(expectedState, expectedBus);
+            expectedInstructions++;
+        }
+
+        Assert.Equal(returnAddress, expectedState.Pc);
+        bool skipped = InvokeFastForwardSonicGxCommandListTerminal(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(expectedInstructions, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Lr, actualState.Lr);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 0, 1, 11, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+    }
+
+    [Fact]
     public void SonicGxFloatStripEmitFastForwardMatchesInterpreterLoop()
     {
         const uint pc = 0x8011_D610;
@@ -3792,6 +3830,16 @@ public sealed class DolRunnerTests
         return result;
     }
 
+    private static bool InvokeFastForwardSonicGxCommandListTerminal(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGxCommandListTerminal", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic GX command-list terminal fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
     private static bool InvokeFastForwardSonicPairedTransform2d(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicPairedTransform2d", BindingFlags.NonPublic | BindingFlags.Static)
@@ -4745,6 +4793,34 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x28, 0x4E80_0020);
     }
 
+    private static void WriteSonicGxCommandListTerminal(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0xAB94_0000);
+        WriteInstruction(memory, pc + 0x04, 0x3A94_0002);
+        WriteInstruction(memory, pc + 0x08, 0x2C1C_00FF);
+        WriteInstruction(memory, pc + 0x0C, 0x4082_FBB0);
+        WriteInstruction(memory, pc + 0x10, 0x8001_0084);
+        WriteInstruction(memory, pc + 0x14, 0x3961_0080);
+        WriteInstruction(memory, pc + 0x18, 0x4BFE_DE61);
+        WriteInstruction(memory, pc + 0x1C, 0x3821_0080);
+        WriteInstruction(memory, pc + 0x20, 0x7C08_03A6);
+        WriteInstruction(memory, pc + 0x24, 0x4E80_0020);
+
+        WriteInstruction(memory, 0x8010_AFFC, 0x828B_FFD0);
+        WriteInstruction(memory, 0x8010_B000, 0x82AB_FFD4);
+        WriteInstruction(memory, 0x8010_B004, 0x82CB_FFD8);
+        WriteInstruction(memory, 0x8010_B008, 0x82EB_FFDC);
+        WriteInstruction(memory, 0x8010_B00C, 0x830B_FFE0);
+        WriteInstruction(memory, 0x8010_B010, 0x832B_FFE4);
+        WriteInstruction(memory, 0x8010_B014, 0x834B_FFE8);
+        WriteInstruction(memory, 0x8010_B018, 0x836B_FFEC);
+        WriteInstruction(memory, 0x8010_B01C, 0x838B_FFF0);
+        WriteInstruction(memory, 0x8010_B020, 0x83AB_FFF4);
+        WriteInstruction(memory, 0x8010_B024, 0x83CB_FFF8);
+        WriteInstruction(memory, 0x8010_B028, 0x83EB_FFFC);
+        WriteInstruction(memory, 0x8010_B02C, 0x4E80_0020);
+    }
+
     private static void WriteSonicGxFloatStripEmitLoop(GameCubeMemory memory, uint pc)
     {
         WriteInstruction(memory, pc - 0x30, 0xA81A_0000);
@@ -5207,6 +5283,31 @@ public sealed class DolRunnerTests
         };
         state.Gpr[26] = remainingStrips;
         state.Spr[22] = 0xFFFF_F000;
+        return state;
+    }
+
+    private static PowerPcState CreateSonicGxCommandListTerminalState(GameCubeBus bus, uint pc, uint stack, uint stream, uint returnAddress)
+    {
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8123_4568,
+            Cr = 0x2200_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[1] = stack;
+        state.Gpr[11] = 0xABCD_000B;
+        state.Gpr[20] = stream;
+        state.Gpr[28] = 0xABCD_001C;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bus.Memory.Write16(stream, 0x00FF);
+        bus.Memory.Write32(stack + 132, returnAddress);
+        for (int register = 20; register <= 31; register++)
+        {
+            bus.Memory.Write32(stack + (uint)(80 + (register - 20) * sizeof(uint)), 0xCAFE_0000u + (uint)register);
+        }
+
         return state;
     }
 
