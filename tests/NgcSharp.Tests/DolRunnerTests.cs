@@ -1230,6 +1230,103 @@ public sealed class DolRunnerTests
         Assert.Equal(state.Lr, state.Pc);
     }
 
+    [Theory]
+    [InlineData(0u, 0x5Au)]
+    [InlineData(3u, 0x5Au)]
+    [InlineData(37u, 0x00u)]
+    [InlineData(43u, 0xA5u)]
+    public void MemsetRoutineFastForwardMatchesInterpreterWrapper(uint count, uint value)
+    {
+        const uint pc = 0x8000_532C;
+        const uint destination = 0x8007_0003;
+        const uint stack = 0x817F_F000;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        WriteMemsetRoutine(expectedBus.Memory, pc);
+        WriteMemsetRoutine(actualBus.Memory, pc);
+        PowerPcState expectedState = CreateMemsetRoutineState(pc, destination, value, count, stack);
+        PowerPcState actualState = CreateMemsetRoutineState(pc, destination, value, count, stack);
+
+        PowerPcInterpreter interpreter = new();
+        int expectedInstructions = 0;
+        uint returnAddress = expectedState.Lr;
+        while (expectedState.Pc != returnAddress && expectedInstructions < 512)
+        {
+            interpreter.Step(expectedState, expectedBus);
+            expectedInstructions++;
+        }
+
+        Assert.Equal(returnAddress, expectedState.Pc);
+        bool skipped = InvokeFastForwardMemsetRoutine(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(expectedInstructions, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Lr, actualState.Lr);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.Xer, actualState.Xer);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 0, 1, 3, 4, 5, 6, 7, 31 })
+        {
+            Assert.True(
+                expectedState.Gpr[register] == actualState.Gpr[register],
+                $"r{register}: expected 0x{expectedState.Gpr[register]:X8}, actual 0x{actualState.Gpr[register]:X8}");
+        }
+
+        for (uint offset = 0; offset < Math.Max(count, 1); offset++)
+        {
+            Assert.Equal(expectedBus.Memory.Read8(destination + offset), actualBus.Memory.Read8(destination + offset));
+        }
+
+        for (uint offset = 0; offset <= 0x24; offset += sizeof(uint))
+        {
+            Assert.Equal(expectedBus.Memory.Read32(stack - 32 + offset), actualBus.Memory.Read32(stack - 32 + offset));
+        }
+    }
+
+    [Fact]
+    public void MemsetRoutineFastForwardMatchesInterpreterCore()
+    {
+        const uint pc = 0x8000_535C;
+        const uint destination = 0x8007_0101;
+        const uint count = 35;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        WriteMemsetCore(expectedBus.Memory, pc);
+        WriteMemsetCore(actualBus.Memory, pc);
+        PowerPcState expectedState = CreateMemsetRoutineState(pc, destination, 0x3C, count, stack: 0x817F_F000);
+        PowerPcState actualState = CreateMemsetRoutineState(pc, destination, 0x3C, count, stack: 0x817F_F000);
+
+        PowerPcInterpreter interpreter = new();
+        int expectedInstructions = 0;
+        uint returnAddress = expectedState.Lr;
+        while (expectedState.Pc != returnAddress && expectedInstructions < 512)
+        {
+            interpreter.Step(expectedState, expectedBus);
+            expectedInstructions++;
+        }
+
+        Assert.Equal(returnAddress, expectedState.Pc);
+        bool skipped = InvokeFastForwardMemsetRoutine(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(expectedInstructions, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Lr, actualState.Lr);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.Xer, actualState.Xer);
+        foreach (int register in new[] { 0, 3, 4, 5, 6, 7 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+
+        for (uint offset = 0; offset < count; offset++)
+        {
+            Assert.Equal(expectedBus.Memory.Read8(destination + offset), actualBus.Memory.Read8(destination + offset));
+        }
+    }
+
     [Fact]
     public void MemmoveRoutineFastForwardCopiesForwardFromEntry()
     {
@@ -4035,6 +4132,16 @@ public sealed class DolRunnerTests
         return result;
     }
 
+    private static bool InvokeFastForwardMemsetRoutine(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardMemsetRoutine", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find memset routine fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
     private static bool InvokeFastForwardCtrCacheBlockLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardCtrCacheBlockLoop", BindingFlags.NonPublic | BindingFlags.Static)
@@ -4741,6 +4848,96 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x18, 0x7CA0_0124);
         WriteInstruction(memory, pc + 0x1C, 0x5484_8FFE);
         WriteInstruction(memory, pc + 0x20, 0x4E80_0020);
+    }
+
+    private static void WriteMemsetRoutine(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x7C08_02A6);
+        WriteInstruction(memory, pc + 0x04, 0x9001_0004);
+        WriteInstruction(memory, pc + 0x08, 0x9421_FFE0);
+        WriteInstruction(memory, pc + 0x0C, 0x93E1_001C);
+        WriteInstruction(memory, pc + 0x10, 0x7C7F_1B78);
+        WriteInstruction(memory, pc + 0x14, 0x4800_001D);
+        WriteInstruction(memory, pc + 0x18, 0x8001_0024);
+        WriteInstruction(memory, pc + 0x1C, 0x7FE3_FB78);
+        WriteInstruction(memory, pc + 0x20, 0x83E1_001C);
+        WriteInstruction(memory, pc + 0x24, 0x3821_0020);
+        WriteInstruction(memory, pc + 0x28, 0x7C08_03A6);
+        WriteInstruction(memory, pc + 0x2C, 0x4E80_0020);
+        WriteMemsetCore(memory, pc + 0x30);
+    }
+
+    private static void WriteMemsetCore(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x2805_0020);
+        WriteInstruction(memory, pc + 0x04, 0x5480_063E);
+        WriteInstruction(memory, pc + 0x08, 0x7C07_0378);
+        WriteInstruction(memory, pc + 0x0C, 0x38C3_FFFF);
+        WriteInstruction(memory, pc + 0x10, 0x4180_0098);
+        WriteInstruction(memory, pc + 0x14, 0x7CC0_30F8);
+        WriteInstruction(memory, pc + 0x18, 0x5400_07BF);
+        WriteInstruction(memory, pc + 0x1C, 0x7C03_0378);
+        WriteInstruction(memory, pc + 0x20, 0x4182_0018);
+        WriteInstruction(memory, pc + 0x24, 0x7CA3_2850);
+        WriteInstruction(memory, pc + 0x28, 0x54E0_063E);
+        WriteInstruction(memory, pc + 0x2C, 0x3463_FFFF);
+        WriteInstruction(memory, pc + 0x30, 0x9C06_0001);
+        WriteInstruction(memory, pc + 0x34, 0x4082_FFF8);
+        WriteInstruction(memory, pc + 0x38, 0x2807_0000);
+        WriteInstruction(memory, pc + 0x3C, 0x4182_001C);
+        WriteInstruction(memory, pc + 0x40, 0x54E3_C00E);
+        WriteInstruction(memory, pc + 0x44, 0x54E0_801E);
+        WriteInstruction(memory, pc + 0x48, 0x54E4_402E);
+        WriteInstruction(memory, pc + 0x4C, 0x7C60_0378);
+        WriteInstruction(memory, pc + 0x50, 0x7C80_0378);
+        WriteInstruction(memory, pc + 0x54, 0x7CE7_0378);
+        WriteInstruction(memory, pc + 0x58, 0x54A0_D97F);
+        WriteInstruction(memory, pc + 0x5C, 0x3866_FFFD);
+        WriteInstruction(memory, pc + 0x60, 0x4182_002C);
+        WriteInstruction(memory, pc + 0x64, 0x90E3_0004);
+        WriteInstruction(memory, pc + 0x68, 0x3400_FFFF);
+        WriteInstruction(memory, pc + 0x6C, 0x90E3_0008);
+        WriteInstruction(memory, pc + 0x70, 0x90E3_000C);
+        WriteInstruction(memory, pc + 0x74, 0x90E3_0010);
+        WriteInstruction(memory, pc + 0x78, 0x90E3_0014);
+        WriteInstruction(memory, pc + 0x7C, 0x90E3_0018);
+        WriteInstruction(memory, pc + 0x80, 0x90E3_001C);
+        WriteInstruction(memory, pc + 0x84, 0x94E3_0020);
+        WriteInstruction(memory, pc + 0x88, 0x4082_FFDC);
+        WriteInstruction(memory, pc + 0x8C, 0x54A0_F77F);
+        WriteInstruction(memory, pc + 0x90, 0x4182_0010);
+        WriteInstruction(memory, pc + 0x94, 0x3400_FFFF);
+        WriteInstruction(memory, pc + 0x98, 0x94E3_0004);
+        WriteInstruction(memory, pc + 0x9C, 0x4082_FFF8);
+        WriteInstruction(memory, pc + 0xA0, 0x38C3_0003);
+        WriteInstruction(memory, pc + 0xA4, 0x54A5_07BE);
+        WriteInstruction(memory, pc + 0xA8, 0x2805_0000);
+        WriteInstruction(memory, pc + 0xAC, 0x4D82_0020);
+        WriteInstruction(memory, pc + 0xB0, 0x54E0_063E);
+        WriteInstruction(memory, pc + 0xB4, 0x34A5_FFFF);
+        WriteInstruction(memory, pc + 0xB8, 0x9C06_0001);
+        WriteInstruction(memory, pc + 0xBC, 0x4082_FFF8);
+        WriteInstruction(memory, pc + 0xC0, 0x4E80_0020);
+    }
+
+    private static PowerPcState CreateMemsetRoutineState(uint pc, uint destination, uint value, uint count, uint stack)
+    {
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8000_7000,
+            Cr = 0x2200_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[1] = stack;
+        state.Gpr[3] = destination;
+        state.Gpr[4] = value;
+        state.Gpr[5] = count;
+        state.Gpr[6] = 0xAAAA_0006;
+        state.Gpr[7] = 0xBBBB_0007;
+        state.Gpr[31] = 0xCCCC_001F;
+        state.Spr[22] = 0xFFFF_F000;
+        return state;
     }
 
     private static void WriteMemmoveRoutine(GameCubeMemory memory, uint pc)

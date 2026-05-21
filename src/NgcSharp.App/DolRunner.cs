@@ -1056,6 +1056,13 @@ public sealed class DolRunner
                     continue;
                 }
 
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardMemsetRoutine(state, bus, out skippedInstructions))
+                {
+                    bulkFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardMemmoveRoutine(state, bus, out skippedInstructions))
                 {
                     memoryCopyFastForwardInstructions += (uint)skippedInstructions;
@@ -10055,6 +10062,293 @@ public sealed class DolRunner
             : left < right ? 0x8000_0000u : 0x4000_0000u;
         state.Cr = (state.Cr & 0x0FFF_FFFF) | field | (state.Xer & 0x8000_0000) >> 3;
     }
+
+    private static bool TryFastForwardMemsetRoutine(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        if (MatchesMemsetWrapper(bus, pc))
+        {
+            uint stackPointer = state.Gpr[1];
+            uint newStackPointer = unchecked(stackPointer - 32u);
+            uint originalLr = state.Lr;
+            uint originalR31 = state.Gpr[31];
+            uint destination = state.Gpr[3];
+            uint value = state.Gpr[4];
+            uint count = state.Gpr[5];
+            if (!bus.Memory.IsMainRamAddress(newStackPointer, 40)
+                || !TryFastForwardMemsetCore(state, bus, pc + 0x30, destination, value, count, wrapperInstructions: 12, out uint coreInstructions))
+            {
+                return false;
+            }
+
+            bus.Memory.Write32(stackPointer + 4, originalLr);
+            bus.Memory.Write32(newStackPointer, stackPointer);
+            bus.Memory.Write32(newStackPointer + 28, originalR31);
+            state.Gpr[0] = originalLr;
+            state.Gpr[1] = stackPointer;
+            state.Gpr[3] = destination;
+            state.Gpr[31] = originalR31;
+            state.Lr = originalLr;
+            state.Pc = originalLr & 0xFFFF_FFFCu;
+
+            uint skipped = checked(coreInstructions + 12);
+            AdvanceFastForwardedInstructions(state, bus, skipped);
+            skippedInstructions = checked((int)skipped);
+            return true;
+        }
+
+        if (!MatchesMemsetCore(bus, pc)
+            || !TryFastForwardMemsetCore(state, bus, pc, state.Gpr[3], state.Gpr[4], state.Gpr[5], wrapperInstructions: 0, out uint directCoreInstructions))
+        {
+            return false;
+        }
+
+        state.Pc = state.Lr & 0xFFFF_FFFCu;
+        AdvanceFastForwardedInstructions(state, bus, directCoreInstructions);
+        skippedInstructions = checked((int)directCoreInstructions);
+        return true;
+    }
+
+    private static bool TryFastForwardMemsetCore(
+        PowerPcState state,
+        GameCubeBus bus,
+        uint pc,
+        uint destination,
+        uint value,
+        uint count,
+        uint wrapperInstructions,
+        out uint coreInstructions)
+    {
+        coreInstructions = 0;
+        if (!MatchesMemsetCore(bus, pc)
+            || count > MaxFastForwardMemmoveBytes
+            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: checked(wrapperInstructions + EstimateMemsetCoreInstructions(destination, (byte)value, count)), extraInstructions: 0)
+            || (count != 0 && !bus.Memory.IsMainRamAddress(destination, checked((int)count))))
+        {
+            return false;
+        }
+
+        byte fillByte = (byte)value;
+        if (count != 0)
+        {
+            if (fillByte == 0)
+            {
+                bus.Memory.Clear(destination, count);
+            }
+            else
+            {
+                for (uint offset = 0; offset < count; offset++)
+                {
+                    bus.Memory.Write8(destination + offset, fillByte);
+                }
+            }
+        }
+
+        SimulateMemsetCoreRegisters(state, destination, fillByte, count, out coreInstructions);
+        return true;
+    }
+
+    private static uint EstimateMemsetCoreInstructions(uint destination, byte fillByte, uint count)
+    {
+        uint instructions = 5;
+        if (count >= 32)
+        {
+            uint cursor = unchecked(destination - 1u);
+            uint alignBytes = unchecked(~cursor) & 3u;
+            instructions += 4;
+            if (alignBytes != 0)
+            {
+                instructions += 2 + alignBytes * 3;
+                count -= alignBytes;
+                cursor += alignBytes;
+            }
+
+            instructions += 5;
+            if (fillByte != 0)
+            {
+                instructions += 6;
+            }
+
+            uint wordBursts = count >> 5;
+            if (wordBursts != 0)
+            {
+                instructions += wordBursts * 10;
+            }
+
+            uint remainingWords = (count >> 2) & 7u;
+            instructions += 2;
+            if (remainingWords != 0)
+            {
+                instructions += remainingWords * 3;
+            }
+
+            uint remainingBytes = count & 3u;
+            instructions += 4;
+            if (remainingBytes != 0)
+            {
+                instructions += 1 + remainingBytes * 3 + 1;
+            }
+
+            return instructions;
+        }
+
+        uint tailBytes = count & 3u;
+        instructions += 2;
+        if (tailBytes != 0)
+        {
+            instructions += 1 + tailBytes * 3 + 1;
+        }
+
+        return instructions;
+    }
+
+    private static void SimulateMemsetCoreRegisters(PowerPcState state, uint destination, byte fillByte, uint count, out uint coreInstructions)
+    {
+        coreInstructions = 5;
+        uint r3 = state.Gpr[3];
+        uint r5 = count;
+        uint r6 = unchecked(destination - 1u);
+        uint r7 = fillByte;
+        uint r4 = state.Gpr[4];
+        uint r0;
+
+        SetCr0ForUnsignedCompareImmediate(state, r5, 32);
+        if (r5 >= 32)
+        {
+            r0 = unchecked(~r6) & 3u;
+            r3 = r0;
+            coreInstructions += 4;
+            if (r3 != 0)
+            {
+                r5 -= r3;
+                coreInstructions += 2;
+                while (true)
+                {
+                    r3--;
+                    r6++;
+                    coreInstructions += 3;
+                    SetCr0(state, r3);
+                    if (r3 == 0)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (r7 != 0)
+            {
+                r4 = (uint)fillByte << 8;
+                r7 |= r7 << 24;
+                r7 |= ((uint)fillByte << 16) | ((uint)fillByte << 8);
+                coreInstructions += 6;
+            }
+
+            r0 = r5 >> 5;
+            r3 = unchecked(r6 - 3u);
+            coreInstructions += 5;
+            while (r0 != 0)
+            {
+                r0--;
+                r3 += 32;
+                coreInstructions += 10;
+                SetCr0(state, r0);
+            }
+
+            r0 = (r5 >> 2) & 7u;
+            coreInstructions += 2;
+            while (r0 != 0)
+            {
+                r0--;
+                r3 += 4;
+                coreInstructions += 3;
+                SetCr0(state, r0);
+            }
+
+            r6 = r3 + 3;
+            r5 &= 3u;
+            coreInstructions += 4;
+            SetCr0ForUnsignedCompareImmediate(state, r5, 0);
+            if (r5 == 0)
+            {
+                state.Gpr[0] = r0;
+                state.Gpr[3] = r3;
+                state.Gpr[4] = r4;
+                state.Gpr[5] = r5;
+                state.Gpr[6] = r6;
+                state.Gpr[7] = r7;
+                return;
+            }
+        }
+        else
+        {
+            r5 &= 3u;
+            coreInstructions += 2;
+            SetCr0ForUnsignedCompareImmediate(state, r5, 0);
+            if (r5 == 0)
+            {
+                state.Gpr[0] = r5;
+                state.Gpr[3] = r3;
+                state.Gpr[4] = r4;
+                state.Gpr[5] = r5;
+                state.Gpr[6] = r6;
+                state.Gpr[7] = r7;
+                return;
+            }
+        }
+
+        r0 = fillByte;
+        coreInstructions++;
+        while (true)
+        {
+            r5--;
+            r6++;
+            coreInstructions += 3;
+            SetCr0(state, r5);
+            if (r5 == 0)
+            {
+                break;
+            }
+        }
+
+        coreInstructions++;
+        state.Gpr[0] = r0;
+        state.Gpr[3] = r3;
+        state.Gpr[4] = r4;
+        state.Gpr[5] = r5;
+        state.Gpr[6] = r6;
+        state.Gpr[7] = r7;
+    }
+
+    private static bool MatchesMemsetWrapper(GameCubeBus bus, uint pc) =>
+        bus.Read32(pc + 0x00) == 0x7C08_02A6
+        && bus.Read32(pc + 0x04) == 0x9001_0004
+        && bus.Read32(pc + 0x08) == 0x9421_FFE0
+        && bus.Read32(pc + 0x0C) == 0x93E1_001C
+        && bus.Read32(pc + 0x10) == 0x7C7F_1B78
+        && bus.Read32(pc + 0x14) == 0x4800_001D
+        && bus.Read32(pc + 0x18) == 0x8001_0024
+        && bus.Read32(pc + 0x1C) == 0x7FE3_FB78
+        && bus.Read32(pc + 0x20) == 0x83E1_001C
+        && bus.Read32(pc + 0x24) == 0x3821_0020
+        && bus.Read32(pc + 0x28) == 0x7C08_03A6
+        && bus.Read32(pc + 0x2C) == 0x4E80_0020
+        && MatchesMemsetCore(bus, pc + 0x30);
+
+    private static bool MatchesMemsetCore(GameCubeBus bus, uint pc) =>
+        bus.Read32(pc + 0x00) == 0x2805_0020
+        && bus.Read32(pc + 0x04) == 0x5480_063E
+        && bus.Read32(pc + 0x08) == 0x7C07_0378
+        && bus.Read32(pc + 0x0C) == 0x38C3_FFFF
+        && bus.Read32(pc + 0x10) == 0x4180_0098
+        && bus.Read32(pc + 0x58) == 0x54A0_D97F
+        && bus.Read32(pc + 0x8C) == 0x54A0_F77F
+        && bus.Read32(pc + 0xA4) == 0x54A5_07BE
+        && bus.Read32(pc + 0xAC) == 0x4D82_0020
+        && bus.Read32(pc + 0xB4) == 0x34A5_FFFF
+        && bus.Read32(pc + 0xB8) == 0x9C06_0001
+        && bus.Read32(pc + 0xBC) == 0x4082_FFF8
+        && bus.Read32(pc + 0xC0) == 0x4E80_0020;
 
     private static bool TryFastForwardMemmoveRoutine(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
