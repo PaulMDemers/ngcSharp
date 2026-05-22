@@ -692,6 +692,41 @@
       }
     },
     {
+      "id": "sonic-decoder-dispatch-19m",
+      "name": "Sonic Decoder Dispatch 19M Probe",
+      "type": "disc",
+      "path": "Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz",
+      "suites": [ "retail", "sonic", "diagnostic", "focused" ],
+      "tags": [ "retail", "cpu", "decoder", "profile", "late" ],
+      "maxInstructions": 19000000,
+      "timeoutSeconds": 420,
+      "profilePc": 24,
+      "extraArgs": [
+        "--profile-after",
+        "0x01200000",
+        "--memory-card-a",
+        "--controller-button",
+        "a",
+        "--fast-forward-write-watch",
+        "--profile-indirect-call-site",
+        "0x80154DFC",
+        "16",
+        "--profile-branch-site",
+        "0x80154DEC",
+        "8"
+      ],
+      "expected": {
+        "status": "ok",
+        "stopReason": "max-instructions",
+        "indirectBranchSite": "0x80154DFC",
+        "indirectBranchTopTarget": "0x80158484",
+        "minIndirectBranchTopTargetCount": 200,
+        "branchSite": "0x80154DEC",
+        "branchSiteTopTarget": "0x80154DF0",
+        "minBranchSiteTopTargetCount": 200
+      }
+    },
+    {
       "id": "sonic-transform-8011daa8",
       "name": "Sonic Paired-Single Transform Entry Stop Probe",
       "type": "disc",
