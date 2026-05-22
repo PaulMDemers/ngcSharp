@@ -1560,8 +1560,7 @@ public sealed class DolRunner
                 if (profileThisInstruction
                     && indirectCallSiteProfile is not null
                     && options.IndirectCallSiteProfileAddress == pc
-                    && TryGetIndirectBranchTarget(currentInstruction, state, out uint profiledIndirectTarget, out _, out bool profiledLink)
-                    && profiledLink)
+                    && TryGetIndirectBranchTarget(currentInstruction, state, out uint profiledIndirectTarget, out _, out _))
                 {
                     indirectCallSiteProfile.TryGetValue(profiledIndirectTarget, out ulong targetCount);
                     indirectCallSiteProfile[profiledIndirectTarget] = targetCount + 1;
@@ -12883,7 +12882,7 @@ public sealed class DolRunner
             total += count;
         }
 
-        output.WriteLine($"Indirect call-site profile 0x{callSite:X8}: {profile.Count} unique target(s), {total} call(s)");
+        output.WriteLine($"Indirect branch-site profile 0x{callSite:X8}: {profile.Count} unique target(s), {total} branch(es)");
         foreach (KeyValuePair<uint, ulong> entry in profile.OrderByDescending(entry => entry.Value).ThenBy(entry => entry.Key).Take(topCount))
         {
             double percent = total == 0 ? 0 : (double)entry.Value * 100 / total;
@@ -13185,12 +13184,13 @@ public sealed class DolRunner
 
     private static object BuildIndirectCallSiteProfileSummary(uint callSite, IReadOnlyDictionary<uint, ulong> profile, int topCount)
     {
-        ulong totalCalls = profile.Values.Aggregate(0UL, static (total, count) => total + count);
+        ulong totalBranches = profile.Values.Aggregate(0UL, static (total, count) => total + count);
         return new
         {
             callSite = $"0x{callSite:X8}",
             uniqueTargets = profile.Count,
-            totalCalls,
+            totalCalls = totalBranches,
+            totalBranches,
             entries = profile
                 .OrderByDescending(entry => entry.Value)
                 .ThenBy(entry => entry.Key)
@@ -13199,7 +13199,7 @@ public sealed class DolRunner
                 {
                     target = $"0x{entry.Key:X8}",
                     count = entry.Value,
-                    percent = totalCalls == 0 ? 0 : Math.Round((double)entry.Value * 100 / totalCalls, 3),
+                    percent = totalBranches == 0 ? 0 : Math.Round((double)entry.Value * 100 / totalBranches, 3),
                 })
                 .ToArray(),
         };
