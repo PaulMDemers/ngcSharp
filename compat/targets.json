@@ -268,10 +268,10 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "pc": "0x81230FF8",
+        "pc": "0x8010337C",
         "minGxFifoBytes": 1,
         "minRenderedTriangles": 320,
-        "frameSha256": "15928246409e9cb5f50ccca1dd4c287541d0529ea7b0cb15c8e15c50a857ae13"
+        "frameSha256": "037ff703bd85f9b9c35574ffbf2409f0c6738e593c618e1a167ecc924a1c7c10"
       }
     },
     {
@@ -1035,7 +1035,7 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "pc": "0x801F72B4",
+        "pc": "0x802145E4",
         "minGxFifoBytes": 549231,
         "minRenderedQuads": 29
       }
