@@ -433,6 +433,7 @@ foreach ($target in $selectedTargets) {
     $exiTracePath = Join-Path $targetRoot "exi.csv"
     $siTracePath = Join-Path $targetRoot "si.csv"
     $sonicResourceFlagsTracePath = Join-Path $targetRoot "sonic-resource-flags.csv"
+    $sonicResourceFlagsSummaryPath = Join-Path $targetRoot "sonic-resource-flags.summary.json"
     $gxCopiesPath = Join-Path $targetRoot "gx-copies.csv"
     $gxCopiesSummaryPath = Join-Path $targetRoot "gx-copies.summary.json"
 
@@ -524,6 +525,11 @@ foreach ($target in $selectedTargets) {
     if ((Test-Path -LiteralPath $gxCopiesPath) -and (Get-Item -LiteralPath $gxCopiesPath).Length -gt 0) {
         & (Join-Path $PSScriptRoot "summarize-gx-copies.ps1") -CopyCsvPath $gxCopiesPath -JsonPath $gxCopiesSummaryPath | Out-Null
         $gxCopySummary = Read-JsonFile $gxCopiesSummaryPath
+    }
+    $sonicResourceFlagSummary = $null
+    if ((Test-Path -LiteralPath $sonicResourceFlagsTracePath) -and (Get-Item -LiteralPath $sonicResourceFlagsTracePath).Length -gt 0) {
+        & (Join-Path $PSScriptRoot "summarize-sonic-resource-flags.ps1") -TraceCsvPath $sonicResourceFlagsTracePath -JsonPath $sonicResourceFlagsSummaryPath | Out-Null
+        $sonicResourceFlagSummary = Read-JsonFile $sonicResourceFlagsSummaryPath
     }
 
     $gxFrameSummary = Get-HashSummary $gxFramePath
@@ -916,6 +922,11 @@ foreach ($target in $selectedTargets) {
     $textureCopies = Get-Value $gxCopySummary "textureCopies" ""
     $nonblackDisplayCopies = Get-Value $gxCopySummary "nonblackDisplayCopies" ""
     $maxDisplayNonblack = Get-Value $gxCopySummary "maxDisplayNonblack" ""
+    $sonicResourceFlagEvents = Get-Value $sonicResourceFlagSummary "events" ""
+    $sonicResourceFlagActiveSlots = Get-Value $sonicResourceFlagSummary "activeSlotText" ""
+    $sonicResourceFlagFinalFlag = Get-Value $sonicResourceFlagSummary "finalFlag" ""
+    $sonicResourceFlagTopSlot = Get-Value (Get-Value $sonicResourceFlagSummary "topSlot" $null) "slot" ""
+    $sonicResourceFlagTopSlotLongestSpan = Get-Value (Get-Value $sonicResourceFlagSummary "topSlot" $null) "longestActiveInstructionSpan" ""
 
     $expectedMinDisplayCopies = Get-Value $expected "minDisplayCopies" $null
     if ($status -eq "ok" -and $null -ne $expectedMinDisplayCopies -and [long]$displayCopies -lt [long]$expectedMinDisplayCopies) {
@@ -1036,6 +1047,11 @@ foreach ($target in $selectedTargets) {
         watchPcTraceMatches = $watchPcTraceMatches
         watchWriteMatches = $watchWriteMatches
         watchMemoryChanges = $watchMemoryChanges
+        sonicResourceFlagEvents = $sonicResourceFlagEvents
+        sonicResourceFlagActiveSlots = $sonicResourceFlagActiveSlots
+        sonicResourceFlagFinalFlag = $sonicResourceFlagFinalFlag
+        sonicResourceFlagTopSlot = $sonicResourceFlagTopSlot
+        sonicResourceFlagTopSlotLongestSpan = $sonicResourceFlagTopSlotLongestSpan
         processorInterruptCause = $processorInterruptCause
         processorInterruptMask = $processorInterruptMask
         diStatus = $diStatus
@@ -1074,6 +1090,7 @@ foreach ($target in $selectedTargets) {
         stderr = $stderrPath
         runSummary = $summary
         gxCopySummary = $gxCopySummaryCompact
+        sonicResourceFlagSummary = $sonicResourceFlagSummary
         frame = $frameSummary
     })
 }
