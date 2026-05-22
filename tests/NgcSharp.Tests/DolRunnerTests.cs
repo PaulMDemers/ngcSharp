@@ -2904,8 +2904,12 @@ public sealed class DolRunnerTests
         }
     }
 
-    [Fact]
-    public void SonicGxCommandListFetchFastForwardMatchesInterpreterBranch()
+    [Theory]
+    [InlineData(0x0004, 8)]
+    [InlineData(0x000F, 10)]
+    [InlineData(0x0011, 12)]
+    [InlineData(0x0041, 12)]
+    public void SonicGxCommandListFetchFastForwardMatchesInterpreterBranch(ushort command, int expectedInstructions)
     {
         const uint pc = 0x8011_D184;
         const uint stream = 0x8132_A728;
@@ -2915,20 +2919,20 @@ public sealed class DolRunnerTests
         WriteSonicGxCommandDispatch(expectedBus.Memory);
         WriteSonicGxCommandListTerminal(actualBus.Memory, pc);
         WriteSonicGxCommandDispatch(actualBus.Memory);
-        PowerPcState expectedState = CreateSonicGxCommandListFetchState(expectedBus, pc, stream, command: 0x0041);
-        PowerPcState actualState = CreateSonicGxCommandListFetchState(actualBus, pc, stream, command: 0x0041);
+        PowerPcState expectedState = CreateSonicGxCommandListFetchState(expectedBus, pc, stream, unchecked((short)command));
+        PowerPcState actualState = CreateSonicGxCommandListFetchState(actualBus, pc, stream, unchecked((short)command));
 
-        new PowerPcInterpreter().Run(expectedState, expectedBus, 4);
+        new PowerPcInterpreter().Run(expectedState, expectedBus, expectedInstructions);
         bool skipped = InvokeFastForwardSonicGxCommandListFetch(actualState, actualBus, out int skippedInstructions);
 
         Assert.True(skipped);
-        Assert.Equal(4, skippedInstructions);
+        Assert.Equal(expectedInstructions, skippedInstructions);
         Assert.Equal(expectedState.Pc, actualState.Pc);
         Assert.Equal(expectedState.Lr, actualState.Lr);
         Assert.Equal(expectedState.Cr, actualState.Cr);
         Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
         Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
-        foreach (int register in new[] { 20, 28 })
+        foreach (int register in new[] { 0, 20, 25, 28 })
         {
             Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
         }

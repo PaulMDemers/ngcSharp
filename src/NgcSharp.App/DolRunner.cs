@@ -6724,8 +6724,7 @@ public sealed class DolRunner
     private static bool TryFastForwardSonicGxCommandListFetch(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         skippedInstructions = 0;
-        if (!MatchesSonicGxCommandListFetch(bus, state.Pc)
-            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: SonicGxCommandListFetchInstructions, extraInstructions: 0))
+        if (!MatchesSonicGxCommandListFetch(bus, state.Pc))
         {
             return false;
         }
@@ -6742,12 +6741,32 @@ public sealed class DolRunner
             return false;
         }
 
+        uint skipped = SonicGxCommandListFetchInstructions;
+        bool canFuseDispatch = MatchesSonicGxCommandDispatchHeader(bus, SonicGxCommandDispatchHeaderPc);
+        if (canFuseDispatch)
+        {
+            skipped += EstimateSonicGxCommandDispatchBranchInstructions(command);
+        }
+
+        if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: skipped, extraInstructions: 0))
+        {
+            return false;
+        }
+
         state.Gpr[20] = stream + sizeof(ushort);
         state.Gpr[28] = unchecked((uint)command);
-        state.Pc = SonicGxCommandDispatchHeaderPc;
         SetCr0ForSignedCompareImmediate(state, unchecked((uint)command), 255);
-        AdvanceFastForwardedInstructions(state, bus, SonicGxCommandListFetchInstructions);
-        skippedInstructions = checked((int)SonicGxCommandListFetchInstructions);
+        if (canFuseDispatch)
+        {
+            FastForwardSonicGxCommandDispatchBranch(state, command);
+        }
+        else
+        {
+            state.Pc = SonicGxCommandDispatchHeaderPc;
+        }
+
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
         return true;
     }
 
@@ -6900,6 +6919,40 @@ public sealed class DolRunner
         }
 
         return false;
+    }
+
+    private static uint EstimateSonicGxCommandDispatchBranchInstructions(short command)
+    {
+        uint dispatchCommand = unchecked((uint)command) & 0xFFu;
+        if (dispatchCommand < 8)
+        {
+            return 4;
+        }
+
+        return dispatchCommand < 16 ? 6u : 8u;
+    }
+
+    private static void FastForwardSonicGxCommandDispatchBranch(PowerPcState state, short command)
+    {
+        uint dispatchCommand = unchecked((uint)command) & 0xFFu;
+        state.Gpr[0] = dispatchCommand;
+        state.Gpr[25] = dispatchCommand;
+        SetCr0ForSignedCompareImmediate(state, dispatchCommand, 8);
+        if (dispatchCommand < 8)
+        {
+            state.Pc = SonicGxCommandDispatchHeaderPc + 0x10;
+            return;
+        }
+
+        SetCr0ForSignedCompareImmediate(state, dispatchCommand, 16);
+        if (dispatchCommand < 16)
+        {
+            state.Pc = SonicGxCommandDispatchHighRangePc + 0x08;
+            return;
+        }
+
+        SetCr0ForSignedCompareImmediate(state, dispatchCommand, 64);
+        state.Pc = dispatchCommand >= 64 ? SonicGxCommandDispatchExtendedRangePc + 0x40 : SonicGxCommandDispatchExtendedRangePc + 0x08;
     }
 
     private static bool MatchesSonicGxCommandDispatchHeader(GameCubeBus bus, uint pc) =>
