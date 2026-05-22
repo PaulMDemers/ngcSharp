@@ -84,6 +84,9 @@ public sealed class DolRunner
     private const uint SonicPairedTransform4dLoopPc = 0x8011_DB94;
     private const uint SonicPairedTransform4dInstructionsPerIteration = 20;
     private const uint SonicPairedTransform4dExitInstructions = 11;
+    private const uint SonicPairedTransform4dIndexedLoopPc = 0x8011_DE54;
+    private const uint SonicPairedTransform4dIndexedInstructionsPerIteration = 33;
+    private const uint SonicPairedTransform4dIndexedExitInstructions = 16;
     private const uint SonicVectorBlendCopyLoopPc = 0x8012_0D98;
     private const uint SonicVectorBlendCopyInstructionsPerIteration = 47;
     private const uint SonicCoordinatePairFillLoopPc = 0x8014_B260;
@@ -1384,6 +1387,13 @@ public sealed class DolRunner
                 }
 
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicPairedTransform4d(state, bus, out skippedInstructions))
+                {
+                    sonicPairedTransform4dFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicPairedTransform4dIndexedOutput(state, bus, out skippedInstructions))
                 {
                     sonicPairedTransform4dFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
@@ -10033,6 +10043,137 @@ public sealed class DolRunner
         }
     }
 
+    private static bool TryFastForwardSonicPairedTransform4dIndexedOutput(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint iterations = state.Ctr;
+        if (!MatchesSonicPairedTransform4dIndexedOutputLoop(bus)
+            || state.Pc != SonicPairedTransform4dIndexedLoopPc
+            || iterations == 0
+            || iterations > 0x0001_0000)
+        {
+            return false;
+        }
+
+        uint skipped = checked(iterations * SonicPairedTransform4dIndexedInstructionsPerIteration + SonicPairedTransform4dIndexedExitInstructions);
+        if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: skipped, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        try
+        {
+            (double Lane0, double Lane1) f0 = (state.Fpr[0], state.FprPair1[0]);
+            (double Lane0, double Lane1) f1 = (state.Fpr[1], state.FprPair1[1]);
+            (double Lane0, double Lane1) f2 = (state.Fpr[2], state.FprPair1[2]);
+            (double Lane0, double Lane1) f3 = (state.Fpr[3], state.FprPair1[3]);
+            (double Lane0, double Lane1) f4 = (state.Fpr[4], state.FprPair1[4]);
+            (double Lane0, double Lane1) f5 = (state.Fpr[5], state.FprPair1[5]);
+            (double Lane0, double Lane1) f6 = (state.Fpr[6], state.FprPair1[6]);
+            (double Lane0, double Lane1) f7 = (state.Fpr[7], state.FprPair1[7]);
+            (double Lane0, double Lane1) f8 = (state.Fpr[8], state.FprPair1[8]);
+            (double Lane0, double Lane1) f9 = (state.Fpr[9], state.FprPair1[9]);
+            (double Lane0, double Lane1) f10 = (state.Fpr[10], state.FprPair1[10]);
+            (double Lane0, double Lane1) f11 = (state.Fpr[11], state.FprPair1[11]);
+            (double Lane0, double Lane1) f12 = (state.Fpr[12], state.FprPair1[12]);
+            (double Lane0, double Lane1) f13 = (state.Fpr[13], state.FprPair1[13]);
+            (double Lane0, double Lane1) f14 = (state.Fpr[14], state.FprPair1[14]);
+            (double Lane0, double Lane1) f15 = (state.Fpr[15], state.FprPair1[15]);
+            (double Lane0, double Lane1) f16 = (state.Fpr[16], state.FprPair1[16]);
+            (double Lane0, double Lane1) f17 = (state.Fpr[17], state.FprPair1[17]);
+            (double Lane0, double Lane1) f18 = (state.Fpr[18], state.FprPair1[18]);
+            (double Lane0, double Lane1) f19 = (state.Fpr[19], state.FprPair1[19]);
+            (double Lane0, double Lane1) f20 = (state.Fpr[20], state.FprPair1[20]);
+            (double Lane0, double Lane1) f21 = (state.Fpr[21], state.FprPair1[21]);
+            (double Lane0, double Lane1) f22 = (state.Fpr[22], state.FprPair1[22]);
+            (double Lane0, double Lane1) f23 = (state.Fpr[23], state.FprPair1[23]);
+            uint outputBase = state.Gpr[9];
+            uint outputCursor = state.Gpr[6];
+            uint nextOutputCursor = state.Gpr[4];
+            uint inputCursor = state.Gpr[7];
+            uint lastOffset = state.Gpr[10];
+
+            for (uint iteration = 0; iteration < iterations; iteration++)
+            {
+                f11 = PairedMaddsScalar0(f0, f8, f6);
+                WriteSonicPairedTransform4dIndexedOutput(bus, outputCursor, f15, f16, f17, f18);
+                f12 = PairedMaddsScalar0(f1, f8, f7);
+                f13 = PairedMulsScalar1(f0, f9);
+                f14 = PairedMulsScalar1(f1, f9);
+                f11 = PairedMaddsScalar1(f2, f8, f11);
+                f12 = PairedMaddsScalar1(f3, f8, f12);
+                inputCursor = unchecked(inputCursor + 2);
+                f8 = ReadPairedSingleQuantized(bus, state, inputCursor, gqr: 0, single: false);
+                f13 = PairedMaddsScalar0(f2, f10, f13);
+                f14 = PairedMaddsScalar0(f3, f10, f14);
+                f20 = ReadPairedSingleFloatPair(bus, nextOutputCursor);
+                f11 = PairedMaddsScalar0(f4, f9, f11);
+                f21 = ReadPairedSingleFloatSingle(bus, nextOutputCursor + 8);
+                f12 = PairedMaddsScalar0(f5, f9, f12);
+                f22 = ReadPairedSingleFloatPair(bus, nextOutputCursor + 12);
+                f13 = PairedMaddsScalar1(f4, f10, f13);
+                f23 = ReadPairedSingleFloatSingle(bus, nextOutputCursor + 20);
+                f14 = PairedMaddsScalar1(f5, f10, f14);
+                outputCursor = nextOutputCursor;
+                f15 = PairedMaddsScalar0(f11, f19, f20);
+                f16 = PairedMaddsScalar0(f12, f19, f21);
+                inputCursor = unchecked(inputCursor + 8);
+                f9 = ReadPairedSingleQuantized(bus, state, inputCursor, gqr: 0, single: false);
+                f17 = PairedMaddsScalar0(f13, f19, f22);
+                f18 = PairedMaddsScalar0(f14, f19, f23);
+                inputCursor = unchecked(inputCursor + 8);
+                f10 = ReadPairedSingleQuantized(bus, state, inputCursor, gqr: 0, single: false);
+                inputCursor = unchecked(inputCursor + 8);
+                f19 = ReadPairedSingleQuantized(bus, state, inputCursor, gqr: 1, single: true);
+                inputCursor = unchecked(inputCursor + 2);
+                lastOffset = Rlwinm(unchecked((uint)(short)bus.Memory.Read16(inputCursor)), 5, 0, 26);
+                nextOutputCursor = unchecked(outputBase + lastOffset);
+            }
+
+            WriteSonicPairedTransform4dIndexedOutput(bus, outputCursor, f15, f16, f17, f18);
+
+            uint stackPointer = state.Gpr[1];
+            if (!bus.Memory.IsMainRamAddress(stackPointer + 8, 80))
+            {
+                return false;
+            }
+
+            state.Fpr[8] = f8.Lane0;
+            state.FprPair1[8] = f8.Lane1;
+            state.Fpr[9] = f9.Lane0;
+            state.FprPair1[9] = f9.Lane1;
+            state.Fpr[10] = f10.Lane0;
+            state.FprPair1[10] = f10.Lane1;
+            state.Fpr[11] = f11.Lane0;
+            state.FprPair1[11] = f11.Lane1;
+            state.Fpr[12] = f12.Lane0;
+            state.FprPair1[12] = f12.Lane1;
+            state.Fpr[13] = f13.Lane0;
+            state.FprPair1[13] = f13.Lane1;
+            for (int register = 14; register <= 23; register++)
+            {
+                double restored = ReadDouble(bus, stackPointer + 8u + (uint)(register - 14) * sizeof(double));
+                state.Fpr[register] = restored;
+                state.FprPair1[register] = restored;
+            }
+
+            state.Gpr[1] = unchecked(stackPointer + 128);
+            state.Gpr[4] = nextOutputCursor;
+            state.Gpr[6] = outputCursor;
+            state.Gpr[7] = inputCursor;
+            state.Gpr[10] = lastOffset;
+            state.Ctr = 0;
+            state.Pc = state.Lr & 0xFFFF_FFFCu;
+            AdvanceFastForwardedInstructions(state, bus, skipped);
+            skippedInstructions = checked((int)skipped);
+            return true;
+        }
+        catch (AddressTranslationException)
+        {
+            return false;
+        }
+    }
+
     private static bool TryFastForwardSonicVectorBlendCopyLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         skippedInstructions = 0;
@@ -11224,6 +11365,49 @@ public sealed class DolRunner
         && bus.Read32(pc + 0x74) == 0x3821_0040
         && bus.Read32(pc + 0x78) == 0x4E80_0020;
 
+    private static bool MatchesSonicPairedTransform4dIndexedOutputLoop(GameCubeBus bus) =>
+        bus.Read32(0x8011_DE54) == 0x1160_321C
+        && bus.Read32(0x8011_DE58) == 0xF1E6_0000
+        && bus.Read32(0x8011_DE5C) == 0x1181_3A1C
+        && bus.Read32(0x8011_DE60) == 0xF206_8008
+        && bus.Read32(0x8011_DE64) == 0x11A0_025A
+        && bus.Read32(0x8011_DE68) == 0xF226_000C
+        && bus.Read32(0x8011_DE6C) == 0x11C1_025A
+        && bus.Read32(0x8011_DE70) == 0xF246_8014
+        && bus.Read32(0x8011_DE74) == 0x1162_5A1E
+        && bus.Read32(0x8011_DE78) == 0x1183_621E
+        && bus.Read32(0x8011_DE7C) == 0xE507_0002
+        && bus.Read32(0x8011_DE80) == 0x11A2_6A9C
+        && bus.Read32(0x8011_DE84) == 0x11C3_729C
+        && bus.Read32(0x8011_DE88) == 0xE284_0000
+        && bus.Read32(0x8011_DE8C) == 0x1164_5A5C
+        && bus.Read32(0x8011_DE90) == 0xE2A4_8008
+        && bus.Read32(0x8011_DE94) == 0x1185_625C
+        && bus.Read32(0x8011_DE98) == 0xE2C4_000C
+        && bus.Read32(0x8011_DE9C) == 0x11A4_6A9E
+        && bus.Read32(0x8011_DEA0) == 0xE2E4_8014
+        && bus.Read32(0x8011_DEA4) == 0x11C5_729E
+        && bus.Read32(0x8011_DEA8) == 0x7C86_2378
+        && bus.Read32(0x8011_DEAC) == 0x11EB_A4DC
+        && bus.Read32(0x8011_DEB0) == 0x120C_ACDC
+        && bus.Read32(0x8011_DEB4) == 0xE527_0008
+        && bus.Read32(0x8011_DEB8) == 0x122D_B4DC
+        && bus.Read32(0x8011_DEBC) == 0x124E_BCDC
+        && bus.Read32(0x8011_DEC0) == 0xE547_0008
+        && bus.Read32(0x8011_DEC4) == 0xE667_9008
+        && bus.Read32(0x8011_DEC8) == 0xA547_0002
+        && bus.Read32(0x8011_DECC) == 0x554A_2834
+        && bus.Read32(0x8011_DED0) == 0x7C89_5214
+        && bus.Read32(0x8011_DED4) == 0x4200_FF80
+        && bus.Read32(0x8011_DED8) == 0xF1E6_0000
+        && bus.Read32(0x8011_DEDC) == 0xF206_8008
+        && bus.Read32(0x8011_DEE0) == 0xF226_000C
+        && bus.Read32(0x8011_DEE4) == 0xF246_8014
+        && bus.Read32(0x8011_DEE8) == 0xC9C1_0008
+        && bus.Read32(0x8011_DF0C) == 0xCAE1_0050
+        && bus.Read32(0x8011_DF10) == 0x3821_0080
+        && bus.Read32(0x8011_DF14) == 0x4E80_0020;
+
     private static bool MatchesSonicVectorBlendCopyLoop(GameCubeBus bus, uint pc) =>
         pc == SonicVectorBlendCopyLoopPc
         && bus.Read32(pc - 0x10) == 0x7D29_03A6
@@ -11388,6 +11572,51 @@ public sealed class DolRunner
     private static (double Lane0, double Lane1) ReadPairedSingleFloatPair(GameCubeBus bus, uint address) =>
         (ReadSingleFloat(bus, address), ReadSingleFloat(bus, address + sizeof(uint)));
 
+    private static (double Lane0, double Lane1) ReadPairedSingleFloatSingle(GameCubeBus bus, uint address) =>
+        (ReadSingleFloat(bus, address), 1.0d);
+
+    private static (double Lane0, double Lane1) ReadPairedSingleQuantized(GameCubeBus bus, PowerPcState state, uint address, int gqr, bool single)
+    {
+        int type = (int)((state.Spr[912 + gqr] >> 16) & 0x7);
+        int scale = SignExtend6((int)((state.Spr[912 + gqr] >> 24) & 0x3F));
+        double lane0 = ReadPairedSingleQuantizedOperand(bus, address, type, scale, out int size);
+        double lane1 = single ? 1.0d : ReadPairedSingleQuantizedOperand(bus, address + (uint)size, type, scale, out _);
+        return (lane0, lane1);
+    }
+
+    private static double ReadPairedSingleQuantizedOperand(GameCubeBus bus, uint address, int type, int scale, out int size)
+    {
+        double value;
+        switch (type)
+        {
+            case 0:
+                size = sizeof(uint);
+                return ReadSingleFloat(bus, address);
+            case 4:
+                size = sizeof(byte);
+                value = bus.Memory.Read8(address);
+                break;
+            case 5:
+                size = sizeof(ushort);
+                value = bus.Memory.Read16(address);
+                break;
+            case 6:
+                size = sizeof(byte);
+                value = unchecked((sbyte)bus.Memory.Read8(address));
+                break;
+            case 7:
+                size = sizeof(ushort);
+                value = unchecked((short)bus.Memory.Read16(address));
+                break;
+            default:
+                throw new AddressTranslationException(address);
+        }
+
+        return Math.ScaleB(value, -scale);
+    }
+
+    private static int SignExtend6(int value) => (value & 0x20) != 0 ? value - 0x40 : value;
+
     private static float ReadSingleFloat(GameCubeBus bus, uint address) =>
         BitConverter.Int32BitsToSingle(unchecked((int)bus.Read32(address)));
 
@@ -11420,6 +11649,16 @@ public sealed class DolRunner
         WriteSingleFloat(bus, cursor + sizeof(uint), third.Lane1);
         cursor = unchecked(cursor + 8);
         WriteSingleFloat(bus, cursor, fourth.Lane0);
+    }
+
+    private static void WriteSonicPairedTransform4dIndexedOutput(GameCubeBus bus, uint cursor, (double Lane0, double Lane1) first, (double Lane0, double Lane1) second, (double Lane0, double Lane1) third, (double Lane0, double Lane1) fourth)
+    {
+        WriteSingleFloat(bus, cursor, first.Lane0);
+        WriteSingleFloat(bus, cursor + sizeof(uint), first.Lane1);
+        WriteSingleFloat(bus, cursor + 8, second.Lane0);
+        WriteSingleFloat(bus, cursor + 12, third.Lane0);
+        WriteSingleFloat(bus, cursor + 16, third.Lane1);
+        WriteSingleFloat(bus, cursor + 20, fourth.Lane0);
     }
 
     private static void WriteSingleFloat(GameCubeBus bus, uint address, double value) =>

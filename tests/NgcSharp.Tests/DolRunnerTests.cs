@@ -4066,6 +4066,50 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicPairedTransform4dIndexedOutputFastForwardMatchesInterpreterLoop()
+    {
+        const uint input = 0x800C_0000;
+        const uint outputBase = 0x800D_0000;
+        const uint stack = 0x817F_F000;
+        const uint iterations = 3;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        PowerPcState expectedState = CreateSonicPairedTransform4dIndexedOutputState(expectedBus, input, outputBase, stack, iterations);
+        PowerPcState actualState = CreateSonicPairedTransform4dIndexedOutputState(actualBus, input, outputBase, stack, iterations);
+        int expectedInstructions = checked((int)(iterations * 33 + 16));
+
+        new PowerPcInterpreter().Run(expectedState, expectedBus, expectedInstructions);
+        bool skipped = InvokeFastForwardSonicPairedTransform4dIndexedOutput(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(expectedInstructions, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Ctr, actualState.Ctr);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 1, 4, 6, 7, 8, 9, 10 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+
+        for (int register = 8; register <= 23; register++)
+        {
+            long expectedLane0 = BitConverter.DoubleToInt64Bits(expectedState.Fpr[register]);
+            long actualLane0 = BitConverter.DoubleToInt64Bits(actualState.Fpr[register]);
+            long expectedLane1 = BitConverter.DoubleToInt64Bits(expectedState.FprPair1[register]);
+            long actualLane1 = BitConverter.DoubleToInt64Bits(actualState.FprPair1[register]);
+            Assert.True(expectedLane0 == actualLane0, $"f{register} lane0 expected={expectedState.Fpr[register]} actual={actualState.Fpr[register]}");
+            Assert.True(expectedLane1 == actualLane1, $"f{register} lane1 expected={expectedState.FprPair1[register]} actual={actualState.FprPair1[register]}");
+        }
+
+        for (uint offset = 0; offset <= 0xA0; offset += sizeof(uint))
+        {
+            Assert.Equal(expectedBus.Memory.Read32(outputBase + offset), actualBus.Memory.Read32(outputBase + offset));
+        }
+    }
+
+    [Fact]
     public void SonicVectorBlendCopyFastForwardMatchesInterpreterLoop()
     {
         const uint pc = 0x8012_0D98;
@@ -5362,6 +5406,16 @@ public sealed class DolRunnerTests
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGeneratedSlotMismatchScan", BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("Could not find Sonic generated slot mismatch scan fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
+    private static bool InvokeFastForwardSonicPairedTransform4dIndexedOutput(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicPairedTransform4dIndexedOutput", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic paired transform 4D indexed-output fast-forward helper.");
         object?[] args = [state, bus, 0];
         bool result = (bool)method.Invoke(null, args)!;
         skippedInstructions = (int)args[2]!;
@@ -7985,6 +8039,82 @@ public sealed class DolRunnerTests
         return state;
     }
 
+    private static PowerPcState CreateSonicPairedTransform4dIndexedOutputState(GameCubeBus bus, uint input, uint outputBase, uint stack, uint iterations)
+    {
+        WriteSonicPairedTransform4dIndexedOutputLoop(bus.Memory);
+        PowerPcState state = new()
+        {
+            Pc = 0x8011_DE54,
+            Lr = 0x8012_3456,
+            Ctr = iterations,
+            Cr = 0x4200_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[1] = stack;
+        state.Gpr[4] = outputBase + 0x20;
+        state.Gpr[6] = outputBase;
+        state.Gpr[7] = input;
+        state.Gpr[8] = iterations * 4;
+        state.Gpr[9] = outputBase;
+        state.Gpr[10] = 0x20;
+        state.Spr[22] = 0xFFFF_F000;
+        state.Spr[913] = 0x0807_0807;
+
+        for (int register = 0; register <= 23; register++)
+        {
+            state.Fpr[register] = (float)(register * 0.1875f - 1.25f);
+            state.FprPair1[register] = (float)(register * -0.15625f + 1.75f);
+        }
+
+        state.Fpr[8] = -0.75f;
+        state.FprPair1[8] = 1.25f;
+        state.Fpr[9] = 0.5f;
+        state.FprPair1[9] = 1.0f;
+        state.Fpr[10] = 0.375f;
+        state.FprPair1[10] = -0.625f;
+        state.Fpr[15] = 9.5f;
+        state.FprPair1[15] = -2.25f;
+        state.Fpr[16] = 3.75f;
+        state.FprPair1[16] = 1.0f;
+        state.Fpr[17] = -4.25f;
+        state.FprPair1[17] = 0.75f;
+        state.Fpr[18] = 6.5f;
+        state.FprPair1[18] = -1.5f;
+        state.Fpr[19] = 0.75f;
+        state.FprPair1[19] = 1.0f;
+
+        for (int register = 14; register <= 23; register++)
+        {
+            WriteDouble(bus.Memory, stack + 8u + (uint)(register - 14) * sizeof(double), 100.25 + register);
+        }
+
+        for (uint slot = 0; slot <= 6; slot++)
+        {
+            uint cursor = outputBase + slot * 0x20;
+            WriteSingle(bus.Memory, cursor + 0, 0.125f + slot);
+            WriteSingle(bus.Memory, cursor + 4, -0.25f - slot);
+            WriteSingle(bus.Memory, cursor + 8, 1.5f + slot);
+            WriteSingle(bus.Memory, cursor + 12, -2.5f - slot);
+            WriteSingle(bus.Memory, cursor + 16, 3.5f + slot);
+            WriteSingle(bus.Memory, cursor + 20, -4.5f - slot);
+        }
+
+        for (uint iteration = 0; iteration < iterations; iteration++)
+        {
+            uint cursor = input + iteration * 28;
+            WriteSingle(bus.Memory, cursor + 2, 0.125f + iteration);
+            WriteSingle(bus.Memory, cursor + 6, -0.25f - iteration);
+            WriteSingle(bus.Memory, cursor + 10, 0.5f + iteration);
+            WriteSingle(bus.Memory, cursor + 14, -0.75f - iteration);
+            WriteSingle(bus.Memory, cursor + 18, 1.0f + iteration);
+            WriteSingle(bus.Memory, cursor + 22, -1.25f - iteration);
+            WriteQuantizedS16(bus.Memory, cursor + 26, 0.75f);
+            bus.Memory.Write16(cursor + 28, (ushort)((iteration + 2) * 0x20 / 0x20));
+        }
+
+        return state;
+    }
+
     private static PowerPcState CreateSonicVectorBlendCopyState(GameCubeBus bus, uint pc, uint input, uint output, uint blendA, uint blendB, uint stack, uint iterations)
     {
         WriteSonicVectorBlendCopyLoop(bus.Memory, pc);
@@ -8291,6 +8421,59 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x78, 0x4E80_0020);
     }
 
+    private static void WriteSonicPairedTransform4dIndexedOutputLoop(GameCubeMemory memory)
+    {
+        WriteInstruction(memory, 0x8011_DE54, 0x1160_321C);
+        WriteInstruction(memory, 0x8011_DE58, 0xF1E6_0000);
+        WriteInstruction(memory, 0x8011_DE5C, 0x1181_3A1C);
+        WriteInstruction(memory, 0x8011_DE60, 0xF206_8008);
+        WriteInstruction(memory, 0x8011_DE64, 0x11A0_025A);
+        WriteInstruction(memory, 0x8011_DE68, 0xF226_000C);
+        WriteInstruction(memory, 0x8011_DE6C, 0x11C1_025A);
+        WriteInstruction(memory, 0x8011_DE70, 0xF246_8014);
+        WriteInstruction(memory, 0x8011_DE74, 0x1162_5A1E);
+        WriteInstruction(memory, 0x8011_DE78, 0x1183_621E);
+        WriteInstruction(memory, 0x8011_DE7C, 0xE507_0002);
+        WriteInstruction(memory, 0x8011_DE80, 0x11A2_6A9C);
+        WriteInstruction(memory, 0x8011_DE84, 0x11C3_729C);
+        WriteInstruction(memory, 0x8011_DE88, 0xE284_0000);
+        WriteInstruction(memory, 0x8011_DE8C, 0x1164_5A5C);
+        WriteInstruction(memory, 0x8011_DE90, 0xE2A4_8008);
+        WriteInstruction(memory, 0x8011_DE94, 0x1185_625C);
+        WriteInstruction(memory, 0x8011_DE98, 0xE2C4_000C);
+        WriteInstruction(memory, 0x8011_DE9C, 0x11A4_6A9E);
+        WriteInstruction(memory, 0x8011_DEA0, 0xE2E4_8014);
+        WriteInstruction(memory, 0x8011_DEA4, 0x11C5_729E);
+        WriteInstruction(memory, 0x8011_DEA8, 0x7C86_2378);
+        WriteInstruction(memory, 0x8011_DEAC, 0x11EB_A4DC);
+        WriteInstruction(memory, 0x8011_DEB0, 0x120C_ACDC);
+        WriteInstruction(memory, 0x8011_DEB4, 0xE527_0008);
+        WriteInstruction(memory, 0x8011_DEB8, 0x122D_B4DC);
+        WriteInstruction(memory, 0x8011_DEBC, 0x124E_BCDC);
+        WriteInstruction(memory, 0x8011_DEC0, 0xE547_0008);
+        WriteInstruction(memory, 0x8011_DEC4, 0xE667_9008);
+        WriteInstruction(memory, 0x8011_DEC8, 0xA547_0002);
+        WriteInstruction(memory, 0x8011_DECC, 0x554A_2834);
+        WriteInstruction(memory, 0x8011_DED0, 0x7C89_5214);
+        WriteInstruction(memory, 0x8011_DED4, 0x4200_FF80);
+        WriteInstruction(memory, 0x8011_DED8, 0xF1E6_0000);
+        WriteInstruction(memory, 0x8011_DEDC, 0xF206_8008);
+        WriteInstruction(memory, 0x8011_DEE0, 0xF226_000C);
+        WriteInstruction(memory, 0x8011_DEE4, 0xF246_8014);
+        WriteInstruction(memory, 0x8011_DEE8, 0xC9C1_0008);
+        WriteInstruction(memory, 0x8011_DEEC, 0xC9E1_0010);
+        WriteInstruction(memory, 0x8011_DEF0, 0xCA01_0018);
+        WriteInstruction(memory, 0x8011_DEF4, 0xCA21_0020);
+        WriteInstruction(memory, 0x8011_DEF8, 0xCA41_0028);
+        WriteInstruction(memory, 0x8011_DEFC, 0xCA61_0030);
+        WriteInstruction(memory, 0x8011_DF00, 0xCA81_0038);
+        WriteInstruction(memory, 0x8011_DF04, 0xCAA1_0040);
+        WriteInstruction(memory, 0x8011_DF08, 0xCAC1_0048);
+        WriteInstruction(memory, 0x8011_DF0C, 0xCAE1_0050);
+        WriteInstruction(memory, 0x8011_DF10, 0x3821_0080);
+        WriteInstruction(memory, 0x8011_DF14, 0x4E80_0020);
+    }
+
     private static void WriteSonicVectorBlendCopyLoop(GameCubeMemory memory, uint pc)
     {
         WriteInstruction(memory, pc - 0x10, 0x7D29_03A6);
@@ -8548,6 +8731,9 @@ public sealed class DolRunnerTests
 
     private static void WriteSingle(GameCubeMemory memory, uint address, float value) =>
         memory.Write32(address, unchecked((uint)BitConverter.SingleToInt32Bits(value)));
+
+    private static void WriteQuantizedS16(GameCubeMemory memory, uint address, float value) =>
+        memory.Write16(address, unchecked((ushort)(short)Math.Clamp((int)Math.Truncate(value * 256.0f), short.MinValue, short.MaxValue)));
 
     private static void WriteDouble(GameCubeMemory memory, uint address, double value)
     {
