@@ -432,6 +432,7 @@ foreach ($target in $selectedTargets) {
     $xfbFramePath = Join-Path $targetRoot "xfb.png"
     $exiTracePath = Join-Path $targetRoot "exi.csv"
     $siTracePath = Join-Path $targetRoot "si.csv"
+    $sonicResourceFlagsTracePath = Join-Path $targetRoot "sonic-resource-flags.csv"
     $gxCopiesPath = Join-Path $targetRoot "gx-copies.csv"
     $gxCopiesSummaryPath = Join-Path $targetRoot "gx-copies.summary.json"
 
@@ -472,6 +473,10 @@ foreach ($target in $selectedTargets) {
     if ([bool](Get-Value $trace "si" $false)) {
         $args.Add("--trace-si")
         $args.Add($siTracePath)
+    }
+    if ([bool](Get-Value $trace "sonicResourceFlags" $false)) {
+        $args.Add("--trace-sonic-resource-flags")
+        $args.Add($sonicResourceFlagsTracePath)
     }
 
     $gxFrame = Get-Value $target "gxFrame" $null

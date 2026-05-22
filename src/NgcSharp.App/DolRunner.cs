@@ -27,6 +27,13 @@ public sealed class DolRunner
     private const uint SonicPathLookupByteTablePc = 0x8010_BA44;
     private const int SonicPathLookupStackWindowBytes = 0xA0;
     private const uint SonicPathLookupRecordScanPc = 0x800E_EEC4;
+    private const uint SonicResourceFlagOffset = 0xFFFF_8A20;
+    private const uint SonicResourceFlagSetQueuedPc = 0x800E_BE54;
+    private const uint SonicResourceFlagSetActivePc = 0x800E_C59C;
+    private const uint SonicResourceFlagSetListPc = 0x800E_CA38;
+    private const uint SonicResourceFlagClearTaskPc = 0x800E_BB5C;
+    private const uint SonicResourceFlagClearSelectedPc = 0x800E_BF20;
+    private const int SonicResourceTaskSlotOffset = 0x2D0;
     private const uint SonicPairedTransform2dLoopPc = 0x8011_DAA8;
     private const uint SonicPairedTransform2dInstructionsPerIteration = 14;
     private const uint SonicPairedTransform2dExitInstructions = 4;
@@ -489,6 +496,12 @@ public sealed class DolRunner
             sonicPathLookupTrace.WriteLine("instruction,entry_pc,lr,path,predicted_status,predicted_result,actual_result,match,reason,path_text,actual_instruction_count,elapsed_cycles,decrementer_delta,predicted_cycles,cycle_delta,candidate_entries,segment_comparisons,compare_bytes,fast_forward_eligible,interrupt_entries,entry_r0,entry_r4,entry_r5,entry_r6,entry_cr,actual_r0,actual_r4,actual_r5,actual_r6,actual_cr,actual_lr,actual_ctr,actual_xer,entry_gprs,actual_gprs,stack_base,entry_stack,actual_stack,stack_changed");
         }
 
+        using TextWriter? sonicResourceFlagTrace = OpenTraceFile(options.SonicResourceFlagTracePath);
+        if (sonicResourceFlagTrace is not null)
+        {
+            sonicResourceFlagTrace.WriteLine("instruction,pc,lr,operation,flag_address,old_flag,new_flag,xor,mask,task,task_slot,selector,queue_head,queue_tail,r1,r3,r4,r5,r6,r7,r29,r30,r31");
+        }
+
         string GetStopReason(string? overrideReason = null)
         {
             if (overrideReason is not null)
@@ -897,6 +910,13 @@ public sealed class DolRunner
                     pendingWriteWatchOldWidth = storeWidth;
                     pendingWriteWatchOldValue = oldStoreValue;
                     pendingWriteWatchOldValueValid = true;
+                }
+
+                if (sonicResourceFlagTrace is not null
+                    && executed >= options.TracePcAfter.GetValueOrDefault()
+                    && TryGetSonicResourceFlagTraceEvent(state, bus, pc, out SonicResourceFlagTraceEvent resourceFlagEvent))
+                {
+                    sonicResourceFlagTrace.WriteLine($"{executed + 1},0x{pc:X8},0x{state.Lr:X8},{resourceFlagEvent.Operation},0x{resourceFlagEvent.FlagAddress:X8},0x{resourceFlagEvent.OldFlag:X8},0x{resourceFlagEvent.NewFlag:X8},0x{resourceFlagEvent.ChangedBits:X8},0x{resourceFlagEvent.Mask:X8},0x{resourceFlagEvent.Task:X8},{resourceFlagEvent.TaskSlot},0x{resourceFlagEvent.Selector:X8},0x{resourceFlagEvent.QueueHead:X8},0x{resourceFlagEvent.QueueTail:X8},0x{state.Gpr[1]:X8},0x{state.Gpr[3]:X8},0x{state.Gpr[4]:X8},0x{state.Gpr[5]:X8},0x{state.Gpr[6]:X8},0x{state.Gpr[7]:X8},0x{state.Gpr[29]:X8},0x{state.Gpr[30]:X8},0x{state.Gpr[31]:X8}");
                 }
 
                 if (sonicPathLookupTrace is not null)
@@ -12709,6 +12729,88 @@ public sealed class DolRunner
                 _ => 0,
             };
             return width is 1 or 2 or 4;
+        }
+        catch (AddressTranslationException)
+        {
+            value = 0;
+            return false;
+        }
+    }
+
+    private sealed record SonicResourceFlagTraceEvent(
+        string Operation,
+        uint FlagAddress,
+        uint OldFlag,
+        uint NewFlag,
+        uint ChangedBits,
+        uint Mask,
+        uint Task,
+        int TaskSlot,
+        uint Selector,
+        uint QueueHead,
+        uint QueueTail);
+
+    private static bool TryGetSonicResourceFlagTraceEvent(PowerPcState state, GameCubeBus bus, uint pc, out SonicResourceFlagTraceEvent traceEvent)
+    {
+        traceEvent = default!;
+        if (pc is not (SonicResourceFlagSetQueuedPc or SonicResourceFlagSetActivePc or SonicResourceFlagSetListPc or SonicResourceFlagClearTaskPc or SonicResourceFlagClearSelectedPc))
+        {
+            return false;
+        }
+
+        uint flagAddress = unchecked(state.Gpr[13] + SonicResourceFlagOffset);
+        if (!TryReadMemory32(bus.Memory, flagAddress, out uint oldFlag))
+        {
+            return false;
+        }
+
+        uint task = pc switch
+        {
+            SonicResourceFlagSetQueuedPc or SonicResourceFlagSetListPc => state.Gpr[6],
+            SonicResourceFlagSetActivePc => state.Gpr[29],
+            SonicResourceFlagClearTaskPc => state.Gpr[3],
+            SonicResourceFlagClearSelectedPc => state.Gpr[31],
+            _ => 0,
+        };
+        int taskSlot = TryReadMemory32(bus.Memory, task + SonicResourceTaskSlotOffset, out uint slotValue) ? unchecked((int)slotValue) : -1;
+        uint selector = pc == SonicResourceFlagClearSelectedPc ? state.Gpr[7] : taskSlot < 0 ? 0xFFFF_FFFF : (uint)taskSlot;
+        uint mask = pc switch
+        {
+            SonicResourceFlagSetQueuedPc or SonicResourceFlagSetActivePc or SonicResourceFlagSetListPc => taskSlot is >= 0 and < 32 ? 1u << (31 - taskSlot) : 0,
+            SonicResourceFlagClearTaskPc => taskSlot is >= 0 and < 32 ? (uint)(taskSlot + 1) << (31 - taskSlot) : 0,
+            SonicResourceFlagClearSelectedPc => selector < 32 ? unchecked((32u - selector) << (int)(selector ^ 31u)) : 0,
+            _ => 0,
+        };
+        string operation = pc switch
+        {
+            SonicResourceFlagSetQueuedPc => "set-queued",
+            SonicResourceFlagSetActivePc => "set-active",
+            SonicResourceFlagSetListPc => "set-list",
+            SonicResourceFlagClearTaskPc => "clear-task",
+            SonicResourceFlagClearSelectedPc => "clear-selected",
+            _ => "unknown",
+        };
+        uint newFlag = pc is SonicResourceFlagClearTaskPc or SonicResourceFlagClearSelectedPc
+            ? oldFlag & ~mask
+            : oldFlag | mask;
+        if (state.Gpr[0] != newFlag)
+        {
+            newFlag = state.Gpr[0];
+            mask = oldFlag ^ newFlag;
+        }
+
+        uint queueHead = TryReadMemory32(bus.Memory, task + 0x2E0, out uint head) ? head : 0;
+        uint queueTail = TryReadMemory32(bus.Memory, task + 0x2E4, out uint tail) ? tail : 0;
+        traceEvent = new SonicResourceFlagTraceEvent(operation, flagAddress, oldFlag, newFlag, oldFlag ^ newFlag, mask, task, taskSlot, selector, queueHead, queueTail);
+        return true;
+    }
+
+    private static bool TryReadMemory32(GameCubeMemory memory, uint address, out uint value)
+    {
+        try
+        {
+            value = memory.Read32(address);
+            return true;
         }
         catch (AddressTranslationException)
         {

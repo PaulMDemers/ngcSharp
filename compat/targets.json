@@ -348,6 +348,9 @@
       "maxInstructions": 35000000,
       "timeoutSeconds": 540,
       "profilePc": 24,
+      "trace": {
+        "sonicResourceFlags": true
+      },
       "extraArgs": [
         "--profile-after",
         "0x01C00000",
