@@ -44,6 +44,7 @@ public sealed class DolRunner
     private const uint SonicGxCommandDispatchExtendedRangePc = 0x8011_CE20;
     private const uint SonicGxCommandMetadataHeaderPc = 0x8011_CE60;
     private const uint SonicGxCommandActiveBatchRecordPc = 0x8011_CE80;
+    private const uint SonicGxCommandMaskUpdatePc = 0x8011_CEC0;
     private const uint SonicGprSaveTailPc = 0x8010_AFCC;
     private const uint SonicGprRestoreTailPc = 0x8010_B018;
     private const uint SonicGxAttributeStateSetterPc = 0x8010_0D44;
@@ -7682,6 +7683,57 @@ public sealed class DolRunner
             return true;
         }
 
+        if (MatchesSonicGxCommandMaskUpdate(bus, state.Pc))
+        {
+            uint controlAddress = unchecked(state.Gpr[13] - 29144u);
+            uint maskAddress = unchecked(state.Gpr[13] - 29148u);
+            uint orAddress = unchecked(state.Gpr[13] - 29152u);
+            uint cachedValueAddress = unchecked(state.Gpr[13] - 29056u);
+            uint dirtyValueAddress = unchecked(state.Gpr[13] - 29052u);
+            if (!bus.Memory.IsMainRamAddress(controlAddress, sizeof(uint))
+                || !bus.Memory.IsMainRamAddress(maskAddress, sizeof(uint))
+                || !bus.Memory.IsMainRamAddress(orAddress, sizeof(uint))
+                || !bus.Memory.IsMainRamAddress(cachedValueAddress, sizeof(uint))
+                || !bus.Memory.IsMainRamAddress(dirtyValueAddress, sizeof(uint)))
+            {
+                return false;
+            }
+
+            uint controlFlag = Rlwinm(bus.Memory.Read32(controlAddress), 0, 20, 20);
+            uint skipped = controlFlag == 0 ? 16u : 20u;
+            if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: skipped, extraInstructions: 0))
+            {
+                return false;
+            }
+
+            state.Gpr[0] = controlFlag;
+            SetCr0ForUnsignedCompareImmediate(state, controlFlag, 0);
+            if (controlFlag != 0)
+            {
+                state.Gpr[0] = bus.Memory.Read32(maskAddress);
+                state.Gpr[28] &= state.Gpr[0];
+                state.Gpr[0] = bus.Memory.Read32(orAddress);
+                state.Gpr[28] |= state.Gpr[0];
+            }
+
+            state.Gpr[3] = unchecked((uint)(short)state.Gpr[28]);
+            state.Gpr[0] = 8;
+            state.Gpr[0] = ShiftRightAlgebraicWord(state, state.Gpr[3], state.Gpr[0]);
+            state.Gpr[28] = unchecked((uint)(short)state.Gpr[0]);
+            state.Gpr[0] = bus.Memory.Read32(cachedValueAddress);
+            state.Gpr[4] = state.Gpr[28] ^ state.Gpr[0];
+            state.Gpr[0] = bus.Memory.Read32(dirtyValueAddress);
+            state.Gpr[4] |= state.Gpr[0];
+            state.Gpr[3] = state.Gpr[28];
+            bus.Memory.Write32(cachedValueAddress, state.Gpr[3]);
+            state.Gpr[0] = 0;
+            bus.Memory.Write32(dirtyValueAddress, state.Gpr[0]);
+            state.Pc = SonicGxCommandMaskUpdatePc + 0x50;
+            AdvanceFastForwardedInstructions(state, bus, skipped);
+            skippedInstructions = checked((int)skipped);
+            return true;
+        }
+
         return false;
     }
 
@@ -7770,6 +7822,29 @@ public sealed class DolRunner
         && bus.Read32(pc + 0x30) == 0x7E94_0214
         && bus.Read32(pc + 0x34) == 0x4800_02D0
         && bus.Read32(pc + 0x38) == 0x7EDC_B378;
+
+    private static bool MatchesSonicGxCommandMaskUpdate(GameCubeBus bus, uint pc) =>
+        pc == SonicGxCommandMaskUpdatePc
+        && bus.Read32(pc + 0x00) == 0x800D_8E28
+        && bus.Read32(pc + 0x04) == 0x5400_0528
+        && bus.Read32(pc + 0x08) == 0x2800_0000
+        && bus.Read32(pc + 0x0C) == 0x4182_0014
+        && bus.Read32(pc + 0x10) == 0x800D_8E24
+        && bus.Read32(pc + 0x14) == 0x7F9C_0038
+        && bus.Read32(pc + 0x18) == 0x800D_8E20
+        && bus.Read32(pc + 0x1C) == 0x7F9C_0378
+        && bus.Read32(pc + 0x20) == 0x7F83_0734
+        && bus.Read32(pc + 0x24) == 0x3800_0008
+        && bus.Read32(pc + 0x28) == 0x7C60_0630
+        && bus.Read32(pc + 0x2C) == 0x7C1C_0734
+        && bus.Read32(pc + 0x30) == 0x800D_8E80
+        && bus.Read32(pc + 0x34) == 0x7F84_0278
+        && bus.Read32(pc + 0x38) == 0x800D_8E84
+        && bus.Read32(pc + 0x3C) == 0x7C84_0378
+        && bus.Read32(pc + 0x40) == 0x7F83_E378
+        && bus.Read32(pc + 0x44) == 0x906D_8E80
+        && bus.Read32(pc + 0x48) == 0x3800_0000
+        && bus.Read32(pc + 0x4C) == 0x900D_8E84;
 
     private static bool TryFastForwardSonicGprSaveRestoreTail(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
@@ -11575,6 +11650,15 @@ public sealed class DolRunner
     }
 
     private static uint ShiftLeftWord(uint value, uint shift) => value << (int)(shift & 0x1F);
+
+    private static uint ShiftRightAlgebraicWord(PowerPcState state, uint value, uint shift)
+    {
+        int amount = (shift & 0x20) != 0 ? 32 : (int)(shift & 0x1F);
+        uint result = amount == 0 ? value : unchecked((uint)((int)value >> amount));
+        bool carry = amount > 0 && (value & 0x8000_0000) != 0 && (value & ((1u << Math.Min(amount, 31)) - 1)) != 0;
+        SetCarry(state, carry);
+        return result;
+    }
 
     private static uint PowerPcMask(int begin, int end)
     {

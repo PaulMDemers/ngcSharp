@@ -3530,6 +3530,50 @@ public sealed class DolRunnerTests
             Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
             Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
         }
+
+        foreach ((uint control, uint mask, uint overlay, uint initialValue, uint cachedValue, uint dirtyValue, int expectedInstructions) in new[]
+        {
+            (0u, 0xFFFF_0000u, 0x0000_4000u, 0x0000_8123u, 0x0000_1200u, 0x0000_0004u, 16),
+            (0x0000_0800u, 0x0000_FF00u, 0x0000_8100u, 0x1234_00F0u, 0x0000_8100u, 0x0000_0000u, 20),
+        })
+        {
+            const uint maskUpdatePc = 0x8011_CEC0;
+            const uint r13 = 0x803B_52C0;
+            GameCubeBus expectedBus = new();
+            GameCubeBus actualBus = new();
+            WriteSonicGxCommandDispatch(expectedBus.Memory);
+            WriteSonicGxCommandDispatch(actualBus.Memory);
+            PowerPcState expectedState = CreateSonicGxCommandDispatchState(maskUpdatePc, 0x41);
+            PowerPcState actualState = CreateSonicGxCommandDispatchState(maskUpdatePc, 0x41);
+            foreach ((GameCubeBus bus, PowerPcState state) in new[] { (expectedBus, expectedState), (actualBus, actualState) })
+            {
+                state.Gpr[13] = r13;
+                state.Gpr[28] = initialValue;
+                bus.Memory.Write32(r13 - 29144u, control);
+                bus.Memory.Write32(r13 - 29148u, mask);
+                bus.Memory.Write32(r13 - 29152u, overlay);
+                bus.Memory.Write32(r13 - 29056u, cachedValue);
+                bus.Memory.Write32(r13 - 29052u, dirtyValue);
+            }
+
+            new PowerPcInterpreter().Run(expectedState, expectedBus, expectedInstructions);
+            bool skipped = InvokeFastForwardSonicGxCommandDispatch(actualState, actualBus, out int skippedInstructions);
+
+            Assert.True(skipped);
+            Assert.Equal(expectedInstructions, skippedInstructions);
+            Assert.Equal(expectedState.Pc, actualState.Pc);
+            Assert.Equal(expectedState.Cr, actualState.Cr);
+            Assert.Equal(expectedState.Xer, actualState.Xer);
+            foreach (int register in new[] { 0, 3, 4, 13, 28 })
+            {
+                Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+            }
+
+            Assert.Equal(expectedBus.Memory.Read32(r13 - 29056u), actualBus.Memory.Read32(r13 - 29056u));
+            Assert.Equal(expectedBus.Memory.Read32(r13 - 29052u), actualBus.Memory.Read32(r13 - 29052u));
+            Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+            Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        }
     }
 
     [Fact]
@@ -6326,6 +6370,28 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, activeBatchRecordPc + 0x30, 0x7E94_0214);
         WriteInstruction(memory, activeBatchRecordPc + 0x34, 0x4800_02D0);
         WriteInstruction(memory, activeBatchRecordPc + 0x38, 0x7EDC_B378);
+
+        const uint maskUpdatePc = 0x8011_CEC0;
+        WriteInstruction(memory, maskUpdatePc + 0x00, 0x800D_8E28);
+        WriteInstruction(memory, maskUpdatePc + 0x04, 0x5400_0528);
+        WriteInstruction(memory, maskUpdatePc + 0x08, 0x2800_0000);
+        WriteInstruction(memory, maskUpdatePc + 0x0C, 0x4182_0014);
+        WriteInstruction(memory, maskUpdatePc + 0x10, 0x800D_8E24);
+        WriteInstruction(memory, maskUpdatePc + 0x14, 0x7F9C_0038);
+        WriteInstruction(memory, maskUpdatePc + 0x18, 0x800D_8E20);
+        WriteInstruction(memory, maskUpdatePc + 0x1C, 0x7F9C_0378);
+        WriteInstruction(memory, maskUpdatePc + 0x20, 0x7F83_0734);
+        WriteInstruction(memory, maskUpdatePc + 0x24, 0x3800_0008);
+        WriteInstruction(memory, maskUpdatePc + 0x28, 0x7C60_0630);
+        WriteInstruction(memory, maskUpdatePc + 0x2C, 0x7C1C_0734);
+        WriteInstruction(memory, maskUpdatePc + 0x30, 0x800D_8E80);
+        WriteInstruction(memory, maskUpdatePc + 0x34, 0x7F84_0278);
+        WriteInstruction(memory, maskUpdatePc + 0x38, 0x800D_8E84);
+        WriteInstruction(memory, maskUpdatePc + 0x3C, 0x7C84_0378);
+        WriteInstruction(memory, maskUpdatePc + 0x40, 0x7F83_E378);
+        WriteInstruction(memory, maskUpdatePc + 0x44, 0x906D_8E80);
+        WriteInstruction(memory, maskUpdatePc + 0x48, 0x3800_0000);
+        WriteInstruction(memory, maskUpdatePc + 0x4C, 0x900D_8E84);
     }
 
     private static void WriteSonicGprSaveRestoreTail(GameCubeMemory memory)
