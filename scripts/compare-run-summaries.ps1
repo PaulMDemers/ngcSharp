@@ -210,6 +210,15 @@ $afterBranch = @((Get-Value $afterData "branchSiteProfiles" @()) | ForEach-Objec
 }) -join "; "
 Add-Change $rows "profile" "branchTopTargets" $beforeBranch $afterBranch
 
+$beforeIndirectProfile = Get-Value $beforeData "indirectCallSiteProfile" $null
+$afterIndirectProfile = Get-Value $afterData "indirectCallSiteProfile" $null
+$beforeIndirectEntries = @((Get-Value $beforeIndirectProfile "entries" @()))
+$afterIndirectEntries = @((Get-Value $afterIndirectProfile "entries" @()))
+$beforeIndirectTop = if ($beforeIndirectEntries.Count -gt 0) { "$(Get-Value $beforeIndirectProfile "callSite")->$(Get-Value $beforeIndirectEntries[0] "target"):$(Get-Value $beforeIndirectEntries[0] "count")" } else { "" }
+$afterIndirectTop = if ($afterIndirectEntries.Count -gt 0) { "$(Get-Value $afterIndirectProfile "callSite")->$(Get-Value $afterIndirectEntries[0] "target"):$(Get-Value $afterIndirectEntries[0] "count")" } else { "" }
+Add-Change $rows "profile" "indirectBranchTopTarget" $beforeIndirectTop $afterIndirectTop
+Add-EntryDeltas $rows "indirectBranchProfileDelta" $beforeIndirectEntries $afterIndirectEntries "target" "count" $Top
+
 $beforePcLr = @((Get-Value $beforeData "pcLrProfiles" @()) | ForEach-Object {
     $entries = @((Get-Value $_ "entries" @()))
     if ($entries.Count -gt 0) {
