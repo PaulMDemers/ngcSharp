@@ -1436,6 +1436,105 @@ public sealed class DolRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData(2u, 3u)]
+    [InlineData(3u, 0u)]
+    public void MemmoveRoutineFastForwardCopiesOptimizedBackwardWordTail(uint wordCount, uint residualBytes)
+    {
+        const uint pc = 0x8010_C0C4;
+        const uint source = 0x8007_5000;
+        const uint destination = 0x8007_6000;
+        uint totalBytes = wordCount * sizeof(uint) + residualBytes;
+        byte[] sourceBytes = Enumerable.Range(0, (int)totalBytes).Select(index => (byte)(0x31 + index)).ToArray();
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        WriteOptimizedMemmoveBackwardWordTail(expectedBus.Memory, pc);
+        WriteOptimizedMemmoveBackwardWordTail(actualBus.Memory, pc);
+        expectedBus.Memory.Load(source, sourceBytes);
+        actualBus.Memory.Load(source, sourceBytes);
+        PowerPcState expectedState = CreateOptimizedMemmoveBackwardWordTailState(pc, source + totalBytes, destination + totalBytes, wordCount, residualBytes);
+        PowerPcState actualState = CreateOptimizedMemmoveBackwardWordTailState(pc, source + totalBytes, destination + totalBytes, wordCount, residualBytes);
+
+        PowerPcInterpreter interpreter = new();
+        int expectedInstructions = 0;
+        while (expectedState.Pc != expectedState.Lr && expectedInstructions < 64)
+        {
+            interpreter.Step(expectedState, expectedBus);
+            expectedInstructions++;
+        }
+
+        Assert.Equal(expectedState.Lr, expectedState.Pc);
+        bool skipped = InvokeFastForwardMemmoveRoutine(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(expectedInstructions, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Lr, actualState.Lr);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.Xer, actualState.Xer);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 0, 3, 4, 5, 6 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+
+        for (uint offset = 0; offset < totalBytes; offset++)
+        {
+            Assert.Equal(expectedBus.Memory.Read8(destination + offset), actualBus.Memory.Read8(destination + offset));
+        }
+    }
+
+    [Fact]
+    public void MemmoveRoutineFastForwardCopiesOptimizedBackwardWordTailInLockedCache()
+    {
+        const uint pc = 0x8010_C0C4;
+        const uint source = 0xE000_0010;
+        const uint destination = 0xE000_0040;
+        const uint wordCount = 4;
+        const uint residualBytes = 0;
+        uint totalBytes = wordCount * sizeof(uint) + residualBytes;
+        byte[] sourceBytes = Enumerable.Range(0, (int)totalBytes).Select(index => (byte)(0x70 + index)).ToArray();
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        WriteOptimizedMemmoveBackwardWordTail(expectedBus.Memory, pc);
+        WriteOptimizedMemmoveBackwardWordTail(actualBus.Memory, pc);
+        for (uint offset = 0; offset < totalBytes; offset++)
+        {
+            expectedBus.Write8(source + offset, sourceBytes[offset]);
+            actualBus.Write8(source + offset, sourceBytes[offset]);
+        }
+
+        PowerPcState expectedState = CreateOptimizedMemmoveBackwardWordTailState(pc, source + totalBytes, destination + totalBytes, wordCount, residualBytes);
+        PowerPcState actualState = CreateOptimizedMemmoveBackwardWordTailState(pc, source + totalBytes, destination + totalBytes, wordCount, residualBytes);
+
+        PowerPcInterpreter interpreter = new();
+        int expectedInstructions = 0;
+        while (expectedState.Pc != expectedState.Lr && expectedInstructions < 64)
+        {
+            interpreter.Step(expectedState, expectedBus);
+            expectedInstructions++;
+        }
+
+        Assert.Equal(expectedState.Lr, expectedState.Pc);
+        bool skipped = InvokeFastForwardMemmoveRoutine(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(expectedInstructions, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.Xer, actualState.Xer);
+        foreach (int register in new[] { 0, 3, 4, 5, 6 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+
+        for (uint offset = 0; offset < totalBytes; offset++)
+        {
+            Assert.Equal(expectedBus.Read8(destination + offset), actualBus.Read8(destination + offset));
+        }
+    }
+
     [Fact]
     public void MemmoveRoutineFastForwardDoesNotCrossPositiveDecrementer()
     {
@@ -5026,6 +5125,39 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, pc + 0x44, 0x34A5_FFFF);
         WriteInstruction(memory, pc + 0x48, 0x4082_FFF4);
         WriteInstruction(memory, pc + 0x4C, 0x4E80_0020);
+    }
+
+    private static void WriteOptimizedMemmoveBackwardWordTail(GameCubeMemory memory, uint pc)
+    {
+        WriteInstruction(memory, pc + 0x00, 0x8404_FFFC);
+        WriteInstruction(memory, pc + 0x04, 0x3463_FFFF);
+        WriteInstruction(memory, pc + 0x08, 0x9406_FFFC);
+        WriteInstruction(memory, pc + 0x0C, 0x4082_FFF4);
+        WriteInstruction(memory, pc + 0x10, 0x54A5_07BF);
+        WriteInstruction(memory, pc + 0x14, 0x4D82_0020);
+        WriteInstruction(memory, pc + 0x18, 0x8C04_FFFF);
+        WriteInstruction(memory, pc + 0x1C, 0x34A5_FFFF);
+        WriteInstruction(memory, pc + 0x20, 0x9C06_FFFF);
+        WriteInstruction(memory, pc + 0x24, 0x4082_FFF4);
+        WriteInstruction(memory, pc + 0x28, 0x4E80_0020);
+    }
+
+    private static PowerPcState CreateOptimizedMemmoveBackwardWordTailState(uint pc, uint sourceEnd, uint destinationEnd, uint wordCount, uint residualBytes)
+    {
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8010_C1AC,
+            Cr = 0x2200_0088,
+            Xer = 0x0000_0000,
+        };
+        state.Gpr[0] = 0xAAAA_0000;
+        state.Gpr[3] = wordCount;
+        state.Gpr[4] = sourceEnd;
+        state.Gpr[5] = 0x1200_0000 | residualBytes;
+        state.Gpr[6] = destinationEnd;
+        state.Spr[22] = 0xFFFF_F000;
+        return state;
     }
 
     private static void WriteTextureSampleLeaf(GameCubeMemory memory, uint pc)

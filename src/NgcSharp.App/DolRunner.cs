@@ -14,6 +14,8 @@ public sealed class DolRunner
     private const uint MaxFastForwardStringLengthBytes = 1 * 1024 * 1024;
     private const uint MaxFastForwardPrsOutputBytes = 16 * 1024 * 1024;
     private const uint MaxFastForwardSonicCoordinatePairs = 1 * 1024 * 1024;
+    private const uint LockedCacheStart = 0xE000_0000;
+    private const uint LockedCacheSize = 16 * 1024;
     private const uint MaxFastForwardTrigTableEntries = 0x0001_0000;
     private const uint SonicTrigTableInstructionsPerEntry = 180;
     private const uint SonicBitUnpackInstructionsPerRow = 400;
@@ -10517,6 +10519,11 @@ public sealed class DolRunner
             return TryFastForwardMemmoveBackwardLoop(state, bus, pc, out skippedInstructions);
         }
 
+        if (first == 0x8404_FFFC)
+        {
+            return TryFastForwardOptimizedMemmoveBackwardWordTail(state, bus, pc, out skippedInstructions);
+        }
+
         return false;
     }
 
@@ -10707,6 +10714,66 @@ public sealed class DolRunner
         return true;
     }
 
+    private static bool TryFastForwardOptimizedMemmoveBackwardWordTail(PowerPcState state, GameCubeBus bus, uint pc, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint wordCount = state.Gpr[3];
+        uint residualBytes = state.Gpr[5] & 3u;
+        if (!MatchesOptimizedMemmoveBackwardWordTail(bus, pc)
+            || wordCount == 0
+            || wordCount > MaxFastForwardMemmoveBytes / sizeof(uint))
+        {
+            return false;
+        }
+
+        uint totalBytes = checked(wordCount * sizeof(uint) + residualBytes);
+        uint sourceStart = unchecked(state.Gpr[4] - totalBytes);
+        uint destinationStart = unchecked(state.Gpr[6] - totalBytes);
+        uint instructions = checked(wordCount * 4u + 2u + (residualBytes == 0 ? 0u : residualBytes * 4u + 1u));
+        if (!CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: instructions, extraInstructions: 0)
+            || !IsMainRamOrLockedCacheRange(bus, sourceStart, checked((int)totalBytes))
+            || !IsMainRamOrLockedCacheRange(bus, destinationStart, checked((int)totalBytes)))
+        {
+            return false;
+        }
+
+        uint sourceCursor = state.Gpr[4];
+        uint destinationCursor = state.Gpr[6];
+        uint r0 = state.Gpr[0];
+        uint remainingWords = wordCount;
+        while (remainingWords != 0)
+        {
+            sourceCursor = unchecked(sourceCursor - sizeof(uint));
+            destinationCursor = unchecked(destinationCursor - sizeof(uint));
+            r0 = bus.Read32(sourceCursor);
+            remainingWords--;
+            bus.Write32(destinationCursor, r0);
+        }
+
+        uint remainingBytes = residualBytes;
+        while (remainingBytes != 0)
+        {
+            sourceCursor--;
+            destinationCursor--;
+            r0 = bus.Read8(sourceCursor);
+            remainingBytes--;
+            bus.Write8(destinationCursor, (byte)r0);
+        }
+
+        state.Gpr[0] = r0;
+        state.Gpr[3] = 0;
+        state.Gpr[4] = sourceCursor;
+        state.Gpr[5] = 0;
+        state.Gpr[6] = destinationCursor;
+        state.Pc = state.Lr & 0xFFFF_FFFCu;
+        SetCarry(state, carry: true);
+        SetCr0(state, 0);
+
+        AdvanceFastForwardedInstructions(state, bus, instructions);
+        skippedInstructions = checked((int)instructions);
+        return true;
+    }
+
     private static bool MatchesMemmoveForwardSetup(GameCubeBus bus, uint pc) =>
         bus.Read32(pc + 0x00) == 0x3884_FFFF
         && bus.Read32(pc + 0x04) == 0x38C3_FFFF
@@ -10734,6 +10801,35 @@ public sealed class DolRunner
         && bus.Read32(pc + 0x08) == 0x34A5_FFFF
         && bus.Read32(pc + 0x0C) == 0x4082_FFF4
         && bus.Read32(pc + 0x10) == 0x4E80_0020;
+
+    private static bool MatchesOptimizedMemmoveBackwardWordTail(GameCubeBus bus, uint pc) =>
+        bus.Read32(pc + 0x00) == 0x8404_FFFC
+        && bus.Read32(pc + 0x04) == 0x3463_FFFF
+        && bus.Read32(pc + 0x08) == 0x9406_FFFC
+        && bus.Read32(pc + 0x0C) == 0x4082_FFF4
+        && bus.Read32(pc + 0x10) == 0x54A5_07BF
+        && bus.Read32(pc + 0x14) == 0x4D82_0020
+        && bus.Read32(pc + 0x18) == 0x8C04_FFFF
+        && bus.Read32(pc + 0x1C) == 0x34A5_FFFF
+        && bus.Read32(pc + 0x20) == 0x9C06_FFFF
+        && bus.Read32(pc + 0x24) == 0x4082_FFF4
+        && bus.Read32(pc + 0x28) == 0x4E80_0020;
+
+    private static bool IsMainRamOrLockedCacheRange(GameCubeBus bus, uint address, int size)
+    {
+        if (bus.Memory.IsMainRamAddress(address, size))
+        {
+            return true;
+        }
+
+        if (address < LockedCacheStart || size < 0 || (uint)size > LockedCacheSize)
+        {
+            return false;
+        }
+
+        uint normalized = address - LockedCacheStart;
+        return normalized <= LockedCacheSize - (uint)size;
+    }
 
     private static bool TryCopyMemmoveForward(PowerPcState state, GameCubeBus bus, uint sourceStart, uint destinationStart, uint count, uint extraInstructions, out byte lastValue)
     {
