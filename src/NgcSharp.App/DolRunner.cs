@@ -1409,6 +1409,13 @@ public sealed class DolRunner
                     continue;
                 }
 
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGeneratedSlotMismatchScan(state, bus, out skippedInstructions))
+                {
+                    sonicGeneratedRangeScanFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxFloatStripEmitLoop(state, bus, out skippedInstructions))
                 {
                     sonicGxFloatStripEmitFastForwardInstructions += (uint)skippedInstructions;
@@ -10245,6 +10252,137 @@ public sealed class DolRunner
         bus.Write32(state.Gpr[1] + 0xC8, 0x4330_0000);
         bus.Write32(state.Gpr[1] + 0xCC, unchecked((uint)(value ^ int.MinValue)));
     }
+
+    private static bool TryFastForwardSonicGeneratedSlotMismatchScan(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        const uint pc = 0x80BC_7288;
+        const uint exitPc = 0x80BC_7EC8;
+        const uint tablePointerAddress = 0x80BE_CA1C;
+        const uint slotStride = 44;
+        const uint slotCompareOffset = 40;
+        const uint instructionsPerSlot = 19;
+        const uint maxSlots = 0x1_0000;
+
+        if (state.Pc != pc || !MatchesSonicGeneratedSlotMismatchScan(bus))
+        {
+            return false;
+        }
+
+        GameCubeMemory memory = bus.Memory;
+        uint slot = state.Gpr[31];
+        uint groupOffset = Rlwinm(state.Gpr[30], 5, 0, 26);
+        if (!memory.IsMainRamAddress(tablePointerAddress, sizeof(uint)))
+        {
+            return false;
+        }
+
+        uint tableBase = memory.Read32(tablePointerAddress);
+        if (!TryAdd(tableBase, groupOffset, out uint groupPointerAddress)
+            || !TryAdd(groupPointerAddress, sizeof(uint), out uint countAddress)
+            || !memory.IsMainRamAddress(groupPointerAddress, sizeof(uint))
+            || !memory.IsMainRamAddress(countAddress, sizeof(uint)))
+        {
+            return false;
+        }
+
+        uint groupBase = memory.Read32(groupPointerAddress);
+        uint count = memory.Read32(countAddress);
+        if (slot >= count || count > maxSlots)
+        {
+            return false;
+        }
+
+        uint slotsToConsider = count - slot;
+        uint decrementer = state.Spr[22];
+        if ((decrementer & 0x8000_0000) == 0)
+        {
+            uint slotsBeforeInterruptEdge = decrementer / instructionsPerSlot;
+            if (slotsBeforeInterruptEdge == 0)
+            {
+                return false;
+            }
+
+            slotsToConsider = Math.Min(slotsToConsider, slotsBeforeInterruptEdge);
+        }
+
+        uint target = state.Gpr[26];
+        uint mismatchedSlots = 0;
+        uint lastValue = 0;
+        while (mismatchedSlots < slotsToConsider)
+        {
+            uint currentSlot = slot + mismatchedSlots;
+            if (!TryMultiplyAdd(currentSlot, slotStride, slotCompareOffset, out uint slotOffset)
+                || !TryAdd(groupBase, slotOffset, out uint valueAddress)
+                || !memory.IsMainRamAddress(valueAddress, sizeof(uint)))
+            {
+                return false;
+            }
+
+            uint value = memory.Read32(valueAddress);
+            if (value == target)
+            {
+                break;
+            }
+
+            lastValue = value;
+            mismatchedSlots++;
+        }
+
+        if (mismatchedSlots == 0)
+        {
+            return false;
+        }
+
+        uint nextSlot = slot + mismatchedSlots;
+        state.Gpr[0] = groupOffset;
+        state.Gpr[3] = lastValue;
+        state.Gpr[4] = count;
+        state.Gpr[5] = groupOffset;
+        state.Gpr[6] = tableBase;
+        state.Gpr[31] = nextSlot;
+        SetCr0ForSignedCompare(state, nextSlot, count);
+        state.Pc = nextSlot < count ? pc : exitPc;
+
+        uint skipped = checked(mismatchedSlots * instructionsPerSlot);
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+
+        static bool TryAdd(uint left, uint right, out uint result)
+        {
+            result = unchecked(left + right);
+            return result >= left;
+        }
+
+        static bool TryMultiplyAdd(uint value, uint multiplier, uint addend, out uint result)
+        {
+            ulong computed = (ulong)value * multiplier + addend;
+            result = (uint)computed;
+            return computed <= uint.MaxValue;
+        }
+    }
+
+    private static bool MatchesSonicGeneratedSlotMismatchScan(GameCubeBus bus) =>
+        bus.Read32(0x80BC_7288) == 0x3C60_80BF
+        && bus.Read32(0x80BC_728C) == 0x3863_CA1C
+        && bus.Read32(0x80BC_7290) == 0x8063_0000
+        && bus.Read32(0x80BC_7294) == 0x57C0_2834
+        && bus.Read32(0x80BC_7298) == 0x7C83_002E
+        && bus.Read32(0x80BC_729C) == 0x1C7F_002C
+        && bus.Read32(0x80BC_72A0) == 0x3863_0028
+        && bus.Read32(0x80BC_72A4) == 0x7C64_182E
+        && bus.Read32(0x80BC_72A8) == 0x7C1A_1840
+        && bus.Read32(0x80BC_72AC) == 0x4082_0BF8
+        && bus.Read32(0x80BC_7EA4) == 0x3BFF_0001
+        && bus.Read32(0x80BC_7EA8) == 0x3C80_80BF
+        && bus.Read32(0x80BC_7EAC) == 0x3884_CA1C
+        && bus.Read32(0x80BC_7EB0) == 0x80C4_0000
+        && bus.Read32(0x80BC_7EB4) == 0x57C5_2834
+        && bus.Read32(0x80BC_7EB8) == 0x3885_0004
+        && bus.Read32(0x80BC_7EBC) == 0x7C86_202E
+        && bus.Read32(0x80BC_7EC0) == 0x7C1F_2000
+        && bus.Read32(0x80BC_7EC4) == 0x4180_F3C4;
 
     private static bool TryFastForwardSonicResourceModeQuery(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {

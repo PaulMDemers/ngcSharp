@@ -4257,6 +4257,70 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicGeneratedSlotMismatchScanFastForwardMatchesInterpreterBeforeHit()
+    {
+        const uint tableBase = 0x8130_0000;
+        const uint groupBase = 0x8131_0000;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        PowerPcState expectedState = CreateSonicGeneratedSlotMismatchScanState(expectedBus, tableBase, groupBase, slot: 1, count: 5, target: 0x22);
+        PowerPcState actualState = CreateSonicGeneratedSlotMismatchScanState(actualBus, tableBase, groupBase, slot: 1, count: 5, target: 0x22);
+        WriteSonicGeneratedSlotMismatchScan(expectedBus.Memory);
+        WriteSonicGeneratedSlotMismatchScan(actualBus.Memory);
+        WriteSonicGeneratedSlotCompareValue(expectedBus.Memory, groupBase, slot: 1, value: 0x11);
+        WriteSonicGeneratedSlotCompareValue(expectedBus.Memory, groupBase, slot: 2, value: 0x33);
+        WriteSonicGeneratedSlotCompareValue(expectedBus.Memory, groupBase, slot: 3, value: 0x22);
+        WriteSonicGeneratedSlotCompareValue(actualBus.Memory, groupBase, slot: 1, value: 0x11);
+        WriteSonicGeneratedSlotCompareValue(actualBus.Memory, groupBase, slot: 2, value: 0x33);
+        WriteSonicGeneratedSlotCompareValue(actualBus.Memory, groupBase, slot: 3, value: 0x22);
+
+        new PowerPcInterpreter().Run(expectedState, expectedBus, 38);
+        bool skipped = InvokeFastForwardSonicGeneratedSlotMismatchScan(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(38, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 0, 3, 4, 5, 6, 26, 30, 31 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+    }
+
+    [Fact]
+    public void SonicGeneratedSlotMismatchScanFastForwardMatchesInterpreterAtExit()
+    {
+        const uint tableBase = 0x8130_0000;
+        const uint groupBase = 0x8131_0000;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        PowerPcState expectedState = CreateSonicGeneratedSlotMismatchScanState(expectedBus, tableBase, groupBase, slot: 1, count: 3, target: 0x22);
+        PowerPcState actualState = CreateSonicGeneratedSlotMismatchScanState(actualBus, tableBase, groupBase, slot: 1, count: 3, target: 0x22);
+        WriteSonicGeneratedSlotMismatchScan(expectedBus.Memory);
+        WriteSonicGeneratedSlotMismatchScan(actualBus.Memory);
+        WriteSonicGeneratedSlotCompareValue(expectedBus.Memory, groupBase, slot: 1, value: 0x11);
+        WriteSonicGeneratedSlotCompareValue(expectedBus.Memory, groupBase, slot: 2, value: 0x33);
+        WriteSonicGeneratedSlotCompareValue(actualBus.Memory, groupBase, slot: 1, value: 0x11);
+        WriteSonicGeneratedSlotCompareValue(actualBus.Memory, groupBase, slot: 2, value: 0x33);
+
+        new PowerPcInterpreter().Run(expectedState, expectedBus, 38);
+        bool skipped = InvokeFastForwardSonicGeneratedSlotMismatchScan(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(38, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 0, 3, 4, 5, 6, 26, 30, 31 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+    }
+
+    [Fact]
     public void SonicBitPlaneCropFastForwardCropsRowsInPlace()
     {
         const uint pc = 0x800E_1F14;
@@ -5240,6 +5304,16 @@ public sealed class DolRunnerTests
         return result;
     }
 
+    private static bool InvokeFastForwardSonicGeneratedSlotMismatchScan(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGeneratedSlotMismatchScan", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic generated slot mismatch scan fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
     private static bool InvokeFastForwardSonicGxFloatTexcoordStripEmitLoop(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGxFloatTexcoordStripEmitLoop", BindingFlags.NonPublic | BindingFlags.Static)
@@ -5937,6 +6011,29 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, 0x80BC_82AC, 0x3BFF_0001);
         WriteInstruction(memory, 0x80BC_82B0, 0x2C1F_0040);
         WriteInstruction(memory, 0x80BC_82B4, 0x4180_FE5C);
+    }
+
+    private static void WriteSonicGeneratedSlotMismatchScan(GameCubeMemory memory)
+    {
+        WriteInstruction(memory, 0x80BC_7288, 0x3C60_80BF);
+        WriteInstruction(memory, 0x80BC_728C, 0x3863_CA1C);
+        WriteInstruction(memory, 0x80BC_7290, 0x8063_0000);
+        WriteInstruction(memory, 0x80BC_7294, 0x57C0_2834);
+        WriteInstruction(memory, 0x80BC_7298, 0x7C83_002E);
+        WriteInstruction(memory, 0x80BC_729C, 0x1C7F_002C);
+        WriteInstruction(memory, 0x80BC_72A0, 0x3863_0028);
+        WriteInstruction(memory, 0x80BC_72A4, 0x7C64_182E);
+        WriteInstruction(memory, 0x80BC_72A8, 0x7C1A_1840);
+        WriteInstruction(memory, 0x80BC_72AC, 0x4082_0BF8);
+        WriteInstruction(memory, 0x80BC_7EA4, 0x3BFF_0001);
+        WriteInstruction(memory, 0x80BC_7EA8, 0x3C80_80BF);
+        WriteInstruction(memory, 0x80BC_7EAC, 0x3884_CA1C);
+        WriteInstruction(memory, 0x80BC_7EB0, 0x80C4_0000);
+        WriteInstruction(memory, 0x80BC_7EB4, 0x57C5_2834);
+        WriteInstruction(memory, 0x80BC_7EB8, 0x3885_0004);
+        WriteInstruction(memory, 0x80BC_7EBC, 0x7C86_202E);
+        WriteInstruction(memory, 0x80BC_7EC0, 0x7C1F_2000);
+        WriteInstruction(memory, 0x80BC_7EC4, 0x4180_F3C4);
     }
 
     private static void WriteSonicGxAttributeFlush(GameCubeMemory memory, uint pc)
@@ -7879,6 +7976,33 @@ public sealed class DolRunnerTests
         return state;
     }
 
+    private static PowerPcState CreateSonicGeneratedSlotMismatchScanState(
+        GameCubeBus bus,
+        uint tableBase,
+        uint groupBase,
+        uint slot,
+        uint count,
+        uint target)
+    {
+        const uint group = 1;
+        const uint groupOffset = group << 5;
+        PowerPcState state = new()
+        {
+            Pc = 0x80BC_7288,
+            Lr = 0x80BC_7EA4,
+            Cr = 0x4200_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[26] = target;
+        state.Gpr[30] = group;
+        state.Gpr[31] = slot;
+        state.Spr[22] = 0xFFFF_F000;
+        bus.Memory.Write32(0x80BE_CA1C, tableBase);
+        bus.Memory.Write32(tableBase + groupOffset, groupBase);
+        bus.Memory.Write32(tableBase + groupOffset + sizeof(uint), count);
+        return state;
+    }
+
     private static PowerPcState CreateSonicGeneratedModelPointerScanState(
         GameCubeBus bus,
         uint pc,
@@ -7915,6 +8039,11 @@ public sealed class DolRunnerTests
     {
         uint offset = unchecked((uint)(group * groupStride + index * stride) + baseOffset);
         memory.Write32(table + offset, unchecked((uint)value));
+    }
+
+    private static void WriteSonicGeneratedSlotCompareValue(GameCubeMemory memory, uint groupBase, uint slot, uint value)
+    {
+        memory.Write32(groupBase + slot * 44 + 40, value);
     }
 
     private static void WriteSonicPairedTransform2dLoop(GameCubeMemory memory, uint pc)
