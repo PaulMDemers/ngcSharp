@@ -2879,6 +2879,74 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicGxTevDefaultWrapperFastForwardMatchesInterpreter()
+    {
+        const uint pc = 0x8010_44A8;
+        const uint stack = 0x803C_1250;
+        const uint stateBlock = 0x8035_7000;
+        List<MmioAccess> expectedWrites = [];
+        List<MmioAccess> actualWrites = [];
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        expectedBus.MmioAccessObserver = access =>
+        {
+            if (access.Kind == MmioAccessKind.Write && access.Address == 0xCC00_8000)
+            {
+                expectedWrites.Add(access);
+            }
+        };
+        actualBus.MmioAccessObserver = access =>
+        {
+            if (access.Kind == MmioAccessKind.Write && access.Address == 0xCC00_8000)
+            {
+                actualWrites.Add(access);
+            }
+        };
+        WriteSonicGxTevDefaultWrapper(expectedBus.Memory);
+        WriteSonicGxTevDefaultWrapper(actualBus.Memory);
+        PowerPcState expectedState = CreateSonicGxTevDefaultWrapperState(expectedBus, pc, stack, stateBlock);
+        PowerPcState actualState = CreateSonicGxTevDefaultWrapperState(actualBus, pc, stack, stateBlock);
+
+        uint returnAddress = expectedState.Lr;
+        int expectedInstructions = 0;
+        while (expectedState.Pc != returnAddress && expectedInstructions < 256)
+        {
+            new PowerPcInterpreter().Step(expectedState, expectedBus);
+            expectedInstructions++;
+        }
+
+        bool skipped = InvokeFastForwardSonicGxTevDefaultWrapper(actualState, actualBus, out int skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(expectedInstructions, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Lr, actualState.Lr);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.Xer, actualState.Xer);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        for (int register = 0; register < 32; register++)
+        {
+            Assert.True(expectedState.Gpr[register] == actualState.Gpr[register], $"r{register}: expected 0x{expectedState.Gpr[register]:X8}, actual 0x{actualState.Gpr[register]:X8}");
+        }
+
+        for (uint offset = 0; offset < 0x30; offset += sizeof(uint))
+        {
+            Assert.Equal(expectedBus.Memory.Read32(stack - 24 + offset), actualBus.Memory.Read32(stack - 24 + offset));
+        }
+
+        foreach (uint offset in new[] { 0x130u, 0x170u })
+        {
+            Assert.Equal(expectedBus.Memory.Read32(stateBlock + offset), actualBus.Memory.Read32(stateBlock + offset));
+        }
+
+        Assert.Equal(expectedBus.Memory.Read16(stateBlock + 2), actualBus.Memory.Read16(stateBlock + 2));
+        Assert.Equal(
+            expectedWrites.Select(access => (access.Width, access.Value)).ToArray(),
+            actualWrites.Select(access => (access.Width, access.Value)).ToArray());
+    }
+
+    [Fact]
     public void SonicGxDrawBeginFastForwardMatchesCleanInterpreterPath()
     {
         const uint pc = 0x8010_1948;
@@ -4706,6 +4774,16 @@ public sealed class DolRunnerTests
         return result;
     }
 
+    private static bool InvokeFastForwardSonicGxTevDefaultWrapper(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGxTevDefaultWrapper", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic GX TEV default wrapper fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
     private static bool InvokeFastForwardSonicGxTevColorEnvSetter(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicGxTevColorEnvSetter", BindingFlags.NonPublic | BindingFlags.Static)
@@ -5807,6 +5885,50 @@ public sealed class DolRunnerTests
         }
     }
 
+    private static void WriteSonicGxTevDefaultWrapper(GameCubeMemory memory)
+    {
+        const uint pc = 0x8010_44A8;
+        uint[] instructions =
+        [
+            0x7C08_02A6, 0x38C0_000A, 0x9001_0004, 0x9421_FFE8,
+            0x93E1_0014, 0x3BE0_0005, 0x93C1_0010, 0x7C7E_1B79,
+            0x4182_000C, 0x38C0_0000, 0x3BE0_0000, 0x2C04_0002,
+            0x4182_008C, 0x4080_0014, 0x2C04_0000, 0x4182_001C,
+            0x4080_0048, 0x4800_0110, 0x2C04_0004, 0x4182_00D8,
+            0x4080_0104, 0x4800_009C, 0x387E_0000, 0x3880_000F,
+            0x38A0_0008, 0x38E0_000F, 0x4800_013D, 0x387E_0000,
+            0x38DF_0000, 0x3880_0007, 0x38A0_0004, 0x38E0_0007,
+            0x4800_01A5, 0x4800_00D0, 0x387E_0000, 0x3886_0000,
+            0x38A0_0008, 0x38C0_0009, 0x38E0_000F, 0x4800_0109,
+            0x387E_0000, 0x38FF_0000, 0x3880_0007, 0x38A0_0007,
+            0x38C0_0007, 0x4800_0171, 0x4800_009C, 0x387E_0000,
+            0x3886_0000, 0x38A0_000C, 0x38C0_0008, 0x38E0_000F,
+            0x4800_00D5, 0x387E_0000, 0x38DF_0000, 0x3880_0007,
+            0x38A0_0004, 0x38E0_0007, 0x4800_013D, 0x4800_0068,
+            0x387E_0000, 0x3880_000F, 0x38A0_000F, 0x38C0_000F,
+            0x38E0_0008, 0x4800_00A1, 0x387E_0000, 0x3880_0007,
+            0x38A0_0007, 0x38C0_0007, 0x38E0_0004, 0x4800_0109,
+            0x4800_0034, 0x387E_0000, 0x38E6_0000, 0x3880_000F,
+            0x38A0_000F, 0x38C0_000F, 0x4800_006D, 0x387E_0000,
+            0x38FF_0000, 0x3880_0007, 0x38A0_0007, 0x38C0_0007,
+            0x4800_00D5, 0x387E_0000, 0x3880_0000, 0x38A0_0000,
+            0x38C0_0000, 0x38E0_0001, 0x3900_0000, 0x4800_013D,
+            0x387E_0000, 0x3880_0000, 0x38A0_0000, 0x38C0_0000,
+            0x38E0_0001, 0x3900_0000, 0x4800_01E1, 0x8001_001C,
+            0x83E1_0014, 0x83C1_0010, 0x7C08_03A6, 0x3821_0018,
+            0x4E80_0020,
+        ];
+        for (int index = 0; index < instructions.Length; index++)
+        {
+            WriteInstruction(memory, pc + (uint)(index * sizeof(uint)), instructions[index]);
+        }
+
+        WriteSonicGxTevColorEnvSetter(memory, 0x8010_464C);
+        WriteSonicGxTevAlphaEnvSetter(memory, 0x8010_46CC);
+        WriteSonicGxTevOpSetter(memory, 0x8010_4750, 0x130);
+        WriteSonicGxTevOpSetter(memory, 0x8010_4810, 0x170);
+    }
+
     private static void WriteSonicGxTevColorEnvSetter(GameCubeMemory memory, uint pc)
     {
         uint[] instructions =
@@ -6649,6 +6771,35 @@ public sealed class DolRunnerTests
         bus.Memory.Write32(state.Gpr[13] - 31872u, stateBlock);
         bus.Memory.Write32(stateBlock + 0x204, 0xF234_5670);
         bus.Memory.Write32(stateBlock + 0x4F0, 0x40);
+        return state;
+    }
+
+    private static PowerPcState CreateSonicGxTevDefaultWrapperState(GameCubeBus bus, uint pc, uint stack, uint stateBlock)
+    {
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8011_C9D4,
+            Cr = 0x2200_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[1] = stack;
+        state.Gpr[3] = 0;
+        state.Gpr[4] = 0;
+        state.Gpr[5] = 0x1111_0005;
+        state.Gpr[6] = 0x2222_0006;
+        state.Gpr[7] = 0x3333_0007;
+        state.Gpr[8] = 0x4444_0008;
+        state.Gpr[9] = 0x5555_0009;
+        state.Gpr[13] = 0x803B_52C0;
+        state.Gpr[30] = 0xAAAA_0001;
+        state.Gpr[31] = 0xBBBB_0002;
+        state.Spr[22] = 0xFFFF_F000;
+
+        bus.Memory.Write32(state.Gpr[13] - 31872u, stateBlock);
+        bus.Memory.Write32(stateBlock + 0x130, 0xDEAD_BEEF);
+        bus.Memory.Write32(stateBlock + 0x170, 0xABCD_EF01);
+        bus.Memory.Write16(stateBlock + 2, 0x1234);
         return state;
     }
 

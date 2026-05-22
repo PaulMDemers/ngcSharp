@@ -61,6 +61,13 @@ public sealed class DolRunner
     private const uint SonicGxTevAlphaOpSetterPc = 0x8010_4810;
     private const uint SonicGxTevOpSetterLowModeInstructions = 40;
     private const uint SonicGxTevOpSetterHighModeInstructions = 37;
+    private const uint SonicGxTevDefaultWrapperPc = 0x8010_44A8;
+    private const uint SonicGxTevDefaultWrapperOwnInstructions = 46;
+    private const uint SonicGxTevDefaultWrapperInstructions = SonicGxTevDefaultWrapperOwnInstructions
+        + SonicGxTevColorEnvSetterInstructions
+        + SonicGxTevAlphaEnvSetterInstructions
+        + SonicGxTevOpSetterLowModeInstructions
+        + SonicGxTevOpSetterLowModeInstructions;
     private const uint SonicGxVertexDescriptorSetterPc = 0x8010_0830;
     private const uint SonicGxVertexAttributeFlushPc = 0x8010_3D28;
     private const uint SonicGxVertexAttributeHelperPc = 0x8010_3C5C;
@@ -243,6 +250,7 @@ public sealed class DolRunner
         ulong sonicGxTevAlphaEnvSetterFastForwardInstructions = 0;
         ulong sonicGxTevColorOpSetterFastForwardInstructions = 0;
         ulong sonicGxTevAlphaOpSetterFastForwardInstructions = 0;
+        ulong sonicGxTevDefaultWrapperFastForwardInstructions = 0;
         ulong sonicGxVertexDescriptorSetterFastForwardInstructions = 0;
         ulong sonicGxVertexAttributeFlushFastForwardInstructions = 0;
         ulong sonicGxIndexedStripBatchFastForwardInstructions = 0;
@@ -803,6 +811,7 @@ public sealed class DolRunner
                         sonicGxTevAlphaEnvSetterInstructions = sonicGxTevAlphaEnvSetterFastForwardInstructions,
                         sonicGxTevColorOpSetterInstructions = sonicGxTevColorOpSetterFastForwardInstructions,
                         sonicGxTevAlphaOpSetterInstructions = sonicGxTevAlphaOpSetterFastForwardInstructions,
+                        sonicGxTevDefaultWrapperInstructions = sonicGxTevDefaultWrapperFastForwardInstructions,
                         sonicGxVertexDescriptorSetterInstructions = sonicGxVertexDescriptorSetterFastForwardInstructions,
                         sonicGxVertexAttributeFlushInstructions = sonicGxVertexAttributeFlushFastForwardInstructions,
                         sonicGxIndexedStripBatchInstructions = sonicGxIndexedStripBatchFastForwardInstructions,
@@ -1246,6 +1255,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxCpStateSetter(state, bus, out skippedInstructions))
                 {
                     sonicGxCpStateSetterFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicGxTevDefaultWrapper(state, bus, out skippedInstructions))
+                {
+                    sonicGxTevDefaultWrapperFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -1969,6 +1985,11 @@ public sealed class DolRunner
             if (sonicGxTevAlphaOpSetterFastForwardInstructions != 0)
             {
                 _output.WriteLine($"Fast-forwarded {sonicGxTevAlphaOpSetterFastForwardInstructions} Sonic GX TEV alpha op setter instruction(s).");
+            }
+
+            if (sonicGxTevDefaultWrapperFastForwardInstructions != 0)
+            {
+                _output.WriteLine($"Fast-forwarded {sonicGxTevDefaultWrapperFastForwardInstructions} Sonic GX TEV default wrapper instruction(s).");
             }
 
             if (sonicGxVertexDescriptorSetterFastForwardInstructions != 0)
@@ -5730,6 +5751,175 @@ public sealed class DolRunner
         && bus.Read32(pc + 0x3C) == 0x6000_0004
         && bus.Read32(pc + 0x40) == 0x9003_04F0
         && bus.Read32(pc + 0x44) == 0x4E80_0020;
+
+    private static bool TryFastForwardSonicGxTevDefaultWrapper(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        if (!MatchesSonicGxTevDefaultWrapper(bus, state.Pc)
+            || state.Gpr[3] != 0
+            || state.Gpr[4] != 0
+            || !CanFastForwardInstructionCount(state, iterations: 1, instructionsPerIteration: SonicGxTevDefaultWrapperInstructions, extraInstructions: 0))
+        {
+            return false;
+        }
+
+        uint oldStackPointer = state.Gpr[1];
+        uint newStackPointer = unchecked(oldStackPointer - 24u);
+        if (!bus.Memory.IsMainRamAddress(newStackPointer, 32))
+        {
+            return false;
+        }
+
+        uint stateBlockPointerAddress = unchecked(state.Gpr[13] + 0xFFFF_8380u);
+        if (!bus.Memory.IsMainRamAddress(stateBlockPointerAddress, sizeof(uint)))
+        {
+            return false;
+        }
+
+        uint stateBlock = bus.Memory.Read32(stateBlockPointerAddress);
+        if (!bus.Memory.IsMainRamAddress(stateBlock, 0x4F4))
+        {
+            return false;
+        }
+
+        uint oldLr = state.Lr;
+        uint oldR30 = state.Gpr[30];
+        uint oldR31 = state.Gpr[31];
+
+        state.Gpr[0] = oldLr;
+        state.Gpr[6] = 10;
+        bus.Memory.Write32(oldStackPointer + 4, oldLr);
+        bus.Memory.Write32(newStackPointer, oldStackPointer);
+        state.Gpr[1] = newStackPointer;
+        bus.Memory.Write32(newStackPointer + 20, oldR31);
+        state.Gpr[31] = 5;
+        bus.Memory.Write32(newStackPointer + 16, oldR30);
+        state.Gpr[30] = 0;
+        SetCr0(state, 0);
+
+        int totalHelperInstructions = 0;
+
+        state.Gpr[3] = 0;
+        state.Gpr[4] = 15;
+        state.Gpr[5] = 8;
+        state.Gpr[6] = 10;
+        state.Gpr[7] = 15;
+        state.Lr = SonicGxTevDefaultWrapperPc + 0x6C;
+        state.Pc = SonicGxTevColorEnvSetterPc;
+        if (!TryFastForwardSonicGxTevColorEnvSetter(state, bus, out int helperInstructions))
+        {
+            return false;
+        }
+
+        totalHelperInstructions += helperInstructions;
+
+        state.Gpr[3] = 0;
+        state.Gpr[6] = 5;
+        state.Gpr[4] = 7;
+        state.Gpr[5] = 4;
+        state.Gpr[7] = 7;
+        state.Lr = SonicGxTevDefaultWrapperPc + 0x84;
+        state.Pc = SonicGxTevAlphaEnvSetterPc;
+        if (!TryFastForwardSonicGxTevAlphaEnvSetter(state, bus, out helperInstructions))
+        {
+            return false;
+        }
+
+        totalHelperInstructions += helperInstructions;
+
+        state.Gpr[3] = 0;
+        state.Gpr[4] = 0;
+        state.Gpr[5] = 0;
+        state.Gpr[6] = 0;
+        state.Gpr[7] = 1;
+        state.Gpr[8] = 0;
+        state.Lr = SonicGxTevDefaultWrapperPc + 0x170;
+        state.Pc = SonicGxTevColorOpSetterPc;
+        if (!TryFastForwardSonicGxTevColorOpSetter(state, bus, out helperInstructions))
+        {
+            return false;
+        }
+
+        totalHelperInstructions += helperInstructions;
+
+        state.Gpr[3] = 0;
+        state.Gpr[4] = 0;
+        state.Gpr[5] = 0;
+        state.Gpr[6] = 0;
+        state.Gpr[7] = 1;
+        state.Gpr[8] = 0;
+        state.Lr = SonicGxTevDefaultWrapperPc + 0x18C;
+        state.Pc = SonicGxTevAlphaOpSetterPc;
+        if (!TryFastForwardSonicGxTevAlphaOpSetter(state, bus, out helperInstructions))
+        {
+            return false;
+        }
+
+        totalHelperInstructions += helperInstructions;
+
+        state.Gpr[0] = bus.Memory.Read32(newStackPointer + 28);
+        state.Gpr[31] = bus.Memory.Read32(newStackPointer + 20);
+        state.Gpr[30] = bus.Memory.Read32(newStackPointer + 16);
+        state.Lr = state.Gpr[0];
+        state.Gpr[1] = unchecked(newStackPointer + 24u);
+        state.Pc = state.Lr & 0xFFFF_FFFCu;
+
+        AdvanceFastForwardedInstructions(state, bus, SonicGxTevDefaultWrapperOwnInstructions);
+        skippedInstructions = checked(totalHelperInstructions + (int)SonicGxTevDefaultWrapperOwnInstructions);
+        return true;
+    }
+
+    private static bool MatchesSonicGxTevDefaultWrapper(GameCubeBus bus, uint pc)
+    {
+        if (pc != SonicGxTevDefaultWrapperPc)
+        {
+            return false;
+        }
+
+        ReadOnlySpan<uint> instructions =
+        [
+            0x7C08_02A6, 0x38C0_000A, 0x9001_0004, 0x9421_FFE8,
+            0x93E1_0014, 0x3BE0_0005, 0x93C1_0010, 0x7C7E_1B79,
+            0x4182_000C, 0x38C0_0000, 0x3BE0_0000, 0x2C04_0002,
+            0x4182_008C, 0x4080_0014, 0x2C04_0000, 0x4182_001C,
+            0x4080_0048, 0x4800_0110, 0x2C04_0004, 0x4182_00D8,
+            0x4080_0104, 0x4800_009C, 0x387E_0000, 0x3880_000F,
+            0x38A0_0008, 0x38E0_000F, 0x4800_013D, 0x387E_0000,
+            0x38DF_0000, 0x3880_0007, 0x38A0_0004, 0x38E0_0007,
+            0x4800_01A5, 0x4800_00D0, 0x387E_0000, 0x3886_0000,
+            0x38A0_0008, 0x38C0_0009, 0x38E0_000F, 0x4800_0109,
+            0x387E_0000, 0x38FF_0000, 0x3880_0007, 0x38A0_0007,
+            0x38C0_0007, 0x4800_0171, 0x4800_009C, 0x387E_0000,
+            0x3886_0000, 0x38A0_000C, 0x38C0_0008, 0x38E0_000F,
+            0x4800_00D5, 0x387E_0000, 0x38DF_0000, 0x3880_0007,
+            0x38A0_0004, 0x38E0_0007, 0x4800_013D, 0x4800_0068,
+            0x387E_0000, 0x3880_000F, 0x38A0_000F, 0x38C0_000F,
+            0x38E0_0008, 0x4800_00A1, 0x387E_0000, 0x3880_0007,
+            0x38A0_0007, 0x38C0_0007, 0x38E0_0004, 0x4800_0109,
+            0x4800_0034, 0x387E_0000, 0x38E6_0000, 0x3880_000F,
+            0x38A0_000F, 0x38C0_000F, 0x4800_006D, 0x387E_0000,
+            0x38FF_0000, 0x3880_0007, 0x38A0_0007, 0x38C0_0007,
+            0x4800_00D5, 0x387E_0000, 0x3880_0000, 0x38A0_0000,
+            0x38C0_0000, 0x38E0_0001, 0x3900_0000, 0x4800_013D,
+            0x387E_0000, 0x3880_0000, 0x38A0_0000, 0x38C0_0000,
+            0x38E0_0001, 0x3900_0000, 0x4800_01E1, 0x8001_001C,
+            0x83E1_0014, 0x83C1_0010, 0x7C08_03A6, 0x3821_0018,
+            0x4E80_0020,
+        ];
+
+        for (int index = 0; index < instructions.Length; index++)
+        {
+            if (bus.Read32(pc + (uint)(index * sizeof(uint))) != instructions[index])
+            {
+                return false;
+            }
+        }
+
+        return MatchesSonicGxTevColorEnvSetter(bus, SonicGxTevColorEnvSetterPc)
+            && MatchesSonicGxTevAlphaEnvSetter(bus, SonicGxTevAlphaEnvSetterPc)
+            && MatchesSonicGxTevColorOpSetter(bus, SonicGxTevColorOpSetterPc)
+            && MatchesSonicGxTevAlphaOpSetter(bus, SonicGxTevAlphaOpSetterPc);
+    }
 
     private static bool TryFastForwardSonicGxTevColorEnvSetter(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
