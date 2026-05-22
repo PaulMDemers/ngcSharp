@@ -246,7 +246,7 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "pc": "0x80136D2C"
+        "pc": "0x80136CF4"
       }
     },
     {
@@ -1013,7 +1013,7 @@
       "expected": {
         "status": "ok",
         "stopReason": "max-instructions",
-        "pc": "0x8002572C",
+        "pc": "0x80028A64",
         "minGxFifoBytes": 1,
         "frameSha256": "524364c83aa128e9ff5a1c265ae4932aaff1cbd08ce9cb009d70081adc5cf5d3"
       }
