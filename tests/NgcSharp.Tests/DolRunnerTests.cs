@@ -4321,6 +4321,60 @@ public sealed class DolRunnerTests
     }
 
     [Fact]
+    public void SonicStartCodeScanFastForwardMatchesInterpreterBeforeClassifier()
+    {
+        const uint input = 0x8134_0000;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        PowerPcState expectedState = CreateSonicStartCodeScanState(expectedBus, input, length: 8);
+        PowerPcState actualState = CreateSonicStartCodeScanState(actualBus, input, length: 8);
+        byte[] bytes = [0x22, 0x00, 0x00, 0x00, 0x01, 0xB3, 0x44, 0x55];
+        expectedBus.Memory.Load(input, bytes);
+        actualBus.Memory.Load(input, bytes);
+
+        bool skipped = InvokeFastForwardSonicStartCodeScan(actualState, actualBus, out int skippedInstructions);
+        new PowerPcInterpreter().Run(expectedState, expectedBus, skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(60, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 0, 3, 4, 29, 30, 31 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+    }
+
+    [Fact]
+    public void SonicStartCodeScanFastForwardMatchesInterpreterAtEnd()
+    {
+        const uint input = 0x8134_0000;
+        GameCubeBus expectedBus = new();
+        GameCubeBus actualBus = new();
+        PowerPcState expectedState = CreateSonicStartCodeScanState(expectedBus, input, length: 4);
+        PowerPcState actualState = CreateSonicStartCodeScanState(actualBus, input, length: 4);
+        byte[] bytes = [0x22, 0x00, 0x00, 0x02];
+        expectedBus.Memory.Load(input, bytes);
+        actualBus.Memory.Load(input, bytes);
+
+        bool skipped = InvokeFastForwardSonicStartCodeScan(actualState, actualBus, out int skippedInstructions);
+        new PowerPcInterpreter().Run(expectedState, expectedBus, skippedInstructions);
+
+        Assert.True(skipped);
+        Assert.Equal(51, skippedInstructions);
+        Assert.Equal(expectedState.Pc, actualState.Pc);
+        Assert.Equal(expectedState.Cr, actualState.Cr);
+        Assert.Equal(expectedState.TimeBase, actualState.TimeBase);
+        Assert.Equal(expectedState.Spr[22], actualState.Spr[22]);
+        foreach (int register in new[] { 0, 3, 4, 29, 30, 31 })
+        {
+            Assert.Equal(expectedState.Gpr[register], actualState.Gpr[register]);
+        }
+    }
+
+    [Fact]
     public void SonicBitPlaneCropFastForwardCropsRowsInPlace()
     {
         const uint pc = 0x800E_1F14;
@@ -5334,6 +5388,16 @@ public sealed class DolRunnerTests
         return result;
     }
 
+    private static bool InvokeFastForwardSonicStartCodeScan(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicStartCodeScan", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Could not find Sonic start-code scan fast-forward helper.");
+        object?[] args = [state, bus, 0];
+        bool result = (bool)method.Invoke(null, args)!;
+        skippedInstructions = (int)args[2]!;
+        return result;
+    }
+
     private static bool InvokeFastForwardSonicPathRecordScan(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
     {
         MethodInfo method = typeof(DolRunner).GetMethod("TryFastForwardSonicPathRecordScan", BindingFlags.NonPublic | BindingFlags.Static)
@@ -6034,6 +6098,51 @@ public sealed class DolRunnerTests
         WriteInstruction(memory, 0x80BC_7EBC, 0x7C86_202E);
         WriteInstruction(memory, 0x80BC_7EC0, 0x7C1F_2000);
         WriteInstruction(memory, 0x80BC_7EC4, 0x4180_F3C4);
+    }
+
+    private static void WriteSonicStartCodeScan(GameCubeMemory memory)
+    {
+        WriteInstruction(memory, 0x8014_93B8, 0x2C04_0002);
+        WriteInstruction(memory, 0x8014_93BC, 0x887D_0000);
+        WriteInstruction(memory, 0x8014_93C0, 0x3BBD_0001);
+        WriteInstruction(memory, 0x8014_93C4, 0x4182_004C);
+        WriteInstruction(memory, 0x8014_93C8, 0x4080_0014);
+        WriteInstruction(memory, 0x8014_93CC, 0x2C04_0000);
+        WriteInstruction(memory, 0x8014_93D0, 0x4182_0018);
+        WriteInstruction(memory, 0x8014_93D4, 0x4080_0024);
+        WriteInstruction(memory, 0x8014_93D8, 0x4800_0078);
+        WriteInstruction(memory, 0x8014_93DC, 0x2C04_0004);
+        WriteInstruction(memory, 0x8014_93E0, 0x4080_0070);
+        WriteInstruction(memory, 0x8014_93E4, 0x4800_0050);
+        WriteInstruction(memory, 0x8014_93E8, 0x7C60_0775);
+        WriteInstruction(memory, 0x8014_93EC, 0x4082_0064);
+        WriteInstruction(memory, 0x8014_93F0, 0x3880_0001);
+        WriteInstruction(memory, 0x8014_93F4, 0x4800_005C);
+        WriteInstruction(memory, 0x8014_93F8, 0x7C60_0775);
+        WriteInstruction(memory, 0x8014_93FC, 0x4082_000C);
+        WriteInstruction(memory, 0x8014_9400, 0x3880_0002);
+        WriteInstruction(memory, 0x8014_9404, 0x4800_004C);
+        WriteInstruction(memory, 0x8014_9408, 0x3880_0000);
+        WriteInstruction(memory, 0x8014_940C, 0x4800_0044);
+        WriteInstruction(memory, 0x8014_9410, 0x7C60_0774);
+        WriteInstruction(memory, 0x8014_9414, 0x2C00_0001);
+        WriteInstruction(memory, 0x8014_9418, 0x4082_000C);
+        WriteInstruction(memory, 0x8014_941C, 0x3880_0003);
+        WriteInstruction(memory, 0x8014_9420, 0x4800_0030);
+        WriteInstruction(memory, 0x8014_9424, 0x7C60_0775);
+        WriteInstruction(memory, 0x8014_9428, 0x4182_0028);
+        WriteInstruction(memory, 0x8014_942C, 0x3880_0000);
+        WriteInstruction(memory, 0x8014_9430, 0x4800_0020);
+        WriteInstruction(memory, 0x8014_9434, 0x387D_FFFC);
+        WriteInstruction(memory, 0x8014_9438, 0x4800_0141);
+        WriteInstruction(memory, 0x8014_943C, 0x7FC0_1839);
+        WriteInstruction(memory, 0x8014_9440, 0x4182_000C);
+        WriteInstruction(memory, 0x8014_9444, 0x387D_FFFC);
+        WriteInstruction(memory, 0x8014_9448, 0x4800_0014);
+        WriteInstruction(memory, 0x8014_944C, 0x3880_0000);
+        WriteInstruction(memory, 0x8014_9450, 0x7C1D_F840);
+        WriteInstruction(memory, 0x8014_9454, 0x4180_FF64);
+        WriteInstruction(memory, 0x8014_9458, 0x3860_0000);
     }
 
     private static void WriteSonicGxAttributeFlush(GameCubeMemory memory, uint pc)
@@ -8000,6 +8109,25 @@ public sealed class DolRunnerTests
         bus.Memory.Write32(0x80BE_CA1C, tableBase);
         bus.Memory.Write32(tableBase + groupOffset, groupBase);
         bus.Memory.Write32(tableBase + groupOffset + sizeof(uint), count);
+        return state;
+    }
+
+    private static PowerPcState CreateSonicStartCodeScanState(GameCubeBus bus, uint input, uint length)
+    {
+        WriteSonicStartCodeScan(bus.Memory);
+        PowerPcState state = new()
+        {
+            Pc = 0x8014_93B8,
+            Lr = 0x8014_A414,
+            Cr = 0x4200_0088,
+            Xer = 0x2000_0000,
+        };
+        state.Gpr[3] = input;
+        state.Gpr[4] = 0;
+        state.Gpr[29] = input;
+        state.Gpr[30] = 0xFFFF_FFFF;
+        state.Gpr[31] = input + length;
+        state.Spr[22] = 0xFFFF_F000;
         return state;
     }
 

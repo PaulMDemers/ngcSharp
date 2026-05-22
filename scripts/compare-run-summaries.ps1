@@ -5,6 +5,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$After,
 
+    [int]$Top = 10,
+
     [switch]$All
 )
 
@@ -62,9 +64,9 @@ function Add-Change {
     )
 
     $beforeString = "$BeforeValue"
-        $afterString = "$AfterValue"
-        if ($All -or $beforeString -ne $afterString) {
-            $delta = ""
+    $afterString = "$AfterValue"
+    if ($All -or $beforeString -ne $afterString) {
+        $delta = ""
         $beforeIsNumeric = $BeforeValue -is [ValueType] -or "$BeforeValue" -match "^-?\d+(\.\d+)?$"
         $afterIsNumeric = $AfterValue -is [ValueType] -or "$AfterValue" -match "^-?\d+(\.\d+)?$"
         if ($beforeIsNumeric -and $afterIsNumeric) {
@@ -94,6 +96,63 @@ function Format-TopEntries {
     @($Entries | Select-Object -First $Limit | ForEach-Object {
         "$($_.$KeyName):$($_.$CountName)"
     }) -join "; "
+}
+
+function New-EntryMap {
+    param($Entries, [string]$KeyName, [string]$CountName)
+
+    $map = @{}
+    foreach ($entry in @($Entries)) {
+        $key = Get-Value $entry $KeyName
+        if ([string]::IsNullOrWhiteSpace($key)) {
+            continue
+        }
+
+        $map[$key] = [int64](Get-Value $entry $CountName 0)
+    }
+
+    return $map
+}
+
+function Add-EntryDeltas {
+    param(
+        [System.Collections.Generic.List[object]]$Rows,
+        [string]$Section,
+        $BeforeEntries,
+        $AfterEntries,
+        [string]$KeyName,
+        [string]$CountName,
+        [int]$Limit
+    )
+
+    $beforeMap = New-EntryMap $BeforeEntries $KeyName $CountName
+    $afterMap = New-EntryMap $AfterEntries $KeyName $CountName
+    $keys = @($beforeMap.Keys + $afterMap.Keys) | Sort-Object -Unique
+    $changes = foreach ($key in $keys) {
+        $beforeCount = if ($beforeMap.ContainsKey($key)) { [int64]$beforeMap[$key] } else { 0L }
+        $afterCount = if ($afterMap.ContainsKey($key)) { [int64]$afterMap[$key] } else { 0L }
+        $delta = $afterCount - $beforeCount
+        if ($All -or $delta -ne 0) {
+            [pscustomobject]@{
+                key = $key
+                before = $beforeCount
+                after = $afterCount
+                delta = $delta
+                magnitude = [math]::Abs($delta)
+            }
+        }
+    }
+
+    foreach ($change in @($changes | Sort-Object -Property @{ Expression = "magnitude"; Descending = $true }, @{ Expression = "after"; Descending = $true }, "key" | Select-Object -First $Limit)) {
+        $deltaString = if ($change.delta -gt 0) { "+$($change.delta)" } else { "$($change.delta)" }
+        $Rows.Add([pscustomobject]@{
+            section = $Section
+            name = $change.key
+            before = "$($change.before)"
+            after = "$($change.after)"
+            delta = $deltaString
+        })
+    }
 }
 
 $beforeSummary = Read-Summary $Before
@@ -130,10 +189,12 @@ foreach ($name in $fastForwardNames) {
 $beforePcEntries = @((Get-Value (Get-Value $beforeData "pcProfile" $null) "entries" @()))
 $afterPcEntries = @((Get-Value (Get-Value $afterData "pcProfile" $null) "entries" @()))
 Add-Change $rows "profile" "topPcEntries" (Format-TopEntries $beforePcEntries "pc" "count") (Format-TopEntries $afterPcEntries "pc" "count")
+Add-EntryDeltas $rows "pcProfileDelta" $beforePcEntries $afterPcEntries "pc" "count" $Top
 
 $beforeFilteredPcEntries = @((Get-Value (Get-Value $beforeData "pcProfileWithoutExternalInterruptLeaves" $null) "entries" @()))
 $afterFilteredPcEntries = @((Get-Value (Get-Value $afterData "pcProfileWithoutExternalInterruptLeaves" $null) "entries" @()))
 Add-Change $rows "profile" "filteredTopPcEntries" (Format-TopEntries $beforeFilteredPcEntries "pc" "count") (Format-TopEntries $afterFilteredPcEntries "pc" "count")
+Add-EntryDeltas $rows "filteredPcProfileDelta" $beforeFilteredPcEntries $afterFilteredPcEntries "pc" "count" $Top
 
 $beforeBranch = @((Get-Value $beforeData "branchSiteProfiles" @()) | ForEach-Object {
     $entries = @((Get-Value $_ "entries" @()))
@@ -242,5 +303,5 @@ Add-Change $rows "exi" "channel1" (Format-ExiChannel $beforeExi 1) (Format-ExiCh
 if ($rows.Count -eq 0) {
     Write-Host "No differences found."
 } else {
-    $rows | Format-Table -AutoSize
+    $rows | Format-Table -AutoSize -Wrap | Out-String -Width 240 | Write-Host
 }
