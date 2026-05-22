@@ -203,6 +203,10 @@ public sealed class DolRunner
         ulong stoppedOnHotPcCount = 0;
         bool stoppedAfterWriteWatch = false;
         int stoppedAfterWriteWatchCount = 0;
+        bool pendingWriteWatchOldValueValid = false;
+        uint pendingWriteWatchOldAddress = 0;
+        int pendingWriteWatchOldWidth = 0;
+        uint pendingWriteWatchOldValue = 0;
         bool stoppedOnGxFifoOffset = false;
         long gxFifoBytesWritten = 0;
         GxMemoryCheckpointState[] gxMemoryCheckpoints = BuildGxMemoryCheckpointStates(options);
@@ -396,7 +400,8 @@ public sealed class DolRunner
                 writeWatchMatches++;
                 if (options.WatchLimit is null || emittedWriteWatchChanges < options.WatchLimit)
                 {
-                    _output.WriteLine($"Write watch 0x{address:X8}/{width} <= 0x{value:X8} after {executed + 1} instruction(s), 0x{currentPc:X8}: 0x{currentInstruction:X8} {PowerPcDisassembler.Disassemble(currentInstruction)} {FormatWatchRegisters(state, currentInstruction)}");
+                    string change = FormatWriteWatchChange(address, width, value, pendingWriteWatchOldValueValid, pendingWriteWatchOldAddress, pendingWriteWatchOldWidth, pendingWriteWatchOldValue);
+                    _output.WriteLine($"Write watch 0x{address:X8}/{width} <= 0x{value:X8}{change} after {executed + 1} instruction(s), 0x{currentPc:X8}: 0x{currentInstruction:X8} {PowerPcDisassembler.Disassemble(currentInstruction)} {FormatWatchRegisters(state, currentInstruction)}");
                     emittedWriteWatchChanges++;
                 }
                 else if (!writeWatchLimitNoticeEmitted)
@@ -882,6 +887,18 @@ public sealed class DolRunner
 
                 currentPc = pc;
                 currentInstruction = bus.Read32(pc);
+                pendingWriteWatchOldValueValid = false;
+                if (HasWriteWatch(options)
+                    && executed + 1 >= options.WatchWriteAfter.GetValueOrDefault()
+                    && TryGetStoreEffectiveAddress(state, currentInstruction, out uint storeAddress, out int storeWidth)
+                    && TryReadStoreValue(bus.Memory, storeAddress, storeWidth, out uint oldStoreValue))
+                {
+                    pendingWriteWatchOldAddress = storeAddress;
+                    pendingWriteWatchOldWidth = storeWidth;
+                    pendingWriteWatchOldValue = oldStoreValue;
+                    pendingWriteWatchOldValueValid = true;
+                }
+
                 if (sonicPathLookupTrace is not null)
                 {
                     if (sonicPathLookupPending is not null && pc == ExternalInterruptVector)
@@ -12652,6 +12669,107 @@ public sealed class DolRunner
         }
 
         return false;
+    }
+
+    private static string FormatWriteWatchChange(uint address, int width, uint value, bool oldValueValid, uint oldAddress, int oldWidth, uint oldValue)
+    {
+        if (!oldValueValid || oldAddress != address || oldWidth != width)
+        {
+            return string.Empty;
+        }
+
+        uint mask = width switch
+        {
+            1 => 0xFF,
+            2 => 0xFFFF,
+            4 => 0xFFFF_FFFF,
+            _ => 0,
+        };
+        if (mask == 0)
+        {
+            return string.Empty;
+        }
+
+        uint maskedOldValue = oldValue & mask;
+        uint maskedNewValue = value & mask;
+        uint changedBits = maskedOldValue ^ maskedNewValue;
+        int hexDigits = width * 2;
+        return $" old=0x{maskedOldValue.ToString($"X{hexDigits}", CultureInfo.InvariantCulture)} xor=0x{changedBits.ToString($"X{hexDigits}", CultureInfo.InvariantCulture)}";
+    }
+
+    private static bool TryReadStoreValue(GameCubeMemory memory, uint address, int width, out uint value)
+    {
+        try
+        {
+            value = width switch
+            {
+                1 => memory.Read8(address),
+                2 => memory.Read16(address),
+                4 => memory.Read32(address),
+                _ => 0,
+            };
+            return width is 1 or 2 or 4;
+        }
+        catch (AddressTranslationException)
+        {
+            value = 0;
+            return false;
+        }
+    }
+
+    private static bool TryGetStoreEffectiveAddress(PowerPcState state, uint instruction, out uint effectiveAddress, out int byteWidth)
+    {
+        effectiveAddress = 0;
+        byteWidth = 0;
+        int opcode = (int)(instruction >> 26);
+        int rA = (int)((instruction >> 16) & 0x1F);
+        int rB = (int)((instruction >> 11) & 0x1F);
+        uint baseAddress = rA == 0 ? 0 : state.Gpr[rA];
+
+        switch (opcode)
+        {
+            case 36 or 37:
+                byteWidth = sizeof(uint);
+                effectiveAddress = unchecked(baseAddress + (uint)(short)(instruction & 0xFFFF));
+                return true;
+
+            case 38 or 39:
+                byteWidth = sizeof(byte);
+                effectiveAddress = unchecked(baseAddress + (uint)(short)(instruction & 0xFFFF));
+                return true;
+
+            case 44 or 45:
+                byteWidth = sizeof(ushort);
+                effectiveAddress = unchecked(baseAddress + (uint)(short)(instruction & 0xFFFF));
+                return true;
+
+            case 31:
+                return TryGetIndexedStoreEffectiveAddress(state, instruction, baseAddress, rB, out effectiveAddress, out byteWidth);
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryGetIndexedStoreEffectiveAddress(PowerPcState state, uint instruction, uint baseAddress, int rB, out uint effectiveAddress, out int byteWidth)
+    {
+        effectiveAddress = 0;
+        byteWidth = 0;
+        int xo = (int)((instruction >> 1) & 0x3FF);
+        byteWidth = xo switch
+        {
+            151 or 183 => sizeof(uint),
+            215 or 247 => sizeof(byte),
+            407 or 439 => sizeof(ushort),
+            _ => 0,
+        };
+        if (byteWidth == 0)
+        {
+            return false;
+        }
+
+        effectiveAddress = unchecked(baseAddress + state.Gpr[rB]);
+        return true;
     }
 
     private static bool TryGetWatchedLoad(RunDolOptions options, GameCubeBus bus, PowerPcState state, uint instruction, out WatchedLoad watchedLoad)
