@@ -371,6 +371,9 @@ foreach ($target in $selectedTargets) {
             branchSiteTopTarget = ""
             branchSiteTopTargetCount = ""
             branchSiteTargets = ""
+            indirectBranchSite = ""
+            indirectBranchTopTarget = ""
+            indirectBranchTopTargetCount = ""
             pcLrSite = ""
             pcLrTopLr = ""
             pcLrTopLrCount = ""
@@ -793,6 +796,28 @@ foreach ($target in $selectedTargets) {
         $regressions.Add("branchSiteTopTargetCount expected >= $expectedMinBranchSiteTopTargetCount got $branchSiteTopTargetCount")
     }
 
+    $indirectBranchProfile = Get-Value $summary "indirectCallSiteProfile" $null
+    $indirectBranchEntries = @((Get-Value $indirectBranchProfile "entries" @()))
+    $indirectBranchTopEntry = if ($indirectBranchEntries.Count -gt 0) { $indirectBranchEntries[0] } else { $null }
+    $indirectBranchSite = Get-Value $indirectBranchProfile "callSite" ""
+    $indirectBranchTopTarget = Get-Value $indirectBranchTopEntry "target" ""
+    $indirectBranchTopTargetCount = Get-Value $indirectBranchTopEntry "count" ""
+
+    $expectedIndirectBranchSite = Get-Value $expected "indirectBranchSite" $null
+    if ($status -eq "ok" -and $null -ne $expectedIndirectBranchSite -and "$expectedIndirectBranchSite" -ne "$indirectBranchSite") {
+        $regressions.Add("indirectBranchSite expected $expectedIndirectBranchSite got $indirectBranchSite")
+    }
+
+    $expectedIndirectBranchTopTarget = Get-Value $expected "indirectBranchTopTarget" $null
+    if ($status -eq "ok" -and $null -ne $expectedIndirectBranchTopTarget -and "$expectedIndirectBranchTopTarget" -ne "$indirectBranchTopTarget") {
+        $regressions.Add("indirectBranchTopTarget expected $expectedIndirectBranchTopTarget got $indirectBranchTopTarget")
+    }
+
+    $expectedMinIndirectBranchTopTargetCount = Get-Value $expected "minIndirectBranchTopTargetCount" $null
+    if ($status -eq "ok" -and $null -ne $expectedMinIndirectBranchTopTargetCount -and [long]$indirectBranchTopTargetCount -lt [long]$expectedMinIndirectBranchTopTargetCount) {
+        $regressions.Add("indirectBranchTopTargetCount expected >= $expectedMinIndirectBranchTopTargetCount got $indirectBranchTopTargetCount")
+    }
+
     $pcLrProfiles = @((Get-Value $summary "pcLrProfiles" @()))
     $firstPcLrProfile = if ($pcLrProfiles.Count -gt 0) { $pcLrProfiles[0] } else { $null }
     $firstPcLrEntries = @((Get-Value $firstPcLrProfile "entries" @()))
@@ -988,6 +1013,9 @@ foreach ($target in $selectedTargets) {
         branchSiteTopTarget = $branchSiteTopTarget
         branchSiteTopTargetCount = $branchSiteTopTargetCount
         branchSiteTargets = $branchSiteTargets
+        indirectBranchSite = $indirectBranchSite
+        indirectBranchTopTarget = $indirectBranchTopTarget
+        indirectBranchTopTargetCount = $indirectBranchTopTargetCount
         pcLrSite = $pcLrSite
         pcLrTopLr = $pcLrTopLr
         pcLrTopLrCount = $pcLrTopLrCount
