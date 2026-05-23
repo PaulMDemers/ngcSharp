@@ -2253,8 +2253,10 @@ public sealed class DolRunner
             int gxWidth = options.FrameWidth ?? 640;
             int gxHeight = options.FrameHeight ?? 480;
             int gxFrameMaxRasterPixels = options.GxFrameMaxRasterPixels ?? RunDolOptions.DefaultGxFrameMaxRasterPixels;
-            int gxFrameMaxDraws = options.GxFrameMaxDraws ?? RunDolOptions.DefaultGxFrameMaxDraws;
-            if (!GxFifoSoftwareRenderer.TryWriteCopyDiagnostics(bus.MmioAccesses, bus.Memory, options.GxCopyDumpPath, gxWidth, gxHeight, gxFrameMaxRasterPixels, options.GxFrameIgnoreEfbCopyClear, options.GxFrameSkipDraws, gxFrameMaxDraws, out GxFifoCopyDiagnosticResult? gxCopies, out string? gxCopyError))
+            int? gxCopyMaxDraws = options.GxFrameSkipDraws != 0 || options.GxFrameMaxDraws.HasValue
+                ? options.GxFrameMaxDraws ?? RunDolOptions.DefaultGxFrameMaxDraws
+                : null;
+            if (!GxFifoSoftwareRenderer.TryWriteCopyDiagnostics(bus.MmioAccesses, bus.Memory, options.GxCopyDumpPath, gxWidth, gxHeight, gxFrameMaxRasterPixels, options.GxFrameIgnoreEfbCopyClear, options.GxFrameSkipDraws, gxCopyMaxDraws, out GxFifoCopyDiagnosticResult? gxCopies, out string? gxCopyError))
             {
                 gxCopyDumpMilliseconds += StopAndGetMilliseconds(gxCopyDumpStopwatch);
                 _error.WriteLine($"GX copy dump failed: {gxCopyError}");

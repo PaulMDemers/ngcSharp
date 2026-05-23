@@ -132,6 +132,119 @@ function Get-FileSummary {
     }
 }
 
+function Convert-OptionalInt64 {
+    param($Value)
+
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) {
+        return 0L
+    }
+
+    return [int64]$Value
+}
+
+function Get-GxCoverageSummary {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $null
+    }
+
+    $rows = 0
+    $decodedRows = 0
+    $nonblackRows = 0
+    $blackRows = 0
+    $firstDraw = $null
+    $lastDraw = $null
+    $firstNonblackDraw = $null
+    $lastNonblackDraw = $null
+    $maxAfterNonblack = 0L
+    $maxAfterNonblackDraw = $null
+    $maxBounds = ""
+    $lastRasterAfter = $null
+    $minX = $null
+    $maxX = $null
+    $minY = $null
+    $maxY = $null
+    $totalColorWrites = 0L
+    $totalBlackWrites = 0L
+    $totalAlphaRejected = 0L
+    $totalDegenerateTriangles = 0L
+
+    Import-Csv -LiteralPath $Path | ForEach-Object {
+        $rows++
+        $draw = Convert-OptionalInt64 $_.draw_index
+        if ($null -eq $firstDraw) {
+            $firstDraw = $draw
+        }
+        $lastDraw = $draw
+        $lastRasterAfter = Convert-OptionalInt64 $_.raster_after
+
+        if ($_.decoded -eq "True") {
+            $decodedRows++
+        }
+
+        $afterNonblack = Convert-OptionalInt64 $_.after_nonblack
+        if ($afterNonblack -gt 0) {
+            $nonblackRows++
+            if ($null -eq $firstNonblackDraw) {
+                $firstNonblackDraw = $draw
+            }
+            $lastNonblackDraw = $draw
+        } else {
+            $blackRows++
+        }
+
+        if ($afterNonblack -gt $maxAfterNonblack) {
+            $maxAfterNonblack = $afterNonblack
+            $maxAfterNonblackDraw = $draw
+            $maxBounds = if ([string]::IsNullOrWhiteSpace($_.min_x) -or [string]::IsNullOrWhiteSpace($_.max_x) -or [string]::IsNullOrWhiteSpace($_.min_y) -or [string]::IsNullOrWhiteSpace($_.max_y)) {
+                ""
+            } else {
+                "$($_.min_x)/$($_.min_y)-$($_.max_x)/$($_.max_y)"
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($_.min_x)) {
+            $rowMinX = Convert-OptionalInt64 $_.min_x
+            $rowMaxX = Convert-OptionalInt64 $_.max_x
+            $rowMinY = Convert-OptionalInt64 $_.min_y
+            $rowMaxY = Convert-OptionalInt64 $_.max_y
+            $minX = if ($null -eq $minX) { $rowMinX } else { [Math]::Min([int64]$minX, $rowMinX) }
+            $maxX = if ($null -eq $maxX) { $rowMaxX } else { [Math]::Max([int64]$maxX, $rowMaxX) }
+            $minY = if ($null -eq $minY) { $rowMinY } else { [Math]::Min([int64]$minY, $rowMinY) }
+            $maxY = if ($null -eq $maxY) { $rowMaxY } else { [Math]::Max([int64]$maxY, $rowMaxY) }
+        }
+
+        $totalColorWrites += Convert-OptionalInt64 $_.color_writes
+        $totalBlackWrites += Convert-OptionalInt64 $_.black_color_writes
+        $totalAlphaRejected += Convert-OptionalInt64 $_.alpha_rejected
+        $totalDegenerateTriangles += Convert-OptionalInt64 $_.degenerate_triangles_delta
+    } | Out-Null
+
+    $bounds = if ($null -eq $minX) { "" } else { "$minX/$minY-$maxX/$maxY" }
+    return [pscustomobject][ordered]@{
+        path = (Resolve-FullPath $Path)
+        rows = $rows
+        decodedRows = $decodedRows
+        nonblackRows = $nonblackRows
+        blackRows = $blackRows
+        firstDraw = $firstDraw
+        lastDraw = $lastDraw
+        firstNonblackDraw = $firstNonblackDraw
+        lastNonblackDraw = $lastNonblackDraw
+        maxAfterNonblack = $maxAfterNonblack
+        maxAfterNonblackDraw = $maxAfterNonblackDraw
+        maxAfterNonblackBounds = $maxBounds
+        overallBounds = $bounds
+        rasterAfterLast = $lastRasterAfter
+        rasterExhausted = ($null -ne $lastRasterAfter -and $lastRasterAfter -le 0)
+        totalColorWrites = $totalColorWrites
+        totalBlackWrites = $totalBlackWrites
+        totalAlphaRejected = $totalAlphaRejected
+        totalDegenerateTriangles = $totalDegenerateTriangles
+    }
+}
+
 $repoRoot = Resolve-FullPath "."
 $dotnetRoot = Join-Path $repoRoot ".dotnet"
 if (Test-Path -LiteralPath $dotnetRoot) {
@@ -152,6 +265,36 @@ if (-not (Test-Path -LiteralPath $appDll)) {
 $sonicFullPath = Resolve-FullPath $SonicPath
 $pikminFullPath = Resolve-FullPath $PikminPath
 $marioKartDebugFullPath = Resolve-FullPath $MarioKartDebugPath
+
+function New-SonicGxWindowTarget {
+    param(
+        [int]$SkipDraws,
+        [switch]$Heavy
+    )
+
+    $draws = 80
+    return [pscustomobject]@{
+        slug = "sonic-gx-window-$SkipDraws"
+        game = "Sonic Adventure 2 Battle"
+        gamePath = $sonicFullPath
+        maxInstructions = 50000000
+        timeoutSeconds = [Math]::Max($TimeoutSeconds, 900)
+        gxFrameSource = "largest-display-copy"
+        gxFrameMaxDraws = $draws
+        gxFrameSkipDraws = $SkipDraws
+        gxFrameMaxRasterPixels = 50000000
+        gxDrawSkipDraws = $SkipDraws
+        gxDrawMaxDraws = $draws
+        dumpGxFrame = $false
+        dumpGxDraws = [bool]$Heavy
+        dumpGxCopies = $true
+        dumpGxCoverage = $true
+        dumpGxTevSamples = [bool]$Heavy
+        windowGxCopies = $true
+        extraArgs = @("--memory-card-a", "--controller-button", "a")
+    }
+}
+
 $targetDefinitions = @{
     "sonic-5m" = [pscustomobject]@{
         slug = "sonic-5m"
@@ -207,6 +350,7 @@ $targetDefinitions = @{
         dumpGxCopies = $true
         dumpGxCoverage = $true
         dumpGxTevSamples = $true
+        windowGxCopies = $true
         extraArgs = @("--memory-card-a", "--controller-button", "a")
     }
     "pikmin-5m" = [pscustomobject]@{
@@ -259,6 +403,12 @@ $targetDefinitions = @{
         extraArgs = @("--memory-card-a", "--controller-button", "a")
     }
 }
+
+foreach ($skipDraws in @(280, 400, 680, 1000, 1500)) {
+    $targetDefinitions["sonic-gx-window-$skipDraws"] = New-SonicGxWindowTarget -SkipDraws $skipDraws
+}
+
+$targetDefinitions["sonic-gx-window-202-heavy"] = New-SonicGxWindowTarget -SkipDraws 202 -Heavy
 
 $Targets = @(
     $Targets |
@@ -318,6 +468,8 @@ foreach ($targetName in $Targets) {
     $dumpGxDraws = ($target.PSObject.Properties.Name -contains "dumpGxDraws") -and [bool]$target.dumpGxDraws
     $dumpGxCoverage = ($target.PSObject.Properties.Name -contains "dumpGxCoverage") -and [bool]$target.dumpGxCoverage
     $dumpGxTevSamples = ($target.PSObject.Properties.Name -contains "dumpGxTevSamples") -and [bool]$target.dumpGxTevSamples
+    $windowGxCopies = ($target.PSObject.Properties.Name -contains "windowGxCopies") -and [bool]$target.windowGxCopies
+    $usesGxFrameWindow = $dumpGxFrame -or $dumpGxCoverage -or $windowGxCopies
 
     $runArgs = @(
         $appDll,
@@ -328,12 +480,16 @@ foreach ($targetName in $Targets) {
         "--fast-forward-write-watch",
         "--trace-exi", $exiTracePath,
         "--run-summary", $emulatorSummaryPath,
-        "--gx-frame-skip-draws", "$gxFrameSkipDraws",
-        "--gx-frame-max-draws", "$gxFrameMaxDraws",
-        "--gx-frame-max-raster-pixels", "$gxFrameMaxRasterPixels",
         "--no-registers",
         "--quiet"
     ) + $target.extraArgs
+    if ($usesGxFrameWindow) {
+        $runArgs += @(
+            "--gx-frame-skip-draws", "$gxFrameSkipDraws",
+            "--gx-frame-max-draws", "$gxFrameMaxDraws",
+            "--gx-frame-max-raster-pixels", "$gxFrameMaxRasterPixels"
+        )
+    }
     if ($dumpGxFrame) {
         $runArgs += @(
             "--dump-gx-frame", $framePath,
@@ -385,6 +541,7 @@ foreach ($targetName in $Targets) {
         & (Join-Path $PSScriptRoot "summarize-gx-copies.ps1") -CopyCsvPath $copyCsvPath -JsonPath $gxJsonPath -TimelineCsvPath $gxTimelineCsvPath | Out-Null
         $gxSummary = Read-JsonFile $gxJsonPath
     }
+    $gxCoverageSummary = Get-GxCoverageSummary $gxCoveragePath
 
     $emulatorSummary = Read-JsonFile $emulatorSummaryPath
     $frameSummary = Get-FileSummary $framePath
@@ -440,6 +597,7 @@ foreach ($targetName in $Targets) {
         frame = $frameSummary
         exiSummary = $exiSummary
         gxCopySummary = $gxSummary
+        gxCoverageSummary = $gxCoverageSummary
         gxDisplayActivityCsvPath = if (Test-Path -LiteralPath $gxTimelineCsvPath) { $gxTimelineCsvPath } else { $null }
         stdoutPath = $stdoutPath
         stderrPath = $stderrPath
@@ -478,6 +636,17 @@ foreach ($targetName in $Targets) {
     $displayActivityRuns = if ($null -ne $gxSummary -and $null -ne $gxSummary.displayActivity) { @($gxSummary.displayActivity).Count } else { "" }
     $lastDisplayActivityState = if ($null -ne $gxSummary -and $null -ne $gxSummary.displayActivity -and @($gxSummary.displayActivity).Count -gt 0) { @($gxSummary.displayActivity)[-1].state } else { "" }
     $lastDisplayActivityCopyCount = if ($null -ne $gxSummary -and $null -ne $gxSummary.displayActivity -and @($gxSummary.displayActivity).Count -gt 0) { @($gxSummary.displayActivity)[-1].copyCount } else { "" }
+    $coverageRows = if ($null -ne $gxCoverageSummary) { $gxCoverageSummary.rows } else { "" }
+    $coverageNonblackRows = if ($null -ne $gxCoverageSummary) { $gxCoverageSummary.nonblackRows } else { "" }
+    $coverageMaxAfterNonblack = if ($null -ne $gxCoverageSummary) { $gxCoverageSummary.maxAfterNonblack } else { "" }
+    $coverageMaxAfterNonblackDraw = if ($null -ne $gxCoverageSummary) { $gxCoverageSummary.maxAfterNonblackDraw } else { "" }
+    $coverageOverallBounds = if ($null -ne $gxCoverageSummary) { $gxCoverageSummary.overallBounds } else { "" }
+    $coverageRasterExhausted = if ($null -ne $gxCoverageSummary) { $gxCoverageSummary.rasterExhausted } else { "" }
+    $coverageRasterAfterLast = if ($null -ne $gxCoverageSummary) { $gxCoverageSummary.rasterAfterLast } else { "" }
+    $coverageTotalColorWrites = if ($null -ne $gxCoverageSummary) { $gxCoverageSummary.totalColorWrites } else { "" }
+    $coverageTotalBlackWrites = if ($null -ne $gxCoverageSummary) { $gxCoverageSummary.totalBlackWrites } else { "" }
+    $coverageTotalAlphaRejected = if ($null -ne $gxCoverageSummary) { $gxCoverageSummary.totalAlphaRejected } else { "" }
+    $coverageTotalDegenerateTriangles = if ($null -ne $gxCoverageSummary) { $gxCoverageSummary.totalDegenerateTriangles } else { "" }
     $summaryRows.Add([pscustomobject]@{
         target = $target.slug
         status = $status
@@ -512,6 +681,17 @@ foreach ($targetName in $Targets) {
         displayActivityRuns = $displayActivityRuns
         lastDisplayActivityState = $lastDisplayActivityState
         lastDisplayActivityCopyCount = $lastDisplayActivityCopyCount
+        coverageRows = $coverageRows
+        coverageNonblackRows = $coverageNonblackRows
+        coverageMaxAfterNonblack = $coverageMaxAfterNonblack
+        coverageMaxAfterNonblackDraw = $coverageMaxAfterNonblackDraw
+        coverageOverallBounds = $coverageOverallBounds
+        coverageRasterExhausted = $coverageRasterExhausted
+        coverageRasterAfterLast = $coverageRasterAfterLast
+        coverageTotalColorWrites = $coverageTotalColorWrites
+        coverageTotalBlackWrites = $coverageTotalBlackWrites
+        coverageTotalAlphaRejected = $coverageTotalAlphaRejected
+        coverageTotalDegenerateTriangles = $coverageTotalDegenerateTriangles
         runJson = $runJsonPath
     })
 }

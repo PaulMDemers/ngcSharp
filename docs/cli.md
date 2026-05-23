@@ -179,6 +179,14 @@ Run the optional Mario Kart Double Dash debug-image probes:
 powershell -ExecutionPolicy Bypass -File scripts/run-retail-benchmarks.ps1 -Targets mariokart-debug-5m,mariokart-debug-20m
 ```
 
+Run focused Sonic GX draw-window probes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-retail-benchmarks.ps1 -Targets sonic-gx-window-280,sonic-gx-window-680 -NoBuild -TimeoutSeconds 900
+```
+
+The generated Sonic window targets currently cover draw skips `280`, `400`, `680`, `1000`, and `1500`. They disable PNG capture and write bounded GX copy/coverage diagnostics so `summary.csv` can show nonblack display-copy counts, coverage bounds, raster-budget state, and color-write totals for each window.
+
 Both scripts write timestamped directories under `artifacts/compat-runs` with:
 
 - `run.json`: machine-readable compatibility ledger for that target.
