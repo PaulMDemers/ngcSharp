@@ -281,6 +281,7 @@ foreach ($targetName in $Targets) {
     $stdoutPath = Join-Path $targetRoot "stdout.txt"
     $stderrPath = Join-Path $targetRoot "stderr.txt"
     $gxJsonPath = Join-Path $targetRoot "gx-copies.summary.json"
+    $gxTimelineCsvPath = Join-Path $targetRoot "gx-display-activity.csv"
     $exiJsonPath = Join-Path $targetRoot "exi.summary.json"
     $emulatorSummaryPath = Join-Path $targetRoot "emulator-summary.json"
     $runJsonPath = Join-Path $targetRoot "run.json"
@@ -333,7 +334,7 @@ foreach ($targetName in $Targets) {
 
     $gxSummary = $null
     if ((Test-Path -LiteralPath $copyCsvPath) -and (Get-Item -LiteralPath $copyCsvPath).Length -gt 0) {
-        & (Join-Path $PSScriptRoot "summarize-gx-copies.ps1") -CopyCsvPath $copyCsvPath -JsonPath $gxJsonPath | Out-Null
+        & (Join-Path $PSScriptRoot "summarize-gx-copies.ps1") -CopyCsvPath $copyCsvPath -JsonPath $gxJsonPath -TimelineCsvPath $gxTimelineCsvPath | Out-Null
         $gxSummary = Read-JsonFile $gxJsonPath
     }
 
@@ -384,6 +385,7 @@ foreach ($targetName in $Targets) {
         frame = $frameSummary
         exiSummary = $exiSummary
         gxCopySummary = $gxSummary
+        gxDisplayActivityCsvPath = if (Test-Path -LiteralPath $gxTimelineCsvPath) { $gxTimelineCsvPath } else { $null }
         stdoutPath = $stdoutPath
         stderrPath = $stderrPath
     }
@@ -418,6 +420,9 @@ foreach ($targetName in $Targets) {
     $sonicPathRecordScanInstructions = if ($null -ne $fastForwardSummary) { $fastForwardSummary.sonicPathRecordScanInstructions } else { "" }
     $sonicResourceLookupInstructions = if ($null -ne $fastForwardSummary) { $fastForwardSummary.resourceLookupInstructions } else { "" }
     $sonicPrsDecompressInstructions = if ($null -ne $fastForwardSummary) { $fastForwardSummary.prsDecompressInstructions } else { "" }
+    $displayActivityRuns = if ($null -ne $gxSummary -and $null -ne $gxSummary.displayActivity) { @($gxSummary.displayActivity).Count } else { "" }
+    $lastDisplayActivityState = if ($null -ne $gxSummary -and $null -ne $gxSummary.displayActivity -and @($gxSummary.displayActivity).Count -gt 0) { @($gxSummary.displayActivity)[-1].state } else { "" }
+    $lastDisplayActivityCopyCount = if ($null -ne $gxSummary -and $null -ne $gxSummary.displayActivity -and @($gxSummary.displayActivity).Count -gt 0) { @($gxSummary.displayActivity)[-1].copyCount } else { "" }
     $summaryRows.Add([pscustomobject]@{
         target = $target.slug
         status = $status
@@ -449,6 +454,9 @@ foreach ($targetName in $Targets) {
         sonicPathRecordScanInstructions = $sonicPathRecordScanInstructions
         sonicResourceLookupInstructions = $sonicResourceLookupInstructions
         sonicPrsDecompressInstructions = $sonicPrsDecompressInstructions
+        displayActivityRuns = $displayActivityRuns
+        lastDisplayActivityState = $lastDisplayActivityState
+        lastDisplayActivityCopyCount = $lastDisplayActivityCopyCount
         runJson = $runJsonPath
     })
 }

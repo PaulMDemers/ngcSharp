@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$CopyCsvPath,
     [string]$JsonPath = "",
+    [string]$TimelineCsvPath = "",
     [switch]$PassThru
 )
 
@@ -134,6 +135,48 @@ function Copy-DisplayTimelineEvent {
     }
 }
 
+function New-DisplayActivityRun {
+    param($Row, [string]$State)
+
+    $displayNonblack = Convert-OptionalInt $Row.display_nonblack
+    $displayNonblackPercent = Convert-OptionalDouble $Row.display_nonblack_percent
+    return [pscustomobject][ordered]@{
+        state = $State
+        firstCopyIndex = Convert-OptionalInt $Row.copy_index
+        lastCopyIndex = Convert-OptionalInt $Row.copy_index
+        firstDrawsSeen = Convert-OptionalInt $Row.draws_seen
+        lastDrawsSeen = Convert-OptionalInt $Row.draws_seen
+        copyCount = 1
+        nonblackCopies = if ($displayNonblack -gt 0) { 1 } else { 0 }
+        maxDisplayNonblack = $displayNonblack
+        maxDisplayNonblackPercent = $displayNonblackPercent
+        largestCopyIndex = Convert-OptionalInt $Row.copy_index
+        largestCopyAddress = $Row.display_address
+        largestCopyBounds = $Row.display_nonblack_bounds
+    }
+}
+
+function Update-DisplayActivityRun {
+    param($Run, $Row)
+
+    $displayNonblack = Convert-OptionalInt $Row.display_nonblack
+    $displayNonblackPercent = Convert-OptionalDouble $Row.display_nonblack_percent
+    $Run.lastCopyIndex = Convert-OptionalInt $Row.copy_index
+    $Run.lastDrawsSeen = Convert-OptionalInt $Row.draws_seen
+    $Run.copyCount = [int64]$Run.copyCount + 1
+    if ($displayNonblack -gt 0) {
+        $Run.nonblackCopies = [int64]$Run.nonblackCopies + 1
+    }
+
+    if ($displayNonblack -gt $Run.maxDisplayNonblack) {
+        $Run.maxDisplayNonblack = $displayNonblack
+        $Run.maxDisplayNonblackPercent = $displayNonblackPercent
+        $Run.largestCopyIndex = Convert-OptionalInt $Row.copy_index
+        $Run.largestCopyAddress = $Row.display_address
+        $Run.largestCopyBounds = $Row.display_nonblack_bounds
+    }
+}
+
 $copyFullPath = Resolve-FullPath $CopyCsvPath
 if (-not (Test-Path -LiteralPath $copyFullPath)) {
     throw "GX copy CSV not found: $copyFullPath"
@@ -153,6 +196,9 @@ $displayDestinationsByAddress = [ordered]@{}
 $displayTimeline = New-Object System.Collections.Generic.List[object]
 $lastTimelineAddress = $null
 $lastTimelineState = $null
+$displayActivity = New-Object System.Collections.Generic.List[object]
+$currentActivityRun = $null
+$lastActivityState = $null
 
 Import-Csv -LiteralPath $copyFullPath | ForEach-Object {
     $rows++
@@ -193,6 +239,14 @@ Import-Csv -LiteralPath $copyFullPath | ForEach-Object {
             $lastTimelineAddress = $address
             $lastTimelineState = $timelineState
         }
+
+        if ($timelineState -ne $lastActivityState) {
+            $currentActivityRun = New-DisplayActivityRun $_ $timelineState
+            $displayActivity.Add($currentActivityRun) | Out-Null
+            $lastActivityState = $timelineState
+        } else {
+            Update-DisplayActivityRun $currentActivityRun $_
+        }
     } elseif ($_.kind -eq "texture") {
         $textureCopies++
     }
@@ -221,6 +275,7 @@ $summary = [ordered]@{
     largestDisplayCopy = Copy-ToSummary $largestDisplay
     displayDestinations = $displayDestinations
     displayTimeline = @($displayTimeline.ToArray())
+    displayActivity = @($displayActivity.ToArray())
     lastCopy = Copy-ToSummary $lastCopy
 }
 $summaryObject = [pscustomobject]$summary
@@ -229,6 +284,12 @@ if (-not [string]::IsNullOrWhiteSpace($JsonPath)) {
     $jsonFullPath = Resolve-FullPath $JsonPath
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $jsonFullPath) | Out-Null
     $summaryObject | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonFullPath
+}
+
+if (-not [string]::IsNullOrWhiteSpace($TimelineCsvPath)) {
+    $timelineCsvFullPath = Resolve-FullPath $TimelineCsvPath
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $timelineCsvFullPath) | Out-Null
+    $displayActivity | Export-Csv -NoTypeInformation -LiteralPath $timelineCsvFullPath
 }
 
 if ($PassThru) {
