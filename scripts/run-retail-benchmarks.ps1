@@ -178,6 +178,18 @@ $targetDefinitions = @{
         dumpGxCopies = $false
         extraArgs = @("--memory-card-a", "--controller-button", "a")
     }
+    "sonic-title-probe" = [pscustomobject]@{
+        slug = "sonic-title-probe"
+        game = "Sonic Adventure 2 Battle"
+        gamePath = $sonicFullPath
+        maxInstructions = 50000000
+        timeoutSeconds = [Math]::Max($TimeoutSeconds, 600)
+        gxFrameSource = "largest-display-copy"
+        gxFrameMaxDraws = 900
+        gxFrameMaxRasterPixels = 12000000
+        dumpGxCopies = $true
+        extraArgs = @("--memory-card-a", "--controller-button", "a")
+    }
     "pikmin-5m" = [pscustomobject]@{
         slug = "pikmin-5m"
         game = "Pikmin"
@@ -401,6 +413,11 @@ foreach ($targetName in $Targets) {
     $gxFrameRasterBlendWriteMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.rasterBlendWriteMs } else { "" }
     $gxFrameEfbCopyMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.efbCopyMs } else { "" }
     $gxFramePngWriteMs = if ($null -ne $gxFrameTimings) { $gxFrameTimings.pngWriteMs } else { "" }
+    $fastForwardSummary = if ($null -ne $emulatorSummary) { $emulatorSummary.fastForward } else { $null }
+    $sonicPathLookupInstructions = if ($null -ne $fastForwardSummary) { $fastForwardSummary.sonicPathLookupInstructions } else { "" }
+    $sonicPathRecordScanInstructions = if ($null -ne $fastForwardSummary) { $fastForwardSummary.sonicPathRecordScanInstructions } else { "" }
+    $sonicResourceLookupInstructions = if ($null -ne $fastForwardSummary) { $fastForwardSummary.resourceLookupInstructions } else { "" }
+    $sonicPrsDecompressInstructions = if ($null -ne $fastForwardSummary) { $fastForwardSummary.prsDecompressInstructions } else { "" }
     $summaryRows.Add([pscustomobject]@{
         target = $target.slug
         status = $status
@@ -428,6 +445,10 @@ foreach ($targetName in $Targets) {
         frameBytes = $frameBytes
         exiReadArrayCommands = $readArrayCount
         nonblackDisplayCopies = $nonblackCopies
+        sonicPathLookupInstructions = $sonicPathLookupInstructions
+        sonicPathRecordScanInstructions = $sonicPathRecordScanInstructions
+        sonicResourceLookupInstructions = $sonicResourceLookupInstructions
+        sonicPrsDecompressInstructions = $sonicPrsDecompressInstructions
         runJson = $runJsonPath
     })
 }

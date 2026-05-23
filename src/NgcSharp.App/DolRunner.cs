@@ -258,6 +258,7 @@ public sealed class DolRunner
         ulong sonicModeWrapperFastForwardInstructions = 0;
         ulong sonicResourceFixupFastForwardInstructions = 0;
         ulong sonicOverlayInactiveSlotScanFastForwardInstructions = 0;
+        ulong sonicPathLookupFastForwardInstructions = 0;
         ulong sonicPathRecordScanFastForwardInstructions = 0;
         ulong sonicPairedTransform2dFastForwardInstructions = 0;
         ulong sonicGxFloatStripEmitFastForwardInstructions = 0;
@@ -834,6 +835,7 @@ public sealed class DolRunner
                         sonicModeWrapperInstructions = sonicModeWrapperFastForwardInstructions,
                         sonicResourceFixupInstructions = sonicResourceFixupFastForwardInstructions,
                         sonicOverlayInactiveSlotScanInstructions = sonicOverlayInactiveSlotScanFastForwardInstructions,
+                        sonicPathLookupInstructions = sonicPathLookupFastForwardInstructions,
                         sonicPathRecordScanInstructions = sonicPathRecordScanFastForwardInstructions,
                         sonicPairedTransform2dInstructions = sonicPairedTransform2dFastForwardInstructions,
                         sonicGxFloatStripEmitInstructions = sonicGxFloatStripEmitFastForwardInstructions,
@@ -1430,6 +1432,13 @@ public sealed class DolRunner
                 if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicPathRecordScan(state, bus, out skippedInstructions))
                 {
                     sonicPathRecordScanFastForwardInstructions += (uint)skippedInstructions;
+                    stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
+                    continue;
+                }
+
+                if (options.FastForwardIdle && canFastForwardWithWriteWatch && TryFastForwardSonicPathLookup(state, bus, out skippedInstructions))
+                {
+                    sonicPathLookupFastForwardInstructions += (uint)skippedInstructions;
                     stepObserver?.Invoke(new DolRunStep(executed + 1, state.Pc, currentInstruction, state, bus));
                     continue;
                 }
@@ -9288,9 +9297,9 @@ public sealed class DolRunner
 
     private static ulong EstimateSonicPathLookupCycles(uint candidateEntries, uint segmentComparisons, uint compareBytes)
     {
-        const ulong fixedRoutineCost = 12_250;
-        const ulong candidateCost = 34;
-        const ulong extraByteCost = 64;
+        const ulong fixedRoutineCost = 2_600;
+        const ulong candidateCost = 66;
+        const ulong extraByteCost = 4;
         uint extraCompareBytes = compareBytes > candidateEntries ? compareBytes - candidateEntries : 0;
         return fixedRoutineCost
             + candidateEntries * candidateCost
@@ -9478,6 +9487,48 @@ public sealed class DolRunner
 
         return true;
     }
+
+    private static bool TryFastForwardSonicPathLookup(PowerPcState state, GameCubeBus bus, out int skippedInstructions)
+    {
+        skippedInstructions = 0;
+        uint pc = state.Pc;
+        if (!MatchesSonicPathLookupRoutine(bus, pc))
+        {
+            return false;
+        }
+
+        SonicPathLookupPrediction prediction = PredictSonicPathLookup(bus, state);
+        if (!prediction.Success
+            || prediction.EstimatedCycles > int.MaxValue
+            || !CanFastForwardSonicPathLookupCycles(state, bus, prediction.EstimatedCycles)
+            || !TryReadMainRam32(bus.Memory, unchecked(state.Gpr[13] - 30068), out uint entryTable))
+        {
+            return false;
+        }
+
+        uint returnAddress = state.Lr;
+        state.Gpr[0] = returnAddress;
+        state.Gpr[3] = prediction.Result;
+        state.Gpr[4] = entryTable;
+        state.Pc = returnAddress;
+
+        uint skipped = (uint)prediction.EstimatedCycles;
+        AdvanceFastForwardedInstructions(state, bus, skipped);
+        skippedInstructions = checked((int)skipped);
+        return true;
+    }
+
+    private static bool MatchesSonicPathLookupRoutine(GameCubeBus bus, uint pc) =>
+        pc == SonicPathLookupEntryPc
+        && bus.Read32(pc + 0x000) == 0x7C08_02A6
+        && bus.Read32(pc + 0x004) == 0x9001_0004
+        && bus.Read32(pc + 0x008) == 0x9421_FFB8
+        && bus.Read32(pc + 0x00C) == 0xBE81_0018
+        && bus.Read32(pc + 0x2E0) == 0xBA81_0018
+        && bus.Read32(pc + 0x2E4) == 0x8001_004C
+        && bus.Read32(pc + 0x2E8) == 0x3821_0048
+        && bus.Read32(pc + 0x2EC) == 0x7C08_03A6
+        && bus.Read32(pc + 0x2F0) == 0x4E80_0020;
 
     private static bool TryGetCyclesUntilNextEnabledVideoInterrupt(GameCubeBus bus, out ulong cycles)
     {
