@@ -560,6 +560,7 @@ public sealed class DolRunner
         double frameDumpMilliseconds = 0;
         double gxDrawDumpMilliseconds = 0;
         double gxCopyDumpMilliseconds = 0;
+        double gxCopyEventDumpMilliseconds = 0;
         double gxCoverageDumpMilliseconds = 0;
         double gxTevSampleDumpMilliseconds = 0;
         double gxTextureDumpMilliseconds = 0;
@@ -608,6 +609,7 @@ public sealed class DolRunner
                     + frameDumpMilliseconds
                     + gxDrawDumpMilliseconds
                     + gxCopyDumpMilliseconds
+                    + gxCopyEventDumpMilliseconds
                     + gxCoverageDumpMilliseconds
                     + gxTevSampleDumpMilliseconds
                     + gxTextureDumpMilliseconds
@@ -652,6 +654,7 @@ public sealed class DolRunner
                         frameDumpMs = RoundMilliseconds(frameDumpMilliseconds),
                         gxDrawDumpMs = RoundMilliseconds(gxDrawDumpMilliseconds),
                         gxCopyDumpMs = RoundMilliseconds(gxCopyDumpMilliseconds),
+                        gxCopyEventDumpMs = RoundMilliseconds(gxCopyEventDumpMilliseconds),
                         gxCoverageDumpMs = RoundMilliseconds(gxCoverageDumpMilliseconds),
                         gxTevSampleDumpMs = RoundMilliseconds(gxTevSampleDumpMilliseconds),
                         gxTextureDumpMs = RoundMilliseconds(gxTextureDumpMilliseconds),
@@ -2271,6 +2274,29 @@ public sealed class DolRunner
             }
 
             gxCopyDumpMilliseconds += StopAndGetMilliseconds(gxCopyDumpStopwatch);
+        }
+
+        if (options.GxCopyEventDumpPath is not null)
+        {
+            Stopwatch gxCopyEventDumpStopwatch = Stopwatch.StartNew();
+            int? gxCopyEventMaxDraws = options.GxFrameSkipDraws != 0 || options.GxFrameMaxDraws.HasValue
+                ? options.GxFrameMaxDraws ?? RunDolOptions.DefaultGxFrameMaxDraws
+                : null;
+            if (!GxFifoSoftwareRenderer.TryWriteCopyEventTimeline(bus.MmioAccesses, options.GxCopyEventDumpPath, options.GxFrameSkipDraws, gxCopyEventMaxDraws, out GxFifoCopyEventTimelineResult? gxCopyEvents, out string? gxCopyEventError))
+            {
+                gxCopyEventDumpMilliseconds += StopAndGetMilliseconds(gxCopyEventDumpStopwatch);
+                _error.WriteLine($"GX copy-event dump failed: {gxCopyEventError}");
+                WriteRunSummary(3, diagnosticFailure: $"gx-copy-event-dump: {gxCopyEventError}");
+                return 3;
+            }
+
+            if (!options.Quiet)
+            {
+                string skipped = options.GxFrameSkipDraws == 0 ? string.Empty : $" after skipping {options.GxFrameSkipDraws} draw(s)";
+                _output.WriteLine($"Wrote {gxCopyEvents!.EventsWritten} GX copy event(s){skipped} after {gxCopyEvents.TotalDraws} draw(s) to {gxCopyEvents.Path}.");
+            }
+
+            gxCopyEventDumpMilliseconds += StopAndGetMilliseconds(gxCopyEventDumpStopwatch);
         }
 
         if (options.GxCoverageDumpPath is not null)

@@ -1642,6 +1642,60 @@ public sealed class GxFifoSoftwareRendererTests
     }
 
     [Fact]
+    public void WritesCopyEventTimelineWithoutRasterizing()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csv");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x80, 0x00, 0x04,
+            ];
+            AddVertex(bytes, 2, 2, 255, 0, 0, 255);
+            AddVertex(bytes, 4, 2, 255, 0, 0, 255);
+            AddVertex(bytes, 4, 4, 255, 0, 0, 255);
+            AddVertex(bytes, 2, 4, 255, 0, 0, 255);
+            bytes.AddRange(
+            [
+                0x61, 0x49, 0x00, 0x00, 0x00,
+                0x61, 0x4A, 0x00, 0x18, 0x06,
+                0x61, 0x4B, 0x00, 0x10, 0x00,
+                0x61, 0x4D, 0x00, 0x00, 0x00,
+                0x61, 0x52, 0x00, 0x48, 0x00,
+            ]);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteCopyEventTimeline(accesses, path, skipDraws: 0, maxDraws: null, out GxFifoCopyEventTimelineResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            Assert.Equal(1, result.EventsWritten);
+            Assert.Equal(1, result.TotalDraws);
+            string[] lines = File.ReadAllLines(path);
+            Assert.Equal(2, lines.Length);
+            string[] headers = lines[0].Split(',');
+            string[] values = lines[1].Split(',');
+            Assert.Equal("display", values[Array.IndexOf(headers, "kind")]);
+            Assert.Equal("1", values[Array.IndexOf(headers, "draws_seen")]);
+            Assert.Equal("0x00020000", values[Array.IndexOf(headers, "destination_address")]);
+            Assert.Equal("7", values[Array.IndexOf(headers, "src_width")]);
+            Assert.Equal("7", values[Array.IndexOf(headers, "src_height")]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void WritesTextureCopyReadbackSamples()
     {
         string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csv");

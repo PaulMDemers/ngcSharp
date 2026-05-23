@@ -27,6 +27,7 @@ public sealed record RunDolOptions(
     string? GxFrameDumpPath = null,
     string? GxDrawDumpPath = null,
     string? GxCopyDumpPath = null,
+    string? GxCopyEventDumpPath = null,
     string? GxCoverageDumpPath = null,
     string? GxTevSampleDumpPath = null,
     string? GxTextureDumpPath = null,
@@ -124,6 +125,7 @@ public sealed record RunDolOptions(
         string? gxFrameDumpPath = null;
         string? gxDrawDumpPath = null;
         string? gxCopyDumpPath = null;
+        string? gxCopyEventDumpPath = null;
         string? gxCoverageDumpPath = null;
         string? gxTevSampleDumpPath = null;
         string? gxFifoWriteTracePath = null;
@@ -324,6 +326,15 @@ public sealed record RunDolOptions(
                     }
 
                     gxCopyDumpPath = args[++index];
+                    break;
+                case "--dump-gx-copy-events":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--dump-gx-copy-events requires a path.");
+                        return false;
+                    }
+
+                    gxCopyEventDumpPath = args[++index];
                     break;
                 case "--dump-gx-coverage":
                     if (index + 1 >= args.Length)
@@ -873,7 +884,7 @@ public sealed record RunDolOptions(
             return false;
         }
 
-        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, dumpDisassemblyRequests, pcProfileTop, profileAfter, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, branchSiteProfiles, pcLrProfiles, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath, discCommandLatencyCycles, sonicPathLookupTracePath, sonicResourceFlagTracePath);
+        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCopyEventDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, dumpDisassemblyRequests, pcProfileTop, profileAfter, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, branchSiteProfiles, pcLrProfiles, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath, discCommandLatencyCycles, sonicPathLookupTracePath, sonicResourceFlagTracePath);
         return true;
     }
 

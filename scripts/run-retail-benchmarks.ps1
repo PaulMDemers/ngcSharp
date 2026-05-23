@@ -269,10 +269,10 @@ $marioKartDebugFullPath = Resolve-FullPath $MarioKartDebugPath
 function New-SonicGxWindowTarget {
     param(
         [int]$SkipDraws,
+        [int]$Draws = 80,
         [switch]$Heavy
     )
 
-    $draws = 80
     $slugSuffix = if ($Heavy) { "-heavy" } else { "" }
     return [pscustomobject]@{
         slug = "sonic-gx-window-$SkipDraws$slugSuffix"
@@ -281,11 +281,11 @@ function New-SonicGxWindowTarget {
         maxInstructions = 50000000
         timeoutSeconds = [Math]::Max($TimeoutSeconds, 900)
         gxFrameSource = "largest-display-copy"
-        gxFrameMaxDraws = $draws
+        gxFrameMaxDraws = $Draws
         gxFrameSkipDraws = $SkipDraws
         gxFrameMaxRasterPixels = 50000000
         gxDrawSkipDraws = $SkipDraws
-        gxDrawMaxDraws = $draws
+        gxDrawMaxDraws = $Draws
         dumpGxFrame = $false
         dumpGxDraws = [bool]$Heavy
         dumpGxCopies = $true
@@ -332,6 +332,20 @@ $targetDefinitions = @{
         gxFrameMaxDraws = 900
         gxFrameMaxRasterPixels = 12000000
         dumpGxCopies = $true
+        extraArgs = @("--memory-card-a", "--controller-button", "a")
+    }
+    "sonic-copy-events-50m" = [pscustomobject]@{
+        slug = "sonic-copy-events-50m"
+        game = "Sonic Adventure 2 Battle"
+        gamePath = $sonicFullPath
+        maxInstructions = 50000000
+        timeoutSeconds = [Math]::Max($TimeoutSeconds, 600)
+        gxFrameSource = "largest-display-copy"
+        gxFrameMaxDraws = 900
+        gxFrameMaxRasterPixels = 12000000
+        dumpGxFrame = $false
+        dumpGxCopies = $false
+        dumpGxCopyEvents = $true
         extraArgs = @("--memory-card-a", "--controller-button", "a")
     }
     "sonic-late-black-window" = [pscustomobject]@{
@@ -405,12 +419,25 @@ $targetDefinitions = @{
     }
 }
 
-foreach ($skipDraws in @(280, 400, 480, 520, 560, 600, 640, 680, 1000, 1500)) {
+foreach ($skipDraws in @(280, 400, 480, 520, 560, 600, 640, 680, 1000, 1500, 4380, 8260)) {
     $targetDefinitions["sonic-gx-window-$skipDraws"] = New-SonicGxWindowTarget -SkipDraws $skipDraws
 }
 
 $targetDefinitions["sonic-gx-window-202-heavy"] = New-SonicGxWindowTarget -SkipDraws 202 -Heavy
 $targetDefinitions["sonic-gx-window-560-heavy"] = New-SonicGxWindowTarget -SkipDraws 560 -Heavy
+$targetDefinitions["sonic-gx-interval-8302"] = (New-SonicGxWindowTarget -SkipDraws 8302 -Draws 3900) | ForEach-Object {
+    $_.slug = "sonic-gx-interval-8302"
+    $_.dumpGxCoverage = $false
+    $_
+}
+$targetDefinitions["sonic-gx-interval-8302-frame"] = (New-SonicGxWindowTarget -SkipDraws 8302 -Draws 3900) | ForEach-Object {
+    $_.slug = "sonic-gx-interval-8302-frame"
+    $_.dumpGxFrame = $true
+    $_.dumpGxCopies = $false
+    $_.dumpGxCoverage = $false
+    $_.windowGxCopies = $false
+    $_
+}
 
 $Targets = @(
     $Targets |
@@ -448,6 +475,7 @@ foreach ($targetName in $Targets) {
 
     $framePath = Join-Path $targetRoot "auto.png"
     $copyCsvPath = Join-Path $targetRoot "gx-copies.csv"
+    $copyEventCsvPath = Join-Path $targetRoot "gx-copy-events.csv"
     $gxDrawsPath = Join-Path $targetRoot "gx-draws.txt"
     $exiTracePath = Join-Path $targetRoot "exi.csv"
     $stdoutPath = Join-Path $targetRoot "stdout.txt"
@@ -466,6 +494,7 @@ foreach ($targetName in $Targets) {
     $gxDrawSkipDraws = if ($target.PSObject.Properties.Name -contains "gxDrawSkipDraws") { [int]$target.gxDrawSkipDraws } else { 0 }
     $gxDrawMaxDraws = if ($target.PSObject.Properties.Name -contains "gxDrawMaxDraws") { [int]$target.gxDrawMaxDraws } else { 10 }
     $dumpGxCopies = $DeepGx -or [bool]$target.dumpGxCopies
+    $dumpGxCopyEvents = ($target.PSObject.Properties.Name -contains "dumpGxCopyEvents") -and [bool]$target.dumpGxCopyEvents
     $dumpGxFrame = -not ($target.PSObject.Properties.Name -contains "dumpGxFrame") -or [bool]$target.dumpGxFrame
     $dumpGxDraws = ($target.PSObject.Properties.Name -contains "dumpGxDraws") -and [bool]$target.dumpGxDraws
     $dumpGxCoverage = ($target.PSObject.Properties.Name -contains "dumpGxCoverage") -and [bool]$target.dumpGxCoverage
@@ -500,6 +529,9 @@ foreach ($targetName in $Targets) {
     }
     if ($dumpGxCopies) {
         $runArgs += @("--dump-gx-copies", $copyCsvPath)
+    }
+    if ($dumpGxCopyEvents) {
+        $runArgs += @("--dump-gx-copy-events", $copyEventCsvPath)
     }
     if ($dumpGxDraws) {
         $runArgs += @(
@@ -589,6 +621,8 @@ foreach ($targetName in $Targets) {
         gxFrameSkipDraws = $gxFrameSkipDraws
         gxFrameMaxRasterPixels = $gxFrameMaxRasterPixels
         gxCopiesRequested = $dumpGxCopies
+        gxCopyEventsRequested = $dumpGxCopyEvents
+        gxCopyEventsPath = if (Test-Path -LiteralPath $copyEventCsvPath) { $copyEventCsvPath } else { $null }
         gxDrawsRequested = $dumpGxDraws
         gxDrawsPath = if (Test-Path -LiteralPath $gxDrawsPath) { $gxDrawsPath } else { $null }
         gxCoverageRequested = $dumpGxCoverage

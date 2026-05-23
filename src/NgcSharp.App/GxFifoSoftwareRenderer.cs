@@ -10,6 +10,7 @@ public sealed record GxFifoSoftwareRenderFastPathStats(long SingleStageTevFastTr
 public sealed record GxFifoSoftwareRenderEfbCopyStats(long DisplayCopies, long DirectDisplayCopies, long FilteredDisplayCopies, long TextureCopies, long Clears, long DepthClears, double DisplayCopyMs, double TextureCopyMs, double ColorClearMs, double DepthClearMs, IReadOnlyDictionary<string, long> DisplayCopyModes, IReadOnlyDictionary<string, long> TextureCopyFormats);
 public sealed record GxFifoSoftwareRenderResult(string Path, int Width, int Height, int Draws, int RenderedQuads, int DegenerateQuads, int RenderedTriangles = 0, int DegenerateTriangles = 0, GxFrameDumpSource Source = GxFrameDumpSource.Efb, uint? SourceAddress = null, FramebufferPixelFormat? SourceFormat = null, int? SourceCopyIndex = null, bool RasterBudgetExhausted = false, GxFifoSoftwareRenderTimings? Timings = null, GxFifoSoftwareRenderFastPathStats? FastPathStats = null, GxFifoSoftwareRenderEfbCopyStats? EfbCopyStats = null);
 public sealed record GxFifoDrawDiagnosticResult(string Path, int TotalDraws, int DrawsWritten);
+public sealed record GxFifoCopyEventTimelineResult(string Path, int EventsWritten, int TotalDraws);
 public sealed record GxFifoCopyDiagnosticResult(string Path, int CopiesWritten, int TotalDraws, bool RasterBudgetExhausted = false);
 public sealed record GxFifoCoverageDiagnosticResult(string Path, int DrawsWritten, int CopiesSeen, bool RasterBudgetExhausted);
 public sealed record GxFifoTevSampleDiagnosticResult(string Path, int SamplesWritten, int TotalDraws, int CopiesSeen);
@@ -1093,6 +1094,129 @@ public static class GxFifoSoftwareRenderer
         return TryWriteCopyDiagnostics(accesses, memory, path, width, height, maxRasterizedPixels, ignoreEfbCopyClear, skipDraws: 0, maxDraws: null, out result, out error);
     }
 
+    public static bool TryWriteCopyEventTimeline(IReadOnlyList<MmioAccess> accesses, string path, int skipDraws, int? maxDraws, out GxFifoCopyEventTimelineResult? result, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(accesses);
+
+        result = null;
+        error = null;
+        if (skipDraws < 0)
+        {
+            error = "GX copy-event skipped draw count must be non-negative.";
+            return false;
+        }
+
+        if (maxDraws is <= 0)
+        {
+            error = "GX copy-event draw count must be positive when provided.";
+            return false;
+        }
+
+        byte[] fifo = accesses
+            .Where(access => access.DeviceName == "GX FIFO" && access.Kind == MmioAccessKind.Write)
+            .SelectMany(ExpandMmioWriteBytes)
+            .ToArray();
+        if (fifo.Length == 0)
+        {
+            error = "no GX FIFO writes were captured.";
+            return false;
+        }
+
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        GxVertexState state = new();
+        int offset = 0;
+        int totalDraws = 0;
+        int eventsWritten = 0;
+
+        using StreamWriter writer = new(fullPath);
+        writer.WriteLine("event_index,fifo_offset,draws_seen,kind,destination_address,destination_raw,destination_tiles,format,control,src_left,src_top,src_width,src_height,output_width,output_height,clear,mipmap");
+
+        while (offset < fifo.Length)
+        {
+            int commandOffset = offset;
+            byte command = fifo[offset++];
+            if (command is 0x00 or 0x44 or 0x48)
+            {
+                continue;
+            }
+
+            if (command == 0x08 && TryReadBigEndian(fifo, offset, 1, out uint cpRegister) && TryReadBigEndian(fifo, offset + 1, 4, out uint cpValue))
+            {
+                state.WriteCpRegister((byte)cpRegister, cpValue);
+                offset += 5;
+                continue;
+            }
+
+            if (command == 0x10 && TryReadBigEndian(fifo, offset, 4, out uint xfHeader))
+            {
+                ushort xfRegister = (ushort)(xfHeader & 0xFFFF);
+                uint wordCount = ((xfHeader >> 16) & 0xFFFF) + 1;
+                int xfPayloadBytes = AvailablePayloadBytes(fifo, offset + 4, wordCount);
+                state.WriteXfRegisters(fifo, offset + 4, xfRegister, xfPayloadBytes / sizeof(uint));
+                offset += 4 + xfPayloadBytes;
+                continue;
+            }
+
+            if (command is 0x20 or 0x28 or 0x30 or 0x38)
+            {
+                offset += Math.Min(4, fifo.Length - offset);
+                continue;
+            }
+
+            if (command == 0x40)
+            {
+                offset += Math.Min(8, fifo.Length - offset);
+                continue;
+            }
+
+            if (command == 0x61)
+            {
+                if (TryReadBigEndian(fifo, offset, 4, out uint bpValue))
+                {
+                    state.WriteBpRegister(bpValue);
+                    if ((bpValue >> 24) == 0x52 && state.TryGetEfbCopyInfo(out EfbCopyInfo copy) && IsDrawInDiagnosticWindow(totalDraws, skipDraws, maxDraws))
+                    {
+                        eventsWritten++;
+                        WriteCopyEventTimelineCsv(writer, eventsWritten, commandOffset, totalDraws, copy);
+                    }
+                }
+
+                offset += Math.Min(4, fifo.Length - offset);
+                continue;
+            }
+
+            if ((command & 0x80) == 0 || !TryReadBigEndian(fifo, offset, 2, out uint vertexCount))
+            {
+                break;
+            }
+
+            int format = command & 7;
+            if (!state.TryGetVertexStride(format, out int stride))
+            {
+                break;
+            }
+
+            offset += 2;
+            long payloadBytes = (long)vertexCount * stride;
+            if (payloadBytes > fifo.Length - offset)
+            {
+                break;
+            }
+
+            totalDraws++;
+            offset += (int)payloadBytes;
+        }
+
+        result = new GxFifoCopyEventTimelineResult(fullPath, eventsWritten, totalDraws);
+        return true;
+    }
+
     public static bool TryWriteCopyDiagnostics(IReadOnlyList<MmioAccess> accesses, GameCubeMemory? memory, string path, int width, int height, int? maxRasterizedPixels, bool ignoreEfbCopyClear, int skipDraws, int? maxDraws, out GxFifoCopyDiagnosticResult? result, out string? error)
     {
         ArgumentNullException.ThrowIfNull(accesses);
@@ -1276,6 +1400,29 @@ public static class GxFifoSoftwareRenderer
 
         result = new GxFifoCopyDiagnosticResult(fullPath, copiesWritten, totalDraws, rasterPixelsRemaining <= 0);
         return true;
+    }
+
+    private static void WriteCopyEventTimelineCsv(StreamWriter writer, int eventIndex, int fifoOffset, int drawsSeen, EfbCopyInfo copy)
+    {
+        string kind = copy.IsDisplayCopy ? "display" : "texture";
+        writer.WriteLine(string.Join(',',
+            eventIndex.ToString(CultureInfo.InvariantCulture),
+            $"+0x{fifoOffset:X}",
+            drawsSeen.ToString(CultureInfo.InvariantCulture),
+            kind,
+            $"0x{copy.DestinationAddress:X8}",
+            $"0x{copy.DestinationRaw:X6}",
+            copy.DestinationTiles.ToString(CultureInfo.InvariantCulture),
+            GxVertexState.TextureFormatName(copy.Format),
+            $"0x{copy.Control:X6}",
+            copy.SourceLeft.ToString(CultureInfo.InvariantCulture),
+            copy.SourceTop.ToString(CultureInfo.InvariantCulture),
+            copy.SourceWidth.ToString(CultureInfo.InvariantCulture),
+            copy.SourceHeight.ToString(CultureInfo.InvariantCulture),
+            copy.OutputWidth.ToString(CultureInfo.InvariantCulture),
+            copy.OutputHeight.ToString(CultureInfo.InvariantCulture),
+            copy.Clear ? "True" : "False",
+            copy.Mipmap ? "True" : "False"));
     }
 
     private static bool IsDrawInDiagnosticWindow(int drawIndex, int skipDraws, int? maxDraws)
@@ -3163,8 +3310,8 @@ public static class GxFifoSoftwareRenderer
         {
             GxVertex current = vertices[index];
             GxVertex next = vertices[(index + 1) % vertices.Count];
-            bool currentInside = IsInsideNearPlane(current);
-            bool nextInside = IsInsideNearPlane(next);
+            bool currentInside = IsInsideNearPlane(current, state);
+            bool nextInside = IsInsideNearPlane(next, state);
 
             if (currentInside && nextInside)
             {
@@ -3191,8 +3338,8 @@ public static class GxFifoSoftwareRenderer
         return output;
     }
 
-    private static bool IsInsideNearPlane(GxVertex vertex) =>
-        vertex.HasViewPosition && -vertex.ViewZ > NearClipW;
+    private static bool IsInsideNearPlane(GxVertex vertex, GxVertexState state) =>
+        vertex.HasViewPosition && -vertex.ViewZ >= state.GetPerspectiveNearClipW();
 
     private static bool TryInterpolateNearClipVertex(GxVertex a, GxVertex b, GxVertexState state, out GxVertex vertex)
     {
@@ -3205,7 +3352,7 @@ public static class GxFifoSoftwareRenderer
             return false;
         }
 
-        float targetW = NearClipW * 1.01f;
+        float targetW = state.GetPerspectiveNearClipW();
         float t = Math.Clamp((targetW - aW) / denominator, 0f, 1f);
         float viewX = Lerp(a.ViewX, b.ViewX, t);
         float viewY = Lerp(a.ViewY, b.ViewY, t);
@@ -5479,6 +5626,24 @@ public static class GxFifoSoftwareRenderer
             screenY = (viewportOriginY - 342f) + viewportScaleY * ndcY;
             screenZ = Math.Clamp(viewportOriginZ + viewportScaleZ * ndcZ, 0f, FarDepthValue);
             return float.IsFinite(screenX) && float.IsFinite(screenY) && float.IsFinite(screenZ);
+        }
+
+        public float GetPerspectiveNearClipW()
+        {
+            if (!_xfRegisters.TryGetValue(0x1026, out uint projectionType) || projectionType != 0)
+            {
+                return NearClipW * 1.01f;
+            }
+
+            if (!TryGetXfFloat(0x1025, out float projection23) || !float.IsFinite(projection23))
+            {
+                return NearClipW * 1.01f;
+            }
+
+            float nearW = MathF.Abs(projection23);
+            return float.IsFinite(nearW) && nearW > NearClipW
+                ? nearW
+                : NearClipW * 1.01f;
         }
 
         private ushort CurrentPositionMatrixBaseRegister

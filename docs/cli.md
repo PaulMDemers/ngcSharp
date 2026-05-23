@@ -129,8 +129,10 @@ dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "path\to\g
 Dump draw/copy/coverage/TEV diagnostics:
 
 ```powershell
-dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "path\to\game.rvz" --max-instructions 50000000 --fast-forward-idle --dump-gx-draws artifacts/gx/draws.txt --dump-gx-copies artifacts/gx/copies.csv --dump-gx-coverage artifacts/gx/coverage.csv --dump-gx-tev-samples artifacts/gx/tev.csv --no-registers --quiet
+dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- run-disc "path\to\game.rvz" --max-instructions 50000000 --fast-forward-idle --dump-gx-draws artifacts/gx/draws.txt --dump-gx-copies artifacts/gx/copies.csv --dump-gx-copy-events artifacts/gx/copy-events.csv --dump-gx-coverage artifacts/gx/coverage.csv --dump-gx-tev-samples artifacts/gx/tev.csv --no-registers --quiet
 ```
+
+Use `--dump-gx-copy-events` when you only need the BP `0x52` EFB-copy timeline. It decodes copy commands and draw indices without rasterizing the FIFO, so it is the faster first pass for presentation bugs.
 
 Sweep draw windows:
 
@@ -167,6 +169,12 @@ The default suite keeps long Sonic probes lightweight enough to finish under the
 powershell -ExecutionPolicy Bypass -File scripts/run-retail-benchmarks.ps1 -Targets sonic-20m -DeepGx
 ```
 
+Run Sonic's lightweight full copy-event timeline:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-retail-benchmarks.ps1 -Targets sonic-copy-events-50m -NoBuild -TimeoutSeconds 900
+```
+
 Run only the Sonic checks:
 
 ```powershell
@@ -185,7 +193,9 @@ Run focused Sonic GX draw-window probes:
 powershell -ExecutionPolicy Bypass -File scripts/run-retail-benchmarks.ps1 -Targets sonic-gx-window-280,sonic-gx-window-680 -NoBuild -TimeoutSeconds 900
 ```
 
-The generated Sonic window targets currently cover draw skips `280`, `400`, `480`, `520`, `560`, `600`, `640`, `680`, `1000`, and `1500`. They disable PNG capture and write bounded GX copy/coverage diagnostics so `summary.csv` can show nonblack display-copy counts, coverage bounds, raster-budget state, and color-write totals for each window. Heavy variants such as `sonic-gx-window-560-heavy` also add bounded draw logs and TEV samples for the suspicious window.
+The generated Sonic window targets currently cover draw skips `280`, `400`, `480`, `520`, `560`, `600`, `640`, `680`, `1000`, `1500`, `4380`, and `8260`. They disable PNG capture and write bounded GX copy/coverage diagnostics so `summary.csv` can show nonblack display-copy counts, coverage bounds, raster-budget state, and color-write totals for each window. Heavy variants such as `sonic-gx-window-560-heavy` also add bounded draw logs and TEV samples for the suspicious window.
+
+Use `sonic-gx-interval-8302` when a copy needs warmed EFB history from the prior copy interval; it renders a longer draw span starting at draw 8,302 and writes copy diagnostics without coverage rows. Use `sonic-gx-interval-8302-frame` for the matching PNG capture from the largest display copy in that interval.
 
 Both scripts write timestamped directories under `artifacts/compat-runs` with:
 
@@ -195,6 +205,7 @@ Both scripts write timestamped directories under `artifacts/compat-runs` with:
 - `auto.png`: auto-selected GX frame.
 - `exi.summary.json`: EXI/card milestone counts.
 - `gx-copies.summary.json`: display/texture copy counts, nonblack frame milestones, and per-XFB destination lifecycles showing black overwrites after nonblack copies.
+- `gx-copy-events.csv`: optional lightweight BP `0x52` copy-event timeline with FIFO offsets, draw indices, copy kind, destination, dimensions, and clear flags.
 
 Summarize existing traces without rerunning a game:
 
