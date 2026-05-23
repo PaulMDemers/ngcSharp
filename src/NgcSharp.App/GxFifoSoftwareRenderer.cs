@@ -1085,10 +1085,15 @@ public static class GxFifoSoftwareRenderer
 
     public static bool TryWriteCopyDiagnostics(IReadOnlyList<MmioAccess> accesses, GameCubeMemory? memory, string path, int width, int height, int? maxRasterizedPixels, out GxFifoCopyDiagnosticResult? result, out string? error)
     {
-        return TryWriteCopyDiagnostics(accesses, memory, path, width, height, maxRasterizedPixels, ignoreEfbCopyClear: false, out result, out error);
+        return TryWriteCopyDiagnostics(accesses, memory, path, width, height, maxRasterizedPixels, ignoreEfbCopyClear: false, skipDraws: 0, maxDraws: null, out result, out error);
     }
 
     public static bool TryWriteCopyDiagnostics(IReadOnlyList<MmioAccess> accesses, GameCubeMemory? memory, string path, int width, int height, int? maxRasterizedPixels, bool ignoreEfbCopyClear, out GxFifoCopyDiagnosticResult? result, out string? error)
+    {
+        return TryWriteCopyDiagnostics(accesses, memory, path, width, height, maxRasterizedPixels, ignoreEfbCopyClear, skipDraws: 0, maxDraws: null, out result, out error);
+    }
+
+    public static bool TryWriteCopyDiagnostics(IReadOnlyList<MmioAccess> accesses, GameCubeMemory? memory, string path, int width, int height, int? maxRasterizedPixels, bool ignoreEfbCopyClear, int skipDraws, int? maxDraws, out GxFifoCopyDiagnosticResult? result, out string? error)
     {
         ArgumentNullException.ThrowIfNull(accesses);
 
@@ -1108,6 +1113,18 @@ public static class GxFifoSoftwareRenderer
         if (maxRasterizedPixels is <= 0)
         {
             error = "GX copy diagnostic raster pixel budget must be positive.";
+            return false;
+        }
+
+        if (skipDraws < 0)
+        {
+            error = "GX copy diagnostic skipped draw count must be non-negative.";
+            return false;
+        }
+
+        if (maxDraws is <= 0)
+        {
+            error = "GX copy diagnostic draw count must be positive when provided.";
             return false;
         }
 
@@ -1189,15 +1206,23 @@ public static class GxFifoSoftwareRenderer
                     state.WriteBpRegister(bpValue);
                     if ((bpValue >> 24) == 0x52 && state.TryGetEfbCopyInfo(out EfbCopyInfo copy))
                     {
-                        EfbCoverage before = CountNonBlackRegion(rgb, alpha, width, height, copy.SourceLeft, copy.SourceTop, copy.SourceWidth, copy.SourceHeight);
-                        CopySourceSample[] sourceSamples = CaptureCopySourceSamples(rgb, alpha, width, height, copy);
+                        bool diagnosticWindow = IsDrawInDiagnosticWindow(totalDraws, skipDraws, maxDraws);
+                        EfbCoverage before = diagnosticWindow
+                            ? CountNonBlackRegion(rgb, alpha, width, height, copy.SourceLeft, copy.SourceTop, copy.SourceWidth, copy.SourceHeight)
+                            : default;
+                        CopySourceSample[] sourceSamples = diagnosticWindow
+                            ? CaptureCopySourceSamples(rgb, alpha, width, height, copy)
+                            : [];
                         bool clearAfterCopy = !ignoreEfbCopyClear;
                         bool copied = state.TryCopyEfb(memory, rgb, alpha, depth, width, height, clearAfterCopy, out DisplayCopyResult? displayCopy);
-                        EfbCoverage after = CountNonBlackRegion(rgb, alpha, width, height, copy.SourceLeft, copy.SourceTop, copy.SourceWidth, copy.SourceHeight);
-                        string copySamples = DescribeCopySamples(memory, copy, copied, sourceSamples, out int textureReadbackMismatches);
-                        DisplayReadback displayReadback = CaptureDisplayReadback(memory, displayCopy);
-                        copiesWritten++;
-                        WriteCopyDiagnosticCsv(writer, copiesWritten, commandOffset, totalDraws, copy, clearAfterCopy && copy.Clear, copied, displayCopy, displayReadback, before, after, textureReadbackMismatches, copySamples);
+                        if (diagnosticWindow)
+                        {
+                            EfbCoverage after = CountNonBlackRegion(rgb, alpha, width, height, copy.SourceLeft, copy.SourceTop, copy.SourceWidth, copy.SourceHeight);
+                            string copySamples = DescribeCopySamples(memory, copy, copied, sourceSamples, out int textureReadbackMismatches);
+                            DisplayReadback displayReadback = CaptureDisplayReadback(memory, displayCopy);
+                            copiesWritten++;
+                            WriteCopyDiagnosticCsv(writer, copiesWritten, commandOffset, totalDraws, copy, clearAfterCopy && copy.Clear, copied, displayCopy, displayReadback, before, after, textureReadbackMismatches, copySamples);
+                        }
                     }
                 }
 
@@ -1224,7 +1249,9 @@ public static class GxFifoSoftwareRenderer
             }
 
             totalDraws++;
-            if (state.IsRenderablePositionFormat(format) && vertexCount <= int.MaxValue)
+            if (IsDrawInDiagnosticWindow(totalDraws, skipDraws, maxDraws)
+                && state.IsRenderablePositionFormat(format)
+                && vertexCount <= int.MaxValue)
             {
                 int vertexOffset = offset;
                 GxVertex[] vertices = new GxVertex[(int)vertexCount];
@@ -1249,6 +1276,16 @@ public static class GxFifoSoftwareRenderer
 
         result = new GxFifoCopyDiagnosticResult(fullPath, copiesWritten, totalDraws, rasterPixelsRemaining <= 0);
         return true;
+    }
+
+    private static bool IsDrawInDiagnosticWindow(int drawIndex, int skipDraws, int? maxDraws)
+    {
+        if (drawIndex < skipDraws)
+        {
+            return false;
+        }
+
+        return maxDraws is not int drawLimit || drawIndex <= skipDraws + drawLimit;
     }
 
     private static EfbCoverage CountNonBlackRegion(byte[] rgb, byte[] alpha, int frameWidth, int frameHeight, int left, int top, int width, int height)

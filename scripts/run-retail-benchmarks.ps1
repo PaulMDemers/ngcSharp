@@ -190,6 +190,25 @@ $targetDefinitions = @{
         dumpGxCopies = $true
         extraArgs = @("--memory-card-a", "--controller-button", "a")
     }
+    "sonic-late-black-window" = [pscustomobject]@{
+        slug = "sonic-late-black-window"
+        game = "Sonic Adventure 2 Battle"
+        gamePath = $sonicFullPath
+        maxInstructions = 50000000
+        timeoutSeconds = [Math]::Max($TimeoutSeconds, 900)
+        gxFrameSource = "largest-display-copy"
+        gxFrameMaxDraws = 80
+        gxFrameSkipDraws = 202
+        gxFrameMaxRasterPixels = 50000000
+        gxDrawSkipDraws = 202
+        gxDrawMaxDraws = 80
+        dumpGxFrame = $false
+        dumpGxDraws = $true
+        dumpGxCopies = $true
+        dumpGxCoverage = $true
+        dumpGxTevSamples = $true
+        extraArgs = @("--memory-card-a", "--controller-button", "a")
+    }
     "pikmin-5m" = [pscustomobject]@{
         slug = "pikmin-5m"
         game = "Pikmin"
@@ -277,19 +296,28 @@ foreach ($targetName in $Targets) {
 
     $framePath = Join-Path $targetRoot "auto.png"
     $copyCsvPath = Join-Path $targetRoot "gx-copies.csv"
+    $gxDrawsPath = Join-Path $targetRoot "gx-draws.txt"
     $exiTracePath = Join-Path $targetRoot "exi.csv"
     $stdoutPath = Join-Path $targetRoot "stdout.txt"
     $stderrPath = Join-Path $targetRoot "stderr.txt"
     $gxJsonPath = Join-Path $targetRoot "gx-copies.summary.json"
     $gxTimelineCsvPath = Join-Path $targetRoot "gx-display-activity.csv"
+    $gxCoveragePath = Join-Path $targetRoot "gx-coverage.csv"
+    $gxTevSamplesPath = Join-Path $targetRoot "gx-tev-samples.csv"
     $exiJsonPath = Join-Path $targetRoot "exi.summary.json"
     $emulatorSummaryPath = Join-Path $targetRoot "emulator-summary.json"
     $runJsonPath = Join-Path $targetRoot "run.json"
 
     $gxFrameMaxDraws = if ($DeepGx -and $target.slug -eq "sonic-20m") { 900 } else { $target.gxFrameMaxDraws }
+    $gxFrameSkipDraws = if ($target.PSObject.Properties.Name -contains "gxFrameSkipDraws") { [int]$target.gxFrameSkipDraws } else { 0 }
     $gxFrameMaxRasterPixels = if ($DeepGx -and $target.slug -eq "sonic-20m") { 12000000 } else { $target.gxFrameMaxRasterPixels }
+    $gxDrawSkipDraws = if ($target.PSObject.Properties.Name -contains "gxDrawSkipDraws") { [int]$target.gxDrawSkipDraws } else { 0 }
+    $gxDrawMaxDraws = if ($target.PSObject.Properties.Name -contains "gxDrawMaxDraws") { [int]$target.gxDrawMaxDraws } else { 10 }
     $dumpGxCopies = $DeepGx -or [bool]$target.dumpGxCopies
     $dumpGxFrame = -not ($target.PSObject.Properties.Name -contains "dumpGxFrame") -or [bool]$target.dumpGxFrame
+    $dumpGxDraws = ($target.PSObject.Properties.Name -contains "dumpGxDraws") -and [bool]$target.dumpGxDraws
+    $dumpGxCoverage = ($target.PSObject.Properties.Name -contains "dumpGxCoverage") -and [bool]$target.dumpGxCoverage
+    $dumpGxTevSamples = ($target.PSObject.Properties.Name -contains "dumpGxTevSamples") -and [bool]$target.dumpGxTevSamples
 
     $runArgs = @(
         $appDll,
@@ -300,19 +328,39 @@ foreach ($targetName in $Targets) {
         "--fast-forward-write-watch",
         "--trace-exi", $exiTracePath,
         "--run-summary", $emulatorSummaryPath,
+        "--gx-frame-skip-draws", "$gxFrameSkipDraws",
+        "--gx-frame-max-draws", "$gxFrameMaxDraws",
+        "--gx-frame-max-raster-pixels", "$gxFrameMaxRasterPixels",
         "--no-registers",
         "--quiet"
     ) + $target.extraArgs
     if ($dumpGxFrame) {
         $runArgs += @(
             "--dump-gx-frame", $framePath,
-            "--gx-frame-source", $target.gxFrameSource,
-            "--gx-frame-max-draws", "$gxFrameMaxDraws",
-            "--gx-frame-max-raster-pixels", "$gxFrameMaxRasterPixels"
+            "--gx-frame-source", $target.gxFrameSource
         )
     }
     if ($dumpGxCopies) {
         $runArgs += @("--dump-gx-copies", $copyCsvPath)
+    }
+    if ($dumpGxDraws) {
+        $runArgs += @(
+            "--dump-gx-draws", $gxDrawsPath,
+            "--gx-draw-skip-draws", "$gxDrawSkipDraws",
+            "--gx-draw-max-draws", "$gxDrawMaxDraws"
+        )
+    }
+    if ($dumpGxCoverage) {
+        $runArgs += @("--dump-gx-coverage", $gxCoveragePath)
+    }
+    if ($dumpGxTevSamples) {
+        $runArgs += @("--dump-gx-tev-samples", $gxTevSamplesPath)
+        if (-not $dumpGxDraws) {
+            $runArgs += @(
+                "--gx-draw-skip-draws", "$gxDrawSkipDraws",
+                "--gx-draw-max-draws", "$gxDrawMaxDraws"
+            )
+        }
     }
 
     Write-Host "Running $($target.slug): $($target.game) at $($target.maxInstructions) instructions..."
@@ -379,8 +427,15 @@ foreach ($targetName in $Targets) {
         deepGx = [bool]$DeepGx
         gxFrameRequested = $dumpGxFrame
         gxFrameMaxDraws = $gxFrameMaxDraws
+        gxFrameSkipDraws = $gxFrameSkipDraws
         gxFrameMaxRasterPixels = $gxFrameMaxRasterPixels
         gxCopiesRequested = $dumpGxCopies
+        gxDrawsRequested = $dumpGxDraws
+        gxDrawsPath = if (Test-Path -LiteralPath $gxDrawsPath) { $gxDrawsPath } else { $null }
+        gxCoverageRequested = $dumpGxCoverage
+        gxCoveragePath = if (Test-Path -LiteralPath $gxCoveragePath) { $gxCoveragePath } else { $null }
+        gxTevSamplesRequested = $dumpGxTevSamples
+        gxTevSamplesPath = if (Test-Path -LiteralPath $gxTevSamplesPath) { $gxTevSamplesPath } else { $null }
         emulatorSummary = $emulatorSummary
         frame = $frameSummary
         exiSummary = $exiSummary
