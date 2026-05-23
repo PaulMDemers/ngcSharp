@@ -51,7 +51,20 @@ dotnet build
 dotnet test --no-restore
 ```
 
-Show CLI help:
+### Desktop UI (Windows)
+
+If you want to test from a desktop host, run:
+
+```powershell
+dotnet run --project src/NgcSharp.Desktop
+```
+
+The UI supports:
+
+- Running DOLs
+- Running disc images (`.iso`, `.gcm`, `.rvz`)
+- Viewing `dol-info` and `disc-info`
+- Passing extra `run-dol`/`run-disc` flags in the Advanced Options tab
 
 ```powershell
 dotnet run --project src/NgcSharp.App/NgcSharp.App.csproj -- --help
