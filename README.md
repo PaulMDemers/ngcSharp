@@ -64,6 +64,8 @@ The UI supports:
 - Running DOLs
 - Running disc images (`.iso`, `.gcm`, `.rvz`)
 - Viewing `dol-info` and `disc-info`
+- Cancelling long-running emulation probes
+- Writing desktop run artifacts under `artifacts/desktop-runs/`
 - Passing extra `run-dol`/`run-disc` flags in the Advanced Options tab
 
 ```powershell

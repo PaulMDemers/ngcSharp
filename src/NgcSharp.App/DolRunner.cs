@@ -123,12 +123,12 @@ public sealed class DolRunner
     public int Run(RunDolOptions options)
     {
         DolFile dol = DolFile.Load(options.Path);
-        return Run(dol, options, new GameCubeBus(), stepObserver: null, prepareStandaloneBoot: true);
+        return Run(dol, options, new GameCubeBus(), stepObserver: null, prepareStandaloneBoot: true, CancellationToken.None);
     }
 
     public int Run(DolFile dol, RunDolOptions options)
     {
-        return Run(dol, options, new GameCubeBus(), stepObserver: null, prepareStandaloneBoot: true);
+        return Run(dol, options, new GameCubeBus(), stepObserver: null, prepareStandaloneBoot: true, CancellationToken.None);
     }
 
     public int Run(DolFile dol, RunDolOptions options, GameCubeBus bus)
@@ -138,10 +138,15 @@ public sealed class DolRunner
 
     public int Run(DolFile dol, RunDolOptions options, GameCubeBus bus, Action<DolRunStep>? stepObserver)
     {
-        return Run(dol, options, bus, stepObserver, prepareStandaloneBoot: false);
+        return Run(dol, options, bus, stepObserver, CancellationToken.None);
     }
 
-    private int Run(DolFile dol, RunDolOptions options, GameCubeBus bus, Action<DolRunStep>? stepObserver, bool prepareStandaloneBoot)
+    public int Run(DolFile dol, RunDolOptions options, GameCubeBus bus, Action<DolRunStep>? stepObserver, CancellationToken cancellationToken)
+    {
+        return Run(dol, options, bus, stepObserver, prepareStandaloneBoot: false, cancellationToken);
+    }
+
+    private int Run(DolFile dol, RunDolOptions options, GameCubeBus bus, Action<DolRunStep>? stepObserver, bool prepareStandaloneBoot, CancellationToken cancellationToken)
     {
         Stopwatch totalStopwatch = Stopwatch.StartNew();
         dol.LoadInto(bus.Memory);
@@ -502,11 +507,18 @@ public sealed class DolRunner
             sonicResourceFlagTrace.WriteLine("instruction,pc,lr,operation,flag_address,old_flag,new_flag,xor,mask,task,task_slot,selector,queue_head,queue_tail,r1,r3,r4,r5,r6,r7,r29,r30,r31");
         }
 
+        bool cancelled = false;
+
         string GetStopReason(string? overrideReason = null)
         {
             if (overrideReason is not null)
             {
                 return overrideReason;
+            }
+
+            if (cancelled)
+            {
+                return "cancelled";
             }
 
             if (state.Halted)
@@ -868,6 +880,12 @@ public sealed class DolRunner
         {
             for (; executed < options.MaxInstructions && !state.Halted; executed++)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    cancelled = true;
+                    break;
+                }
+
                 UpdateControllerButtons(bus, options, executed);
                 bus.SmallDataBaseRegister = state.Gpr[13];
                 uint pc = state.Pc;

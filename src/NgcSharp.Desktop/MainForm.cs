@@ -135,6 +135,14 @@ public sealed class MainForm : Form
         Height = 36,
     };
 
+    private readonly Button _cancelButton = new()
+    {
+        Text = "Cancel",
+        Dock = DockStyle.Fill,
+        Height = 36,
+        Enabled = false,
+    };
+
     private readonly Label _statusLabel = new()
     {
         Text = "Ready",
@@ -199,6 +207,7 @@ public sealed class MainForm : Form
     private readonly WinFormsTimer _screenUpdateTimer = new() { Interval = 16 };
     private readonly object _screenFrameLock = new();
     private Bitmap? _pendingScreenFrame;
+    private CancellationTokenSource? _activeRunCancellation;
 
     private static readonly (uint High, uint Low)[] ViFramebufferRegisterPairs =
     [
@@ -239,6 +248,7 @@ public sealed class MainForm : Form
         _traceCheck.CheckedChanged += (_, _) => _tracePathTextBox.Enabled = _traceCheck.Checked;
         _browseButton.Click += OnBrowseClicked;
         _runButton.Click += OnRunClicked;
+        _cancelButton.Click += OnCancelClicked;
         _clearButton.Click += (_, _) => _output.Clear();
         _commandSelector.SelectedIndexChanged += (_, _) => UpdateModeState();
         _screenUpdateTimer.Tick += OnScreenFrameTick;
@@ -258,6 +268,7 @@ public sealed class MainForm : Form
         bool MemoryCardA,
         bool MemoryCardB,
         string ControllerButtons,
+        string ArtifactDirectory,
         IReadOnlyList<string> AdditionalArguments);
 
     private void BuildControlPanel()
@@ -353,13 +364,15 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Top,
             Height = 40,
-            ColumnCount = 2,
+            ColumnCount = 3,
             Margin = new Padding(0, 8, 0, 12),
         };
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 65));
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
         row.Controls.Add(_runButton, 0, 0);
-        row.Controls.Add(_clearButton, 1, 0);
+        row.Controls.Add(_cancelButton, 1, 0);
+        row.Controls.Add(_clearButton, 2, 0);
         return row;
     }
 
@@ -469,14 +482,22 @@ public sealed class MainForm : Form
             return;
         }
 
+        using CancellationTokenSource cancellation = new();
+        _activeRunCancellation = cancellation;
         SetBusyState(isBusy: true);
         StartScreenCapture();
         AppendOutput($"{Environment.NewLine}--- {DateTime.Now:G} {request.CommandName} ---{Environment.NewLine}");
+        AppendOutput($"Artifacts: {request.ArtifactDirectory}{Environment.NewLine}");
 
         try
         {
-            bool completed = await Task.Run(() => ExecuteSelectedCommand(request));
-            SetStatus(completed ? "Completed" : "Failed");
+            bool completed = await Task.Run(() => ExecuteSelectedCommand(request, cancellation.Token), cancellation.Token);
+            SetStatus(cancellation.IsCancellationRequested ? "Cancelled" : completed ? "Completed" : "Failed");
+        }
+        catch (OperationCanceledException)
+        {
+            AppendOutput($"{Environment.NewLine}Run cancelled.{Environment.NewLine}");
+            SetStatus("Cancelled");
         }
         catch (Exception exception)
         {
@@ -486,8 +507,19 @@ public sealed class MainForm : Form
         finally
         {
             StopScreenCapture();
+            if (ReferenceEquals(_activeRunCancellation, cancellation))
+            {
+                _activeRunCancellation = null;
+            }
+
             SetBusyState(isBusy: false);
         }
+    }
+
+    private void OnCancelClicked(object? sender, EventArgs e)
+    {
+        _activeRunCancellation?.Cancel();
+        SetStatus("Cancelling...");
     }
 
     private RunCommandRequest? BuildRunCommandRequest()
@@ -511,6 +543,7 @@ public sealed class MainForm : Form
             _memoryCardA.Checked,
             _memoryCardB.Checked,
             _controllerButtons.Text,
+            CreateArtifactDirectory(_commandSelector.Text, path),
             ParseAdditionalArguments(_additionalArgs.Text));
     }
 
@@ -523,6 +556,7 @@ public sealed class MainForm : Form
         }
 
         _runButton.Enabled = !isBusy;
+        _cancelButton.Enabled = isBusy;
         _clearButton.Enabled = !isBusy;
         _browseButton.Enabled = !isBusy;
         _commandSelector.Enabled = !isBusy;
@@ -551,12 +585,12 @@ public sealed class MainForm : Form
         _statusLabel.Text = message;
     }
 
-    private bool ExecuteSelectedCommand(RunCommandRequest request)
+    private bool ExecuteSelectedCommand(RunCommandRequest request, CancellationToken cancellationToken)
     {
         return request.CommandName switch
         {
-            "Run DOL" => ExecuteRunDol(request),
-            "Run Disc" => ExecuteRunDisc(request),
+            "Run DOL" => ExecuteRunDol(request, cancellationToken),
+            "Run Disc" => ExecuteRunDisc(request, cancellationToken),
             "Disc Info" => ExecuteDiscInfo(request),
             "DOL Info" => ExecuteDolInfo(request),
             _ => UnknownCommand(request.CommandName),
@@ -569,7 +603,7 @@ public sealed class MainForm : Form
         return false;
     }
 
-    private bool ExecuteRunDol(RunCommandRequest request)
+    private bool ExecuteRunDol(RunCommandRequest request, CancellationToken cancellationToken)
     {
         if (!TryBuildRunOptions("run-dol", request, out RunDolOptions? options))
         {
@@ -587,12 +621,12 @@ public sealed class MainForm : Form
             runOptions.FrameWidth ?? DefaultFrameWidth,
             runOptions.FrameHeight ?? DefaultFrameHeight,
             runOptions.FrameFormat);
-        int executed = runner.Run(dol, runOptions, bus, step => CaptureFrameFromStep(step, frameCapture));
+        int executed = runner.Run(dol, runOptions, bus, step => CaptureFrameFromStep(step, frameCapture), cancellationToken);
         AppendOutput($"run-dol completed: {executed} instructions\n");
         return true;
     }
 
-    private bool ExecuteRunDisc(RunCommandRequest request)
+    private bool ExecuteRunDisc(RunCommandRequest request, CancellationToken cancellationToken)
     {
         if (!TryBuildRunOptions("run-disc", request, out RunDolOptions? options))
         {
@@ -611,7 +645,7 @@ public sealed class MainForm : Form
             runOptions.FrameHeight ?? DefaultFrameHeight,
             runOptions.FrameFormat);
         DolRunner runner = new(CreateWriter(), CreateWriter());
-        int executed = runner.Run(dol, runOptions, bus, step => CaptureFrameFromStep(step, frameCapture));
+        int executed = runner.Run(dol, runOptions, bus, step => CaptureFrameFromStep(step, frameCapture), cancellationToken);
         AppendOutput($"run-disc completed: {executed} instructions\n");
         return true;
     }
@@ -628,14 +662,19 @@ public sealed class MainForm : Form
             request.MaxInstructions.ToString(CultureInfo.InvariantCulture),
         ];
 
+        Directory.CreateDirectory(request.ArtifactDirectory);
+        args.Add("--run-summary");
+        args.Add(Path.Combine(request.ArtifactDirectory, "run-summary.json"));
+        args.Add("--dump-gx-frame");
+        args.Add(Path.Combine(request.ArtifactDirectory, "gx-frame.png"));
+
         if (request.TraceEnabled)
         {
             args.Add("--trace");
-            if (!string.IsNullOrWhiteSpace(request.TracePath))
-            {
-                args.Add("--trace-file");
-                args.Add(request.TracePath);
-            }
+            args.Add("--trace-file");
+            args.Add(string.IsNullOrWhiteSpace(request.TracePath)
+                ? Path.Combine(request.ArtifactDirectory, "tail.trace")
+                : request.TracePath);
         }
 
         if (request.DumpMmio)
@@ -680,6 +719,20 @@ public sealed class MainForm : Form
         }
 
         return true;
+    }
+
+    private static string CreateArtifactDirectory(string commandName, string inputPath)
+    {
+        string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+        string inputName = Path.GetFileNameWithoutExtension(inputPath);
+        string safeName = Regex.Replace(inputName, @"[^A-Za-z0-9._-]+", "-").Trim('-');
+        if (string.IsNullOrWhiteSpace(safeName))
+        {
+            safeName = "input";
+        }
+
+        string safeCommand = Regex.Replace(commandName.ToLowerInvariant(), @"[^a-z0-9]+", "-").Trim('-');
+        return Path.GetFullPath(Path.Combine("artifacts", "desktop-runs", $"{timestamp}-{safeCommand}-{safeName}"));
     }
 
     private static List<string> ParseAdditionalArguments(string rawArguments)

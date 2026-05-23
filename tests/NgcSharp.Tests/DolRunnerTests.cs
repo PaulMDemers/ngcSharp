@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 using NgcSharp.App;
 using NgcSharp.Core;
 using NgcSharp.Cpu;
@@ -7,6 +8,29 @@ namespace NgcSharp.Tests;
 
 public sealed class DolRunnerTests
 {
+    [Fact]
+    public void RunCanStopBeforeFirstInstructionWhenCancelled()
+    {
+        string summaryPath = Path.Combine(Path.GetTempPath(), $"ngcsharp-cancel-{Guid.NewGuid():N}.json");
+        try
+        {
+            DolFile dol = DolFile.Parse(SyntheticDolFactory.CreateSmokeTestDol());
+            RunDolOptions options = new("game.dol", 1000, Trace: false, TracePath: null, DumpRegisters: false, DumpMmio: false, Quiet: true, RunSummaryPath: summaryPath);
+            using CancellationTokenSource cancellation = new();
+            cancellation.Cancel();
+
+            int executed = new DolRunner(TextWriter.Null, TextWriter.Null).Run(dol, options, new GameCubeBus(), stepObserver: null, cancellation.Token);
+
+            Assert.Equal(0, executed);
+            using JsonDocument summary = JsonDocument.Parse(File.ReadAllText(summaryPath));
+            Assert.Equal("cancelled", summary.RootElement.GetProperty("stopReason").GetString());
+        }
+        finally
+        {
+            File.Delete(summaryPath);
+        }
+    }
+
     [Fact]
     public void WriteWatchRangeMatchesMainRamAliases()
     {
