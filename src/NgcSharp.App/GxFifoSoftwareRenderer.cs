@@ -2521,7 +2521,10 @@ public static class GxFifoSoftwareRenderer
                 : string.Empty;
             string extraTexCoords = DescribeExtraTexCoords(decoded[vertex]);
             string clip = decoded[vertex].ClipRejected ? " clipped" : string.Empty;
-            writer.WriteLine($"    v{vertex}: pos=({FormatFloat(decoded[vertex].X)}, {FormatFloat(decoded[vertex].Y)}) color=({decoded[vertex].R},{decoded[vertex].G},{decoded[vertex].B}){tex0}{extraTexCoords}{rawTex0} alpha={decoded[vertex].A}{clip} raw={FormatHexInline(fifo, vertexOffset, Math.Min(stride, 48))}");
+            string view = decoded[vertex].HasViewPosition
+                ? $" view=({FormatFloat(decoded[vertex].ViewX)}, {FormatFloat(decoded[vertex].ViewY)}, {FormatFloat(decoded[vertex].ViewZ)}) invW={FormatFloat(decoded[vertex].InvW)}"
+                : string.Empty;
+            writer.WriteLine($"    v{vertex}: pos=({FormatFloat(decoded[vertex].X)}, {FormatFloat(decoded[vertex].Y)}){view} color=({decoded[vertex].R},{decoded[vertex].G},{decoded[vertex].B}){tex0}{extraTexCoords}{rawTex0} alpha={decoded[vertex].A}{clip} raw={FormatHexInline(fifo, vertexOffset, Math.Min(stride, 48))}");
         }
 
         if (decodedAll && verticesToDump > 0)
@@ -3841,6 +3844,18 @@ public static class GxFifoSoftwareRenderer
             if (_xfRegisters.TryGetValue(0x1018, out uint matrixIndexLow))
             {
                 yield return $"XF matrix index low raw: 0x{matrixIndexLow:X8}, pos-base=0x{CurrentPositionMatrixBaseRegister:X4}, tex0-base=0x{CurrentTex0MatrixBaseRegister:X4}";
+            }
+
+            if (TryGetXfFloat(0x1020, out float projection00)
+                && TryGetXfFloat(0x1021, out float projection01Or03)
+                && TryGetXfFloat(0x1022, out float projection11)
+                && TryGetXfFloat(0x1023, out float projection12Or13)
+                && TryGetXfFloat(0x1024, out float projection22)
+                && TryGetXfFloat(0x1025, out float projection23)
+                && _xfRegisters.TryGetValue(0x1026, out uint projectionType))
+            {
+                string projectionName = projectionType == 0 ? "perspective" : "orthographic";
+                yield return $"XF projection: type={projectionName} raw=0x{projectionType:X8}, values=({FormatFloat(projection00)}, {FormatFloat(projection01Or03)}, {FormatFloat(projection11)}, {FormatFloat(projection12Or13)}, {FormatFloat(projection22)}, {FormatFloat(projection23)})";
             }
 
             if (_xfRegisters.TryGetValue(0x1040, out uint texGen0))

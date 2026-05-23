@@ -185,7 +185,7 @@ Run focused Sonic GX draw-window probes:
 powershell -ExecutionPolicy Bypass -File scripts/run-retail-benchmarks.ps1 -Targets sonic-gx-window-280,sonic-gx-window-680 -NoBuild -TimeoutSeconds 900
 ```
 
-The generated Sonic window targets currently cover draw skips `280`, `400`, `680`, `1000`, and `1500`. They disable PNG capture and write bounded GX copy/coverage diagnostics so `summary.csv` can show nonblack display-copy counts, coverage bounds, raster-budget state, and color-write totals for each window.
+The generated Sonic window targets currently cover draw skips `280`, `400`, `480`, `520`, `560`, `600`, `640`, `680`, `1000`, and `1500`. They disable PNG capture and write bounded GX copy/coverage diagnostics so `summary.csv` can show nonblack display-copy counts, coverage bounds, raster-budget state, and color-write totals for each window. Heavy variants such as `sonic-gx-window-560-heavy` also add bounded draw logs and TEV samples for the suspicious window.
 
 Both scripts write timestamped directories under `artifacts/compat-runs` with:
 

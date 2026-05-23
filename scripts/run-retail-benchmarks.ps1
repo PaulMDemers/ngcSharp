@@ -273,8 +273,9 @@ function New-SonicGxWindowTarget {
     )
 
     $draws = 80
+    $slugSuffix = if ($Heavy) { "-heavy" } else { "" }
     return [pscustomobject]@{
-        slug = "sonic-gx-window-$SkipDraws"
+        slug = "sonic-gx-window-$SkipDraws$slugSuffix"
         game = "Sonic Adventure 2 Battle"
         gamePath = $sonicFullPath
         maxInstructions = 50000000
@@ -404,11 +405,12 @@ $targetDefinitions = @{
     }
 }
 
-foreach ($skipDraws in @(280, 400, 680, 1000, 1500)) {
+foreach ($skipDraws in @(280, 400, 480, 520, 560, 600, 640, 680, 1000, 1500)) {
     $targetDefinitions["sonic-gx-window-$skipDraws"] = New-SonicGxWindowTarget -SkipDraws $skipDraws
 }
 
 $targetDefinitions["sonic-gx-window-202-heavy"] = New-SonicGxWindowTarget -SkipDraws 202 -Heavy
+$targetDefinitions["sonic-gx-window-560-heavy"] = New-SonicGxWindowTarget -SkipDraws 560 -Heavy
 
 $Targets = @(
     $Targets |
