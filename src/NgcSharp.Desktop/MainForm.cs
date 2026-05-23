@@ -37,6 +37,12 @@ public sealed class MainForm : Form
         DropDownStyle = ComboBoxStyle.DropDownList,
     };
 
+    private readonly ComboBox _presetSelector = new()
+    {
+        Dock = DockStyle.Top,
+        DropDownStyle = ComboBoxStyle.DropDownList,
+    };
+
     private readonly TextBox _pathTextBox = new()
     {
         Dock = DockStyle.Fill,
@@ -204,10 +210,23 @@ public sealed class MainForm : Form
         PlaceholderText = "Additional ngcsharp options, e.g. --fast-forward-idle --dump-gx-frame frame.png",
     };
 
+    private readonly TextBox _commandPreview = new()
+    {
+        Multiline = true,
+        Dock = DockStyle.Fill,
+        ScrollBars = ScrollBars.Vertical,
+        Font = new Font("Consolas", 9f),
+        BackColor = Color.FromArgb(24, 24, 24),
+        ForeColor = Color.Gainsboro,
+        BorderStyle = BorderStyle.FixedSingle,
+        ReadOnly = true,
+    };
+
     private readonly WinFormsTimer _screenUpdateTimer = new() { Interval = 16 };
     private readonly object _screenFrameLock = new();
     private Bitmap? _pendingScreenFrame;
     private CancellationTokenSource? _activeRunCancellation;
+    private bool _applyingPreset;
 
     private static readonly (uint High, uint Low)[] ViFramebufferRegisterPairs =
     [
@@ -240,6 +259,8 @@ public sealed class MainForm : Form
         _mainSplit.Panel1.Controls.Add(_controlPanel);
         _mainSplit.Panel2.Controls.Add(_rightSplit);
 
+        _presetSelector.Items.AddRange(BuildPresets());
+        _presetSelector.SelectedIndex = 0;
         _commandSelector.Items.AddRange(["Run DOL", "Run Disc", "Disc Info", "DOL Info"]);
         _commandSelector.SelectedIndex = 0;
         _controllerButtons.Items.AddRange(["None", "A", "Start", "B", "X", "Y", "A+Start"]);
@@ -250,10 +271,34 @@ public sealed class MainForm : Form
         _runButton.Click += OnRunClicked;
         _cancelButton.Click += OnCancelClicked;
         _clearButton.Click += (_, _) => _output.Clear();
-        _commandSelector.SelectedIndexChanged += (_, _) => UpdateModeState();
+        _commandSelector.SelectedIndexChanged += (_, _) =>
+        {
+            if (!_applyingPreset)
+            {
+                MarkCustomPreset();
+            }
+
+            UpdateModeState();
+        };
+        _presetSelector.SelectedIndexChanged += OnPresetChanged;
+        RegisterPreviewUpdateHandlers();
         _screenUpdateTimer.Tick += OnScreenFrameTick;
 
         UpdateModeState();
+        UpdateCommandPreview();
+    }
+
+    private sealed record DesktopPreset(
+        string Name,
+        string CommandName,
+        string? Path,
+        int MaxInstructions,
+        bool MemoryCardA,
+        bool MemoryCardB,
+        string ControllerButtons,
+        string AdditionalArguments)
+    {
+        public override string ToString() => Name;
     }
 
     private sealed record RunCommandRequest(
@@ -277,6 +322,7 @@ public sealed class MainForm : Form
         _controlPanel.RowCount = 0;
 
         AddControlRow(CreateTitleBlock());
+        AddControlRow(CreateLabeledControl("Preset", _presetSelector));
         AddControlRow(CreateLabeledControl("Mode", _commandSelector));
         AddControlRow(CreateFilePicker());
         AddControlRow(CreateLabeledControl("Max instructions", _maxInstructionsInput));
@@ -418,9 +464,28 @@ public sealed class MainForm : Form
         outputPage.Controls.Add(_output);
         TabPage advancedPage = new("Advanced Options");
         advancedPage.Controls.Add(_additionalArgs);
+        TabPage commandPage = new("Command Preview");
+        commandPage.Controls.Add(_commandPreview);
         _bottomTabs.TabPages.Add(outputPage);
         _bottomTabs.TabPages.Add(advancedPage);
+        _bottomTabs.TabPages.Add(commandPage);
         _rightSplit.Panel2.Controls.Add(_bottomTabs);
+    }
+
+    private object[] BuildPresets()
+    {
+        return
+        [
+            new DesktopPreset("Custom", "Run DOL", null, 1_000_000, MemoryCardA: false, MemoryCardB: false, "None", string.Empty),
+            new DesktopPreset("Quick DOL smoke - 1M", "Run DOL", FindWorkspaceFile("fixtures", "devkitpro", "xfb-smoke", "xfb-smoke.dol"), 1_000_000, MemoryCardA: false, MemoryCardB: false, "None", string.Empty),
+            new DesktopPreset("One frame-ish - 8M", "Run Disc", FindWorkspaceFile("Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz"), 8_000_000, MemoryCardA: true, MemoryCardB: false, "A", string.Empty),
+            new DesktopPreset("Retail boot probe - 20M", "Run Disc", FindWorkspaceFile("Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz"), 20_000_000, MemoryCardA: true, MemoryCardB: false, "A", string.Empty),
+            new DesktopPreset("Sonic Sega splash - 35M", "Run Disc", FindWorkspaceFile("Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz"), 35_000_000, MemoryCardA: true, MemoryCardB: false, "A", "--gx-frame-source largest-display-copy"),
+            new DesktopPreset("Sonic resource flag watch - 35M", "Run Disc", FindWorkspaceFile("Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz"), 35_000_000, MemoryCardA: true, MemoryCardB: false, "A", "--watch-write-range 0x803ADCE0 0x4 --watch-write-after 0x01C00000 --stop-after-write-watch 12 --watch-limit 24 --trace-pc-after 0x01C00000 --profile-after 0x01C00000 --profile-pc 24"),
+            new DesktopPreset("Pikmin boot probe - 20M", "Run Disc", FindWorkspaceFile("Pikmin (USA).rvz"), 20_000_000, MemoryCardA: true, MemoryCardB: false, "None", "--gx-frame-source largest-display-copy"),
+            new DesktopPreset("Mario Kart Debug startup - 5M", "Run Disc", FindWorkspaceFile("Mario Kart - Double Dash!! (USA) (Debug).rvz"), 5_000_000, MemoryCardA: true, MemoryCardB: false, "None", string.Empty),
+            new DesktopPreset("Deep retail probe - 50M", "Run Disc", FindWorkspaceFile("Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz"), 50_000_000, MemoryCardA: true, MemoryCardB: false, "A", "--gx-frame-source largest-display-copy"),
+        ];
     }
 
     private void UpdateModeState()
@@ -450,6 +515,8 @@ public sealed class MainForm : Form
         {
             _memoryCardA.Checked = true;
         }
+
+        UpdateCommandPreview();
     }
 
     private bool IsRunMode => _commandSelector.SelectedItem is "Run DOL" or "Run Disc";
@@ -470,6 +537,88 @@ public sealed class MainForm : Form
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
             _pathTextBox.Text = dialog.FileName;
+            MarkCustomPreset();
+            UpdateCommandPreview();
+        }
+    }
+
+    private void OnPresetChanged(object? sender, EventArgs e)
+    {
+        if (_applyingPreset || _presetSelector.SelectedItem is not DesktopPreset preset || preset.Name == "Custom")
+        {
+            return;
+        }
+
+        _applyingPreset = true;
+        try
+        {
+            _commandSelector.SelectedItem = preset.CommandName;
+            if (!string.IsNullOrWhiteSpace(preset.Path))
+            {
+                _pathTextBox.Text = preset.Path;
+            }
+            else
+            {
+                _pathTextBox.Clear();
+            }
+
+            _maxInstructionsInput.Value = Math.Clamp(preset.MaxInstructions, (int)_maxInstructionsInput.Minimum, (int)_maxInstructionsInput.Maximum);
+            _memoryCardA.Checked = preset.MemoryCardA;
+            _memoryCardB.Checked = preset.MemoryCardB;
+            _controllerButtons.SelectedItem = preset.ControllerButtons;
+            _additionalArgs.Text = preset.AdditionalArguments;
+            _fastForwardIdle.Checked = true;
+            _traceCheck.Checked = false;
+            _tracePathTextBox.Clear();
+        }
+        finally
+        {
+            _applyingPreset = false;
+        }
+
+        UpdateModeState();
+    }
+
+    private void RegisterPreviewUpdateHandlers()
+    {
+        _pathTextBox.TextChanged += OnManualRunSettingChanged;
+        _maxInstructionsInput.ValueChanged += OnManualRunSettingChanged;
+        _traceCheck.CheckedChanged += OnManualRunSettingChanged;
+        _tracePathTextBox.TextChanged += OnManualRunSettingChanged;
+        _dumpMmio.CheckedChanged += OnManualRunSettingChanged;
+        _dumpRegisters.CheckedChanged += OnManualRunSettingChanged;
+        _fastForwardIdle.CheckedChanged += OnManualRunSettingChanged;
+        _memoryCardA.CheckedChanged += OnManualRunSettingChanged;
+        _memoryCardB.CheckedChanged += OnManualRunSettingChanged;
+        _controllerButtons.SelectedIndexChanged += OnManualRunSettingChanged;
+        _additionalArgs.TextChanged += OnManualRunSettingChanged;
+    }
+
+    private void OnManualRunSettingChanged(object? sender, EventArgs e)
+    {
+        if (!_applyingPreset)
+        {
+            MarkCustomPreset();
+        }
+
+        UpdateCommandPreview();
+    }
+
+    private void MarkCustomPreset()
+    {
+        if (_applyingPreset || _presetSelector.SelectedIndex == 0)
+        {
+            return;
+        }
+
+        _applyingPreset = true;
+        try
+        {
+            _presetSelector.SelectedIndex = 0;
+        }
+        finally
+        {
+            _applyingPreset = false;
         }
     }
 
@@ -488,6 +637,7 @@ public sealed class MainForm : Form
         StartScreenCapture();
         AppendOutput($"{Environment.NewLine}--- {DateTime.Now:G} {request.CommandName} ---{Environment.NewLine}");
         AppendOutput($"Artifacts: {request.ArtifactDirectory}{Environment.NewLine}");
+        AppendOutput($"Command: {FormatCommandPreview(request, request.ArtifactDirectory)}{Environment.NewLine}");
 
         try
         {
@@ -547,6 +697,37 @@ public sealed class MainForm : Form
             ParseAdditionalArguments(_additionalArgs.Text));
     }
 
+    private void UpdateCommandPreview()
+    {
+        if (_commandPreview.IsDisposed)
+        {
+            return;
+        }
+
+        string path = _pathTextBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            _commandPreview.Text = "Select an input file to preview the command.";
+            return;
+        }
+
+        RunCommandRequest request = new(
+            _commandSelector.Text,
+            path,
+            (int)_maxInstructionsInput.Value,
+            _traceCheck.Checked,
+            _tracePathTextBox.Text.Trim(),
+            _dumpMmio.Checked,
+            _dumpRegisters.Checked,
+            _fastForwardIdle.Checked,
+            _memoryCardA.Checked,
+            _memoryCardB.Checked,
+            _controllerButtons.Text,
+            "<artifact-dir>",
+            ParseAdditionalArguments(_additionalArgs.Text));
+        _commandPreview.Text = FormatCommandPreview(request, "<artifact-dir>");
+    }
+
     private void SetBusyState(bool isBusy)
     {
         if (InvokeRequired)
@@ -559,6 +740,7 @@ public sealed class MainForm : Form
         _cancelButton.Enabled = isBusy;
         _clearButton.Enabled = !isBusy;
         _browseButton.Enabled = !isBusy;
+        _presetSelector.Enabled = !isBusy;
         _commandSelector.Enabled = !isBusy;
         _pathTextBox.Enabled = !isBusy;
         _maxInstructionsInput.Enabled = !isBusy && IsRunMode;
@@ -654,6 +836,22 @@ public sealed class MainForm : Form
     {
         options = null;
 
+        Directory.CreateDirectory(request.ArtifactDirectory);
+        List<string> args = BuildCommandArguments(command, request, request.ArtifactDirectory);
+
+        using StringWriter parseOutput = new();
+        if (!RunDolOptions.TryParse([.. args], out options, parseOutput))
+        {
+            AppendOutput(parseOutput.ToString());
+            AppendOutput("Failed to parse options. Check the Advanced Options tab.\n");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static List<string> BuildCommandArguments(string command, RunCommandRequest request, string artifactDirectory)
+    {
         List<string> args =
         [
             command,
@@ -662,18 +860,17 @@ public sealed class MainForm : Form
             request.MaxInstructions.ToString(CultureInfo.InvariantCulture),
         ];
 
-        Directory.CreateDirectory(request.ArtifactDirectory);
         args.Add("--run-summary");
-        args.Add(Path.Combine(request.ArtifactDirectory, "run-summary.json"));
+        args.Add(Path.Combine(artifactDirectory, "run-summary.json"));
         args.Add("--dump-gx-frame");
-        args.Add(Path.Combine(request.ArtifactDirectory, "gx-frame.png"));
+        args.Add(Path.Combine(artifactDirectory, "gx-frame.png"));
 
         if (request.TraceEnabled)
         {
             args.Add("--trace");
             args.Add("--trace-file");
             args.Add(string.IsNullOrWhiteSpace(request.TracePath)
-                ? Path.Combine(request.ArtifactDirectory, "tail.trace")
+                ? Path.Combine(artifactDirectory, "tail.trace")
                 : request.TracePath);
         }
 
@@ -705,20 +902,77 @@ public sealed class MainForm : Form
         if (!string.Equals(request.ControllerButtons, "None", StringComparison.OrdinalIgnoreCase))
         {
             args.Add("--controller-button");
-            args.Add(request.ControllerButtons.Replace("+", "+", StringComparison.Ordinal).ToLowerInvariant());
+            args.Add(request.ControllerButtons.ToLowerInvariant());
         }
 
         args.AddRange(request.AdditionalArguments);
+        return args;
+    }
 
-        using StringWriter parseOutput = new();
-        if (!RunDolOptions.TryParse([.. args], out options, parseOutput))
+    private static string FormatCommandPreview(RunCommandRequest request, string artifactDirectory)
+    {
+        string command = request.CommandName switch
         {
-            AppendOutput(parseOutput.ToString());
-            AppendOutput("Failed to parse options. Check the Advanced Options tab.\n");
-            return false;
+            "Run DOL" => "run-dol",
+            "Run Disc" => "run-disc",
+            "Disc Info" => "disc-info",
+            "DOL Info" => "dol-info",
+            _ => request.CommandName,
+        };
+
+        if (command is "disc-info" or "dol-info")
+        {
+            return $"ngcsharp {command} {QuoteArgument(request.Path)}";
         }
 
-        return true;
+        List<string> args = BuildCommandArguments(command, request, artifactDirectory);
+        return "ngcsharp " + string.Join(" ", args.Select(QuoteArgument));
+    }
+
+    private static string? FindWorkspaceFile(params string[] pathParts)
+    {
+        foreach (string root in EnumerateWorkspaceRoots())
+        {
+            string candidate = Path.GetFullPath(Path.Combine([root, .. pathParts]));
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> EnumerateWorkspaceRoots()
+    {
+        string? current = Environment.CurrentDirectory;
+        while (!string.IsNullOrEmpty(current))
+        {
+            yield return current;
+            current = Directory.GetParent(current)?.FullName;
+        }
+
+        current = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(current))
+        {
+            yield return current;
+            current = Directory.GetParent(current)?.FullName;
+        }
+    }
+
+    private static string QuoteArgument(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "\"\"";
+        }
+
+        if (!value.Any(char.IsWhiteSpace) && !value.Contains('"'))
+        {
+            return value;
+        }
+
+        return "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
     }
 
     private static string CreateArtifactDirectory(string commandName, string inputPath)

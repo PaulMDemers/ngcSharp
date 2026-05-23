@@ -66,6 +66,8 @@ The UI supports:
 - Viewing `dol-info` and `disc-info`
 - Cancelling long-running emulation probes
 - Writing desktop run artifacts under `artifacts/desktop-runs/`
+- Choosing common homebrew and retail benchmark presets
+- Previewing the equivalent CLI command before running
 - Passing extra `run-dol`/`run-disc` flags in the Advanced Options tab
 
 ```powershell
