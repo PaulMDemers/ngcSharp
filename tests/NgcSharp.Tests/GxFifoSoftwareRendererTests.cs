@@ -140,6 +140,218 @@ public sealed class GxFifoSoftwareRendererTests
     }
 
     [Fact]
+    public void DoesNotWrapProjectedOffscreenTrianglesIntoView()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x10, 0x00, 0x0B, 0x00, 0x00,
+            ];
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            bytes.AddRange([0x10, 0x00, 0x00, 0x10, 0x18]);
+            AddUInt32(bytes, 0);
+            bytes.AddRange([0x10, 0x00, 0x05, 0x10, 0x1A]);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 342);
+            AddSingle(bytes, 342);
+            AddSingle(bytes, 1);
+            bytes.AddRange([0x10, 0x00, 0x06, 0x10, 0x20]);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddUInt32(bytes, 1);
+            bytes.AddRange(
+            [
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ]);
+            AddVertex(bytes, -4, 1, 0, 255, 0, 0, 255);
+            AddVertex(bytes, -4, 3, 0, 255, 0, 0, 255);
+            AddVertex(bytes, -2, 2, 0, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool rendered = GxFifoSoftwareRenderer.TryRender(accesses, path, width: 5, height: 5, out GxFifoSoftwareRenderResult? result, out string? error);
+
+            Assert.True(rendered, error);
+            Assert.NotNull(result);
+            Assert.Equal(1, result.Draws);
+            Assert.Equal(0, result.RenderedTriangles);
+            Assert.Equal("0:000000 1:000000 2:000000 3:000000 4:000000 5:000000 6:000000 7:000000 8:000000 9:000000 10:000000 11:000000 12:000000 13:000000 14:000000 15:000000 16:000000 17:000000 18:000000 19:000000 20:000000 21:000000 22:000000 23:000000 24:000000", DescribePngPixels(path, width: 5, height: 5));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ClipsProjectedTrianglesOutsideRightFrustum()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x10, 0x00, 0x0B, 0x00, 0x00,
+            ];
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            bytes.AddRange([0x10, 0x00, 0x00, 0x10, 0x18]);
+            AddUInt32(bytes, 0);
+            bytes.AddRange([0x10, 0x00, 0x05, 0x10, 0x1A]);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 342);
+            AddSingle(bytes, 342);
+            AddSingle(bytes, 1);
+            bytes.AddRange([0x10, 0x00, 0x06, 0x10, 0x20]);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddUInt32(bytes, 1);
+            bytes.AddRange(
+            [
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ]);
+            AddVertex(bytes, 2, 1, 0, 255, 0, 0, 255);
+            AddVertex(bytes, 2, 3, 0, 255, 0, 0, 255);
+            AddVertex(bytes, 4, 2, 0, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool rendered = GxFifoSoftwareRenderer.TryRender(accesses, path, width: 5, height: 5, out GxFifoSoftwareRenderResult? result, out string? error);
+
+            Assert.True(rendered, error);
+            Assert.NotNull(result);
+            Assert.Equal(1, result.Draws);
+            Assert.Equal(0, result.RenderedTriangles);
+            Assert.Equal("0:000000 1:000000 2:000000 3:000000 4:000000 5:000000 6:000000 7:000000 8:000000 9:000000 10:000000 11:000000 12:000000 13:000000 14:000000 15:000000 16:000000 17:000000 18:000000 19:000000 20:000000 21:000000 22:000000 23:000000 24:000000", DescribePngPixels(path, width: 5, height: 5));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ProjectedScreenSpaceCoordinatesRemainPixelCoordinates()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x10, 0x00, 0x0B, 0x00, 0x00,
+            ];
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            bytes.AddRange([0x10, 0x00, 0x00, 0x10, 0x18]);
+            AddUInt32(bytes, 0);
+            bytes.AddRange([0x10, 0x00, 0x05, 0x10, 0x1A]);
+            AddSingle(bytes, 4);
+            AddSingle(bytes, -4);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 346);
+            AddSingle(bytes, 346);
+            AddSingle(bytes, 1);
+            bytes.AddRange([0x10, 0x00, 0x06, 0x10, 0x20]);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddUInt32(bytes, 1);
+            bytes.AddRange(
+            [
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ]);
+            AddVertex(bytes, -1, 1, -0.5f, 255, 0, 0, 255);
+            AddVertex(bytes, -0.25f, 1, -0.5f, 255, 0, 0, 255);
+            AddVertex(bytes, -1, 0.25f, -0.5f, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool rendered = GxFifoSoftwareRenderer.TryRender(accesses, path, width: 8, height: 8, out GxFifoSoftwareRenderResult? result, out string? error);
+
+            Assert.True(rendered, error);
+            Assert.NotNull(result);
+            Assert.Equal(1, result.RenderedTriangles);
+            (byte leftR, byte leftG, byte leftB) = ReadPngPixel(path, 1, 1, 8, 8);
+            (byte centerR, byte centerG, byte centerB) = ReadPngPixel(path, 4, 4, 8, 8);
+            Assert.Equal((255, 0, 0), (leftR, leftG, leftB));
+            Assert.Equal((0, 0, 0), (centerR, centerG, centerB));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void WritesDrawDiagnosticsForDirectDraws()
     {
         string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.txt");
@@ -222,6 +434,77 @@ public sealed class GxFifoSoftwareRendererTests
             string text = File.ReadAllText(path);
             Assert.Contains("XF viewport: scale=(320, -240, 1), origin=(320, 240, 1)", text);
             Assert.Contains("BP scissor raw: top-left=0x123456, bottom-right=0x000000", text);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void WritesTransformDiagnosticsCsv()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csv");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x10, 0x00, 0x0B, 0x00, 0x00,
+            ];
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            bytes.AddRange([0x10, 0x00, 0x05, 0x10, 0x1A]);
+            AddSingle(bytes, 320);
+            AddSingle(bytes, -240);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 662);
+            AddSingle(bytes, 582);
+            AddSingle(bytes, 1);
+            bytes.AddRange([0x10, 0x00, 0x06, 0x10, 0x20]);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddUInt32(bytes, 0);
+            bytes.AddRange(
+            [
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ]);
+            AddVertex(bytes, -1, -1, -1, 255, 0, 0, 255);
+            AddVertex(bytes, 0, -1, -1, 255, 0, 0, 255);
+            AddVertex(bytes, 0, 0, -1, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteTransformDiagnostics(accesses, memory: null, path, skipDraws: 0, maxDraws: 1, out GxFifoTransformDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            Assert.Equal(1, result.DrawsWritten);
+            string text = File.ReadAllText(path);
+            Assert.Contains("draw_index,fifo_offset,primitive", text);
+            Assert.Contains("perspective", text);
+            Assert.Contains("-1/-1/-1", text);
+            Assert.Contains("0/480/0", text);
         }
         finally
         {
@@ -411,6 +694,378 @@ public sealed class GxFifoSoftwareRendererTests
     }
 
     [Fact]
+    public void DecodesFogStateInDrawDiagnostics()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.txt");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x61, 0xE8, 0x00, 0x05, 0x56,
+                0x61, 0xEE, 0x03, 0xF8, 0x00,
+                0x61, 0xEF, 0x00, 0x00, 0x01,
+                0x61, 0xF0, 0x00, 0x00, 0x00,
+                0x61, 0xF1, 0x50, 0x00, 0x00,
+                0x61, 0xF2, 0x00, 0x80, 0x40,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ];
+            AddVertex(bytes, 1, 1, 255, 255, 255, 255);
+            AddVertex(bytes, 3, 1, 255, 255, 255, 255);
+            AddVertex(bytes, 2, 3, 255, 255, 255, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteDrawDiagnostics(accesses, memory: null, path, maxDraws: 1, out GxFifoDrawDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            string text = File.ReadAllText(path);
+            Assert.Contains("BP fog raw: a=0x03F800, b-mag=0x000001, b-shift=0x000000, param3=0x500000, color=0x008040, fog=linear, projection=orthographic", text);
+            Assert.Contains("fog-color=(0,128,64)", text);
+            Assert.Contains("BP fog range: range-base=0x000556, center=342, enabled=True", text);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void QuotesCommaBearingStateTimelineFields()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csv");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x10, 0x00, 0x00, 0x10, 0x40,
+                0x12, 0x34, 0x56, 0x78,
+                0x61, 0xE8, 0x00, 0x05, 0x56,
+                0x61, 0xF1, 0x50, 0x00, 0x00,
+                0x61, 0xF2, 0x00, 0x80, 0x40,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ];
+            AddVertex(bytes, 1, 1, 255, 255, 255, 255);
+            AddVertex(bytes, 3, 1, 255, 255, 255, 255);
+            AddVertex(bytes, 2, 3, 255, 255, 255, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteStateTimelineDiagnostics(accesses, path, skipDraws: 0, maxDraws: 1, out GxFifoStateTimelineDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            string text = File.ReadAllText(path);
+            Assert.Contains("tex0_base,texgen0_raw,texgen0_projection,texgen0_source,texgen0_type", text);
+            Assert.Contains(",xf,0x1040,0x12345678,", text);
+            Assert.Contains("\"fog=linear, projection=orthographic, c=0\"", text);
+            Assert.Contains("\"fog-color=(0,128,64)\"", text);
+            Assert.Contains("\"range-base=0x000556, center=342, enabled=True\"", text);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void DecodesXfColorChannelStateInDrawDiagnostics()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.txt");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x10, 0x00, 0x08, 0x10, 0x09,
+            ];
+            AddUInt32(bytes, 1);
+            AddUInt32(bytes, 0x10203040);
+            AddUInt32(bytes, 0x50607080);
+            AddUInt32(bytes, 0x00FF00FF);
+            AddUInt32(bytes, 0xFF0000FF);
+            AddUInt32(bytes, 0x00001401);
+            AddUInt32(bytes, 0x00000001);
+            AddUInt32(bytes, 0x00000043);
+            AddUInt32(bytes, 0x00000001);
+            bytes.AddRange(
+            [
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ]);
+            AddVertex(bytes, 1, 1, 255, 0, 0, 255);
+            AddVertex(bytes, 3, 1, 255, 0, 0, 255);
+            AddVertex(bytes, 2, 3, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteDrawDiagnostics(accesses, memory: null, path, maxDraws: 1, out GxFifoDrawDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            string text = File.ReadAllText(path);
+            Assert.Contains("XF color channels: count=1", text);
+            Assert.Contains("XF color channel0: ambient=16/32/48/64, material=0/255/0/255", text);
+            Assert.Contains("color=0x00001401 mat=vertex, lighting=False", text);
+            Assert.Contains("alpha=0x00000043 mat=vertex, lighting=True, lights=0x00, ambient=vertex", text);
+            Assert.Contains("XF color channel1: ambient=80/96/112/128, material=255/0/0/255", text);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void WritesXfColorChannelStateInTimelineDiagnostics()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csv");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x10, 0x00, 0x08, 0x10, 0x09,
+            ];
+            AddUInt32(bytes, 1);
+            AddUInt32(bytes, 0x10203040);
+            AddUInt32(bytes, 0x50607080);
+            AddUInt32(bytes, 0x00FF00FF);
+            AddUInt32(bytes, 0xFF0000FF);
+            AddUInt32(bytes, 0x00001401);
+            AddUInt32(bytes, 0x00000001);
+            AddUInt32(bytes, 0x00000043);
+            AddUInt32(bytes, 0x00000001);
+            bytes.AddRange(
+            [
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ]);
+            AddVertex(bytes, 1, 1, 255, 0, 0, 255);
+            AddVertex(bytes, 3, 1, 255, 0, 0, 255);
+            AddVertex(bytes, 2, 3, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteStateTimelineDiagnostics(accesses, path, skipDraws: 0, maxDraws: 1, out GxFifoStateTimelineDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            string text = File.ReadAllText(path);
+            Assert.Contains("xf_color_channel_count,xf_color0_ambient,xf_color0_material", text);
+            Assert.Contains(",xf,0x1009..0x1011,0x00000001|0x10203040|0x50607080|0x00FF00FF|...,", text);
+            Assert.Contains("1,16/32/48/64,0/255/0/255,0x00001401,0x00000043,vertex,vertex,register,vertex,False,True,0x20,0x00", text);
+            Assert.Contains("80/96/112/128,255/0/0/255,0x00000001,0x00000001,vertex,vertex,register,register,False,False,0x00,0x00", text);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void UsesXfMaterialColorWhenRasterMaterialSourceIsRegister()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x10, 0x00, 0x02, 0x10, 0x0C,
+            ];
+            AddUInt32(bytes, 0x00FF00FF);
+            AddUInt32(bytes, 0);
+            AddUInt32(bytes, 0);
+            bytes.AddRange(
+            [
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x80, 0x00, 0x04,
+            ]);
+            AddVertex(bytes, 1, 1, 255, 0, 0, 255);
+            AddVertex(bytes, 3, 1, 255, 0, 0, 255);
+            AddVertex(bytes, 3, 3, 255, 0, 0, 255);
+            AddVertex(bytes, 1, 3, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool rendered = GxFifoSoftwareRenderer.TryRender(accesses, memory: null, path, width: 7, height: 7, maxDraws: 1, skipDraws: 0, stopAfterMaxDraws: true, maxRasterizedPixels: null, out GxFifoSoftwareRenderResult? result, out string? error);
+
+            Assert.True(rendered, error);
+            Assert.NotNull(result);
+            (byte r, byte g, byte b) = ReadPngPixel(path, 3, 1, 7, 7);
+            string pixels = DescribePngPixels(path, width: 7, height: 7);
+            Assert.True(g > 240, $"Expected material-register green pixel, got ({r},{g},{b}). Pixels: {pixels}");
+            Assert.True(r < 16, $"Expected material-register green pixel, got ({r},{g},{b}). Pixels: {pixels}");
+            Assert.True(b < 16, $"Expected material-register green pixel, got ({r},{g},{b}). Pixels: {pixels}");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void UsesColor1ForRasterChannel1WhenBothVertexColorsArePresent()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x61, 0x28, 0x00, 0x00, 0x80,
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0xA2, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x09, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x80, 0x00, 0x04,
+            ];
+            AddDualColorVertex(bytes, 1, 1, 255, 0, 0, 255, 0, 255, 0, 255);
+            AddDualColorVertex(bytes, 3, 1, 255, 0, 0, 255, 0, 255, 0, 255);
+            AddDualColorVertex(bytes, 3, 3, 255, 0, 0, 255, 0, 255, 0, 255);
+            AddDualColorVertex(bytes, 1, 3, 255, 0, 0, 255, 0, 255, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool rendered = GxFifoSoftwareRenderer.TryRender(accesses, memory: null, path, width: 7, height: 7, maxDraws: 1, skipDraws: 0, stopAfterMaxDraws: true, maxRasterizedPixels: null, out GxFifoSoftwareRenderResult? result, out string? error);
+
+            Assert.True(rendered, error);
+            Assert.NotNull(result);
+            (byte r, byte g, byte b) = ReadPngPixel(path, 3, 1, 7, 7);
+            string pixels = DescribePngPixels(path, width: 7, height: 7);
+            Assert.True(g > 240, $"Expected color1 green pixel, got ({r},{g},{b}). Pixels: {pixels}");
+            Assert.True(r < 16, $"Expected color1 green pixel, got ({r},{g},{b}). Pixels: {pixels}");
+            Assert.True(b < 16, $"Expected color1 green pixel, got ({r},{g},{b}). Pixels: {pixels}");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void UsesColor1ForRasterChannel0WhenColor0IsMissing()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x82, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x09, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x80, 0x00, 0x04,
+            ];
+            AddColor1OnlyVertex(bytes, 1, 1, 0, 0, 255, 255);
+            AddColor1OnlyVertex(bytes, 3, 1, 0, 0, 255, 255);
+            AddColor1OnlyVertex(bytes, 3, 3, 0, 0, 255, 255);
+            AddColor1OnlyVertex(bytes, 1, 3, 0, 0, 255, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool rendered = GxFifoSoftwareRenderer.TryRender(accesses, memory: null, path, width: 7, height: 7, maxDraws: 1, skipDraws: 0, stopAfterMaxDraws: true, maxRasterizedPixels: null, out GxFifoSoftwareRenderResult? result, out string? error);
+
+            Assert.True(rendered, error);
+            Assert.NotNull(result);
+            (byte r, byte g, byte b) = ReadPngPixel(path, 3, 1, 7, 7);
+            string pixels = DescribePngPixels(path, width: 7, height: 7);
+            Assert.True(b > 240, $"Expected color1 blue pixel, got ({r},{g},{b}). Pixels: {pixels}");
+            Assert.True(r < 16, $"Expected color1 blue pixel, got ({r},{g},{b}). Pixels: {pixels}");
+            Assert.True(g < 16, $"Expected color1 blue pixel, got ({r},{g},{b}). Pixels: {pixels}");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void AppliesLinearOrthographicFog()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x61, 0xEE, 0x03, 0xF8, 0x00,
+                0x61, 0xEF, 0x00, 0x00, 0x01,
+                0x61, 0xF0, 0x00, 0x00, 0x00,
+                0x61, 0xF1, 0x50, 0x00, 0x00,
+                0x61, 0xF2, 0x00, 0xFF, 0x00,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ];
+            AddVertex(bytes, -0.8f, -0.8f, 16_777_215, 255, 0, 0, 255);
+            AddVertex(bytes, 0.8f, -0.8f, 16_777_215, 255, 0, 0, 255);
+            AddVertex(bytes, -0.8f, 0.8f, 16_777_215, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool rendered = GxFifoSoftwareRenderer.TryRender(accesses, memory: null, path, width: 6, height: 6, maxDraws: 1, skipDraws: 0, stopAfterMaxDraws: true, maxRasterizedPixels: null, out GxFifoSoftwareRenderResult? result, out string? error);
+
+            Assert.True(rendered, error);
+            Assert.NotNull(result);
+            (byte r, byte g, byte b) = ReadPngPixel(path, 2, 2, 6, 6);
+            Assert.True(g > 240, $"Expected green fogged pixel, got ({r},{g},{b}).");
+            Assert.True(r < 16, $"Expected red channel to be fogged out, got ({r},{g},{b}).");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void DecodesTextureFilterAndLodStateInDrawDiagnostics()
     {
         string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.txt");
@@ -556,6 +1211,74 @@ public sealed class GxFifoSoftwareRendererTests
             Assert.True(r > 240, $"Expected texture diagnostic red pixel, got ({r},{g},{b}).");
             Assert.True(g < 16, $"Expected texture diagnostic red pixel, got ({r},{g},{b}).");
             Assert.True(b < 16, $"Expected texture diagnostic red pixel, got ({r},{g},{b}).");
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void TextureDiagnosticsWriteMipmappedTextureLevels()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        GameCubeMemory memory = new();
+        WriteRgb565Texture(memory, 0x0002_0000, width: 4, height: 4, rgb565: 0xF800);
+        WriteRgb565Texture(memory, 0x0002_0020, width: 2, height: 2, rgb565: 0x001F);
+        WriteRgb565Texture(memory, 0x0002_0040, width: 1, height: 1, rgb565: 0x07E0);
+        try
+        {
+            List<byte> bytes =
+            [
+                0x61, 0x28, 0x00, 0x00, 0x41,
+                0x61, 0x81, 0x00, 0x00, 0xA0,
+                0x61, 0x85, 0x00, 0x10, 0x00,
+                0x61, 0x89, 0x40, 0x0C, 0x03,
+                0x61, 0x95, 0x00, 0x10, 0x00,
+                0x61, 0xC0, 0x08, 0xFF, 0xF8,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x01,
+                0x08, 0x70, 0x41, 0x21, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x80, 0x00, 0x04,
+            ];
+            AddTexturedVertex(bytes, 2, 2, 255, 255, 255, 255, 0, 0);
+            AddTexturedVertex(bytes, 4, 2, 255, 255, 255, 255, 0, 0);
+            AddTexturedVertex(bytes, 4, 4, 255, 255, 255, 255, 0, 0);
+            AddTexturedVertex(bytes, 2, 4, 255, 255, 255, 255, 0, 0);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteTextureDiagnostics(accesses, memory, directory, skipDraws: 0, maxDraws: 1, out GxFifoTextureDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            Assert.Equal(3, result.TexturesWritten);
+            string[] lines = File.ReadAllLines(Path.Combine(directory, "index.csv"));
+            Assert.Equal(4, lines.Length);
+            Assert.Contains("mip_level", lines[0]);
+            Assert.Contains("_mip0_", lines[1]);
+            Assert.Contains("_mip1_", lines[2]);
+            Assert.Contains("_mip2_", lines[3]);
+            Assert.Contains("0x00020000", lines[1]);
+            Assert.Contains("0x00020020", lines[2]);
+            Assert.Contains("0x00020040", lines[3]);
+
+            string mip0 = Directory.GetFiles(directory, "*_mip0_*.png").Single(file => !Path.GetFileNameWithoutExtension(file).EndsWith("_alpha", StringComparison.Ordinal));
+            string mip1 = Directory.GetFiles(directory, "*_mip1_*.png").Single(file => !Path.GetFileNameWithoutExtension(file).EndsWith("_alpha", StringComparison.Ordinal));
+            string mip2 = Directory.GetFiles(directory, "*_mip2_*.png").Single(file => !Path.GetFileNameWithoutExtension(file).EndsWith("_alpha", StringComparison.Ordinal));
+            (byte r0, byte g0, byte b0) = ReadPngPixel(mip0, x: 0, y: 0, width: 4, height: 4);
+            (byte r1, byte g1, byte b1) = ReadPngPixel(mip1, x: 0, y: 0, width: 2, height: 2);
+            (byte r2, byte g2, byte b2) = ReadPngPixel(mip2, x: 0, y: 0, width: 1, height: 1);
+            Assert.True(r0 > 240 && g0 < 16 && b0 < 16, $"Expected red mip0 pixel, got ({r0},{g0},{b0}).");
+            Assert.True(r1 < 16 && g1 < 16 && b1 > 240, $"Expected blue mip1 pixel, got ({r1},{g1},{b1}).");
+            Assert.True(r2 < 16 && g2 > 240 && b2 < 16, $"Expected green mip2 pixel, got ({r2},{g2},{b2}).");
         }
         finally
         {
@@ -834,6 +1557,16 @@ public sealed class GxFifoSoftwareRendererTests
         {
             File.Delete(path);
         }
+    }
+
+    [Fact]
+    public void NearestTextureSamplingUsesTexelGridIndexing()
+    {
+        Assert.Equal(0, InvokeTextureCoordinateToIndex(0.24f, size: 4, wrapMode: 0));
+        Assert.Equal(1, InvokeTextureCoordinateToIndex(0.25f, size: 4, wrapMode: 0));
+        Assert.Equal(0, InvokeTextureCoordinateToIndex(1.24f, size: 4, wrapMode: 1));
+        Assert.Equal(0, InvokeTextureCoordinateToIndex(-0.76f, size: 4, wrapMode: 1));
+        Assert.Equal(3, InvokeTextureCoordinateToIndex(1.0f, size: 4, wrapMode: 0));
     }
 
     [Fact]
@@ -1795,10 +2528,586 @@ public sealed class GxFifoSoftwareRendererTests
             string[] headers = lines[0].Split(',');
             string[] values = lines[1].Split(',');
             Assert.Equal("1", values[Array.IndexOf(headers, "draw_index")]);
+            Assert.Equal("4", values[Array.IndexOf(headers, "projected_vertices")]);
+            Assert.Equal("0", values[Array.IndexOf(headers, "clipped_vertices")]);
             Assert.Equal("0", values[Array.IndexOf(headers, "before_nonblack")]);
             Assert.True(int.Parse(values[Array.IndexOf(headers, "after_nonblack")]) > 0);
             Assert.True(int.Parse(values[Array.IndexOf(headers, "raster_spent")]) > 0);
+            Assert.True(int.Parse(values[Array.IndexOf(headers, "top_sky_covered_pixels")]) > 0);
+            Assert.True(int.Parse(values[Array.IndexOf(headers, "top_sky_color_writes")]) > 0);
+            Assert.Equal("0", values[Array.IndexOf(headers, "top_sky_black_color_writes")]);
+            Assert.Equal("0", values[Array.IndexOf(headers, "clip_input_triangles")]);
+            Assert.Equal("0", values[Array.IndexOf(headers, "near_clip_culled_triangles")]);
             Assert.Equal("1", values[Array.IndexOf(headers, "rendered_quads_delta")]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void CoverageDiagnosticsCountNearClippedTriangles()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csv");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x10, 0x00, 0x0B, 0x00, 0x00,
+            ];
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            bytes.AddRange([0x10, 0x00, 0x05, 0x10, 0x1A]);
+            AddSingle(bytes, 3);
+            AddSingle(bytes, -3);
+            AddSingle(bytes, 16_777_215);
+            AddSingle(bytes, 345);
+            AddSingle(bytes, 345);
+            AddSingle(bytes, 16_777_215);
+            bytes.AddRange([0x10, 0x00, 0x06, 0x10, 0x20]);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, -1);
+            AddUInt32(bytes, 0);
+            bytes.AddRange(
+            [
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ]);
+            AddVertex(bytes, -0.5f, -0.5f, -2, 255, 0, 0, 255);
+            AddVertex(bytes, 0.5f, -0.5f, -2, 255, 0, 0, 255);
+            AddVertex(bytes, 0, 0.5f, 1, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteDrawCoverageDiagnostics(accesses, memory: null, path, width: 7, height: 7, maxRasterizedPixels: null, ignoreEfbCopyClear: false, out GxFifoCoverageDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            string[] lines = File.ReadAllLines(path);
+            string[] headers = lines[0].Split(',');
+            string[] values = lines[1].Split(',');
+            Assert.Equal("2", values[Array.IndexOf(headers, "projected_vertices")]);
+            Assert.Equal("1", values[Array.IndexOf(headers, "clipped_vertices")]);
+            Assert.Equal("1", values[Array.IndexOf(headers, "clip_input_triangles")]);
+            Assert.Equal("4", values[Array.IndexOf(headers, "near_clip_output_vertices")]);
+            Assert.Equal("2", values[Array.IndexOf(headers, "near_clip_output_triangles")]);
+            Assert.Equal("0", values[Array.IndexOf(headers, "near_clip_culled_triangles")]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void CoverageDiagnosticsUseProjectionMatrixNearPlane()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csv");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x10, 0x00, 0x0B, 0x00, 0x00,
+            ];
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            bytes.AddRange([0x10, 0x00, 0x05, 0x10, 0x1A]);
+            AddSingle(bytes, 3);
+            AddSingle(bytes, -3);
+            AddSingle(bytes, 16_777_215);
+            AddSingle(bytes, 345);
+            AddSingle(bytes, 345);
+            AddSingle(bytes, 16_777_215);
+            bytes.AddRange([0x10, 0x00, 0x06, 0x10, 0x20]);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, -0.5f);
+            AddUInt32(bytes, 0);
+            bytes.AddRange(
+            [
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ]);
+            AddVertex(bytes, -0.5f, -0.5f, -1, 255, 0, 0, 255);
+            AddVertex(bytes, 0.5f, -0.5f, -1, 255, 0, 0, 255);
+            AddVertex(bytes, 0, 0.5f, -0.25f, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteDrawCoverageDiagnostics(accesses, memory: null, path, width: 7, height: 7, maxRasterizedPixels: null, ignoreEfbCopyClear: false, out GxFifoCoverageDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            string[] lines = File.ReadAllLines(path);
+            string[] headers = lines[0].Split(',');
+            string[] values = lines[1].Split(',');
+            Assert.Equal("2", values[Array.IndexOf(headers, "projected_vertices")]);
+            Assert.Equal("1", values[Array.IndexOf(headers, "clipped_vertices")]);
+            Assert.Equal("1", values[Array.IndexOf(headers, "clip_input_triangles")]);
+            Assert.True(int.Parse(values[Array.IndexOf(headers, "near_clip_output_triangles")]) > 0);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void CoverageDiagnosticsClipProjectionFarPlane()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csv");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x10, 0x00, 0x0B, 0x00, 0x00,
+            ];
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            bytes.AddRange([0x10, 0x00, 0x05, 0x10, 0x1A]);
+            AddSingle(bytes, 3);
+            AddSingle(bytes, -3);
+            AddSingle(bytes, 16_777_215);
+            AddSingle(bytes, 345);
+            AddSingle(bytes, 345);
+            AddSingle(bytes, 16_777_215);
+            bytes.AddRange([0x10, 0x00, 0x06, 0x10, 0x20]);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, -2);
+            AddSingle(bytes, -3);
+            AddUInt32(bytes, 0);
+            bytes.AddRange(
+            [
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ]);
+            AddVertex(bytes, -0.4f, -0.4f, -1.2f, 255, 0, 0, 255);
+            AddVertex(bytes, 0.4f, -0.4f, -1.2f, 255, 0, 0, 255);
+            AddVertex(bytes, 0, 0.6f, -2f, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteDrawCoverageDiagnostics(accesses, memory: null, path, width: 7, height: 7, maxRasterizedPixels: null, ignoreEfbCopyClear: false, out GxFifoCoverageDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            string[] lines = File.ReadAllLines(path);
+            string[] headers = lines[0].Split(',');
+            string[] values = lines[1].Split(',');
+            Assert.Equal("2", values[Array.IndexOf(headers, "projected_vertices")]);
+            Assert.Equal("1", values[Array.IndexOf(headers, "clipped_vertices")]);
+            Assert.Equal("1", values[Array.IndexOf(headers, "clip_input_triangles")]);
+            Assert.True(int.Parse(values[Array.IndexOf(headers, "near_clip_output_triangles")]) > 0);
+            Assert.True(int.Parse(values[Array.IndexOf(headers, "color_writes")]) > 0);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void TriangleCoverageDiagnosticsUsePostClipBounds()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csv");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x10, 0x00, 0x0B, 0x00, 0x00,
+            ];
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            bytes.AddRange([0x10, 0x00, 0x05, 0x10, 0x1A]);
+            AddSingle(bytes, 3);
+            AddSingle(bytes, -3);
+            AddSingle(bytes, 16_777_215);
+            AddSingle(bytes, 345);
+            AddSingle(bytes, 345);
+            AddSingle(bytes, 16_777_215);
+            bytes.AddRange([0x10, 0x00, 0x06, 0x10, 0x20]);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, -1);
+            AddUInt32(bytes, 0);
+            bytes.AddRange(
+            [
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ]);
+            AddVertex(bytes, 0, -0.5f, -2, 255, 0, 0, 255);
+            AddVertex(bytes, -0.75f, 0.75f, 1, 255, 0, 0, 255);
+            AddVertex(bytes, 0.75f, 0.75f, 1, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteTriangleCoverageDiagnostics(accesses, memory: null, path, width: 7, height: 7, maxRasterizedPixels: null, ignoreEfbCopyClear: false, skipDraws: 0, maxDraws: 1, out GxFifoTriangleCoverageDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            string[] lines = File.ReadAllLines(path);
+            string[] headers = lines[0].Split(',');
+            string[] values = lines[1].Split(',');
+            Assert.Equal("1", values[Array.IndexOf(headers, "input_projected_vertices")]);
+            Assert.Equal("2", values[Array.IndexOf(headers, "input_clipped_vertices")]);
+            Assert.False(string.IsNullOrWhiteSpace(values[Array.IndexOf(headers, "screen_area")]));
+            Assert.False(string.IsNullOrWhiteSpace(values[Array.IndexOf(headers, "screen_min_x")]));
+            Assert.False(string.IsNullOrWhiteSpace(values[Array.IndexOf(headers, "screen_max_x")]));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void TriangleCoverageDiagnosticsQuoteCommaBearingFields()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csv");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x61, 0xE8, 0x00, 0x05, 0x56,
+                0x61, 0xF1, 0x50, 0x00, 0x00,
+                0x61, 0xF2, 0x00, 0x80, 0x40,
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ];
+            AddVertex(bytes, 1, 1, 255, 255, 255, 255);
+            AddVertex(bytes, 3, 1, 255, 255, 255, 255);
+            AddVertex(bytes, 2, 3, 255, 255, 255, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteTriangleCoverageDiagnostics(accesses, memory: null, path, width: 7, height: 7, maxRasterizedPixels: null, ignoreEfbCopyClear: false, skipDraws: 0, maxDraws: 1, out GxFifoTriangleCoverageDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            string text = File.ReadAllText(path);
+            Assert.Contains("\"fog=linear, projection=orthographic, c=0\"", text);
+            Assert.Contains("\"fog-color=(0,128,64)\"", text);
+            Assert.Contains("\"range-base=0x000556, center=342, enabled=True\"", text);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void VertexDiagnosticsIncludeClipSpaceDistances()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csv");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x10, 0x00, 0x0B, 0x00, 0x00,
+            ];
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            bytes.AddRange([0x10, 0x00, 0x05, 0x10, 0x1A]);
+            AddSingle(bytes, 3);
+            AddSingle(bytes, -3);
+            AddSingle(bytes, 16_777_215);
+            AddSingle(bytes, 345);
+            AddSingle(bytes, 345);
+            AddSingle(bytes, 16_777_215);
+            bytes.AddRange([0x10, 0x00, 0x06, 0x10, 0x20]);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 1);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, 0);
+            AddSingle(bytes, -1);
+            AddUInt32(bytes, 0);
+            bytes.AddRange(
+            [
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x90, 0x00, 0x03,
+            ]);
+            AddVertex(bytes, -0.5f, -0.5f, -2, 255, 0, 0, 255);
+            AddVertex(bytes, 0.5f, -0.5f, -2, 255, 0, 0, 255);
+            AddVertex(bytes, 0, 0.5f, 1, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteVertexDiagnostics(accesses, memory: null, path, skipDraws: 0, maxDraws: 1, out GxFifoVertexDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            string[] lines = File.ReadAllLines(path);
+            string[] headers = lines[0].Split(',');
+            string[] first = lines[1].Split(',');
+            Assert.Contains("clip_x", headers);
+            Assert.Contains("clip_near", headers);
+            Assert.Equal("1", first[Array.IndexOf(headers, "clip_near")]);
+            Assert.Equal("1", first[Array.IndexOf(headers, "clip_far")]);
+            Assert.Equal("2", first[Array.IndexOf(headers, "clip_w")]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void WritesTriangleCoverageDiagnostics()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csv");
+        try
+        {
+            List<byte> bytes =
+            [
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x80, 0x00, 0x04,
+            ];
+            AddVertex(bytes, 2, 2, 255, 0, 0, 255);
+            AddVertex(bytes, 4, 2, 255, 0, 0, 255);
+            AddVertex(bytes, 4, 4, 255, 0, 0, 255);
+            AddVertex(bytes, 2, 4, 255, 0, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteTriangleCoverageDiagnostics(accesses, memory: null, path, width: 7, height: 7, maxRasterizedPixels: null, ignoreEfbCopyClear: false, skipDraws: 0, maxDraws: 1, out GxFifoTriangleCoverageDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            Assert.Equal(1, result.DrawsWritten);
+            Assert.Equal(2, result.TrianglesWritten);
+            string[] lines = File.ReadAllLines(path);
+            Assert.Equal(3, lines.Length);
+            string[] headers = lines[0].Split(',');
+            string[] first = lines[1].Split(',');
+            Assert.Equal("1", first[Array.IndexOf(headers, "draw_index")]);
+            Assert.Equal("0", first[Array.IndexOf(headers, "triangle_index")]);
+            Assert.Equal("0", first[Array.IndexOf(headers, "input_clipped_vertices")]);
+            Assert.Equal("255/0/0/255", first[Array.IndexOf(headers, "sample_raster_rgba")]);
+            Assert.Equal("True", first[Array.IndexOf(headers, "sample_alpha_test")]);
+            Assert.Equal("True", first[Array.IndexOf(headers, "rendered")]);
+            Assert.Equal("rendered", first[Array.IndexOf(headers, "reason")]);
+            Assert.True(int.Parse(first[Array.IndexOf(headers, "color_writes")]) > 0);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void TriangleCoverageDiagnosticsReportCmprMipSamples()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csv");
+        GameCubeMemory memory = new();
+        WriteCmprSolidBlock(memory, 0x0002_0000, 0x0000);
+        WriteCmprSolidBlock(memory, 0x0002_0020, 0xF800);
+        try
+        {
+            List<byte> bytes =
+            [
+                0x61, 0x28, 0x00, 0x00, 0x40,
+                0x61, 0x80, 0x00, 0x00, 0xD0,
+                0x61, 0x84, 0x00, 0x10, 0x00,
+                0x61, 0x88, 0xE0, 0x1C, 0x07,
+                0x61, 0x94, 0x00, 0x10, 0x00,
+                0x61, 0xC0, 0x08, 0xFF, 0xF8,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x01,
+                0x08, 0x70, 0x41, 0x21, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x80, 0x00, 0x04,
+            ];
+            AddTexturedVertex(bytes, 2, 2, 255, 255, 255, 255, 0.4f, 0.4f);
+            AddTexturedVertex(bytes, 4, 2, 255, 255, 255, 255, 0.4f, 0.4f);
+            AddTexturedVertex(bytes, 4, 4, 255, 255, 255, 255, 0.4f, 0.4f);
+            AddTexturedVertex(bytes, 2, 4, 255, 255, 255, 255, 0.4f, 0.4f);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool wrote = GxFifoSoftwareRenderer.TryWriteTriangleCoverageDiagnostics(accesses, memory, path, width: 7, height: 7, maxRasterizedPixels: null, ignoreEfbCopyClear: false, skipDraws: 0, maxDraws: 1, out GxFifoTriangleCoverageDiagnosticResult? result, out string? error);
+
+            Assert.True(wrote, error);
+            Assert.NotNull(result);
+            string text = File.ReadAllText(path);
+            Assert.Contains("mip0@8x8", text);
+            Assert.Contains("=0/0/0/255", text);
+            Assert.Contains("mip1@4x4", text);
+            Assert.Contains("=255/0/0/255", text);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void UsesEstimatedTextureLodForMipmappedCmprRendering()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
+        GameCubeMemory memory = new();
+        WriteCmprSolidBlock(memory, 0x0002_0000, 0x0000);
+        WriteCmprSolidBlock(memory, 0x0002_0020, 0xF800);
+        try
+        {
+            List<byte> bytes =
+            [
+                0x61, 0x28, 0x00, 0x00, 0x40,
+                0x61, 0x80, 0x00, 0x00, 0xA0,
+                0x61, 0x84, 0x00, 0x10, 0x00,
+                0x61, 0x88, 0xE0, 0x1C, 0x07,
+                0x61, 0x94, 0x00, 0x10, 0x00,
+                0x61, 0xC0, 0x08, 0xFF, 0xF8,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x01,
+                0x08, 0x70, 0x41, 0x21, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x80, 0x00, 0x04,
+            ];
+            AddTexturedVertex(bytes, 2, 2, 255, 255, 255, 255, 0, 0);
+            AddTexturedVertex(bytes, 4, 2, 255, 255, 255, 255, 1, 0);
+            AddTexturedVertex(bytes, 4, 4, 255, 255, 255, 255, 1, 1);
+            AddTexturedVertex(bytes, 2, 4, 255, 255, 255, 255, 0, 1);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool rendered = GxFifoSoftwareRenderer.TryRender(accesses, memory, path, width: 7, height: 7, out GxFifoSoftwareRenderResult? result, out string? error);
+
+            Assert.True(rendered, error);
+            Assert.NotNull(result);
+            (byte r, byte g, byte b) = ReadPngPixel(path, x: 3, y: 3, width: 7, height: 7);
+            string pixels = DescribePngPixels(path, width: 7, height: 7);
+            Assert.True(r > 240, $"Expected mipmapped red center pixel, got ({r},{g},{b}). Pixels: {pixels}");
+            Assert.True(g < 16, $"Expected mipmapped red center pixel, got ({r},{g},{b}). Pixels: {pixels}");
+            Assert.True(b < 16, $"Expected mipmapped red center pixel, got ({r},{g},{b}). Pixels: {pixels}");
         }
         finally
         {
@@ -1998,6 +3307,65 @@ public sealed class GxFifoSoftwareRendererTests
     }
 
     [Fact]
+    public void EfbFrameDumpReportsPostDisplayCopyLifecycle()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
+        GameCubeMemory memory = new();
+        try
+        {
+            List<byte> bytes =
+            [
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x80, 0x00, 0x04,
+            ];
+            AddVertex(bytes, 2, 2, 255, 0, 0, 255);
+            AddVertex(bytes, 4, 2, 255, 0, 0, 255);
+            AddVertex(bytes, 4, 4, 255, 0, 0, 255);
+            AddVertex(bytes, 2, 4, 255, 0, 0, 255);
+            bytes.AddRange(
+            [
+                0x61, 0x49, 0x00, 0x00, 0x00,
+                0x61, 0x4A, 0x00, 0x18, 0x06,
+                0x61, 0x4B, 0x00, 0x10, 0x00,
+                0x61, 0x4D, 0x00, 0x00, 0x00,
+                0x61, 0x52, 0x00, 0x48, 0x03,
+                0x80, 0x00, 0x04,
+            ]);
+            AddVertex(bytes, 1, 1, 0, 255, 0, 255);
+            AddVertex(bytes, 3, 1, 0, 255, 0, 255);
+            AddVertex(bytes, 3, 3, 0, 255, 0, 255);
+            AddVertex(bytes, 1, 3, 0, 255, 0, 255);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool rendered = GxFifoSoftwareRenderer.TryRender(accesses, memory, path, width: 7, height: 7, maxDraws: null, skipDraws: 0, stopAfterMaxDraws: false, maxRasterizedPixels: null, ignoreEfbCopyClear: false, source: GxFrameDumpSource.Efb, out GxFifoSoftwareRenderResult? result, out string? error);
+
+            Assert.True(rendered, error);
+            Assert.NotNull(result);
+            Assert.NotNull(result.Lifecycle);
+            Assert.Equal("post-display-copy-efb", result.Lifecycle.Phase);
+            Assert.True(result.Lifecycle.CapturedCurrentEfb);
+            Assert.Equal(1, result.Lifecycle.LastDisplayCopy?.CopyIndex);
+            Assert.Equal(1, result.Lifecycle.DrawsSinceLastDisplayCopy);
+            Assert.Equal(0, result.Lifecycle.CopyEventsSinceLastDisplayCopy);
+            Assert.Equal(1, result.Lifecycle.ClearsSinceLastDisplayCopy);
+            Assert.True(result.Lifecycle.EfbWasClearedAfterLastDisplayCopy);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void CanDumpViSelectedFramebufferAsGxFrameSource()
     {
         string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
@@ -2107,6 +3475,62 @@ public sealed class GxFifoSoftwareRendererTests
     }
 
     [Fact]
+    public void CanDumpDisplayCopyByGlobalCopyIndexWhileSkippingCopyMemoryWrites()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
+        GameCubeMemory memory = new();
+        try
+        {
+            List<byte> bytes =
+            [
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x80, 0x00, 0x04,
+            ];
+            AddVertex(bytes, 2, 2, 255, 0, 0, 255);
+            AddVertex(bytes, 4, 2, 255, 0, 0, 255);
+            AddVertex(bytes, 4, 4, 255, 0, 0, 255);
+            AddVertex(bytes, 2, 4, 255, 0, 0, 255);
+            bytes.AddRange(
+            [
+                0x61, 0x49, 0x00, 0x00, 0x00,
+                0x61, 0x4A, 0x00, 0x18, 0x06,
+                0x61, 0x4B, 0x00, 0x10, 0x00,
+                0x61, 0x4D, 0x00, 0x00, 0x00,
+                0x61, 0x52, 0x00, 0x08, 0x00,
+                0x61, 0x52, 0x00, 0x48, 0x00,
+            ]);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool rendered = GxFifoSoftwareRenderer.TryRender(accesses, memory, path, width: 7, height: 7, maxDraws: null, skipDraws: 0, stopAfterMaxDraws: false, maxRasterizedPixels: null, ignoreEfbCopyClear: true, source: GxFrameDumpSource.CopyIndex, displayCopyIndex: 2, out GxFifoSoftwareRenderResult? result, out string? error, skipEfbCopyMemoryWrites: true);
+
+            Assert.True(rendered, error);
+            Assert.NotNull(result);
+            Assert.Equal(GxFrameDumpSource.CopyIndex, result.Source);
+            Assert.Equal(2, result.SourceCopyIndex);
+            Assert.Equal(0x0002_0000u, result.SourceAddress);
+            (byte r, byte g, byte b) = ReadPngPixel(path, x: 3, y: 3, width: 7, height: 7);
+            Assert.True(r > 200, $"Expected skipped-memory copy-index red pixel, got ({r},{g},{b}).");
+            Assert.True(g < 80, $"Expected skipped-memory copy-index red pixel, got ({r},{g},{b}).");
+            Assert.True(b < 80, $"Expected skipped-memory copy-index red pixel, got ({r},{g},{b}).");
+            int memoryOffset = memory.TranslateMainRam(0x0002_0000, 16 * 7);
+            Assert.True(memory.MainRam.Span.Slice(memoryOffset, 16 * 7).ToArray().All(value => value == 0));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void CanDumpEfbCopySourceByGlobalCopyIndex()
     {
         string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
@@ -2153,6 +3577,62 @@ public sealed class GxFifoSoftwareRendererTests
             Assert.True(r > 200, $"Expected EFB copy-source red pixel, got ({r},{g},{b}).");
             Assert.True(g < 80, $"Expected EFB copy-source red pixel, got ({r},{g},{b}).");
             Assert.True(b < 80, $"Expected EFB copy-source red pixel, got ({r},{g},{b}).");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void CanDumpEfbCopySourceByGlobalCopyIndexWhileSkippingCopyMemoryWrites()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
+        GameCubeMemory memory = new();
+        try
+        {
+            List<byte> bytes =
+            [
+                0x61, 0xC0, 0x08, 0xFF, 0xFA,
+                0x61, 0xC1, 0x08, 0xFF, 0xD0,
+                0x08, 0x50, 0x00, 0x00, 0x22, 0x00,
+                0x08, 0x60, 0x00, 0x00, 0x00, 0x00,
+                0x08, 0x70, 0x40, 0x01, 0x60, 0x09,
+                0x08, 0x80, 0x80, 0x00, 0x00, 0x00,
+                0x08, 0x90, 0x00, 0x00, 0x00, 0x00,
+                0x80, 0x00, 0x04,
+            ];
+            AddVertex(bytes, 2, 2, 255, 0, 0, 255);
+            AddVertex(bytes, 4, 2, 255, 0, 0, 255);
+            AddVertex(bytes, 4, 4, 255, 0, 0, 255);
+            AddVertex(bytes, 2, 4, 255, 0, 0, 255);
+            bytes.AddRange(
+            [
+                0x61, 0x49, 0x00, 0x04, 0x02,
+                0x61, 0x4A, 0x00, 0x0C, 0x03,
+                0x61, 0x4B, 0x00, 0x10, 0x00,
+                0x61, 0x4D, 0x00, 0x00, 0x00,
+                0x61, 0x52, 0x00, 0x48, 0x00,
+            ]);
+
+            List<MmioAccess> accesses = bytes
+                .Select(value => new MmioAccess(MmioAccessKind.Write, 0xCC00_8000, 1, value, "GX FIFO"))
+                .ToList();
+
+            bool rendered = GxFifoSoftwareRenderer.TryRender(accesses, memory, path, width: 7, height: 7, maxDraws: null, skipDraws: 0, stopAfterMaxDraws: false, maxRasterizedPixels: null, ignoreEfbCopyClear: false, source: GxFrameDumpSource.CopySourceIndex, displayCopyIndex: 1, out GxFifoSoftwareRenderResult? result, out string? error, skipEfbCopyMemoryWrites: true);
+
+            Assert.True(rendered, error);
+            Assert.NotNull(result);
+            Assert.Equal(GxFrameDumpSource.CopySourceIndex, result.Source);
+            Assert.Equal(1, result.SourceCopyIndex);
+            Assert.Equal(4, result.Width);
+            Assert.Equal(4, result.Height);
+            (byte r, byte g, byte b) = ReadPngPixel(path, x: 1, y: 1, width: 4, height: 4);
+            Assert.True(r > 200, $"Expected skipped-memory EFB copy-source red pixel, got ({r},{g},{b}).");
+            Assert.True(g < 80, $"Expected skipped-memory EFB copy-source red pixel, got ({r},{g},{b}).");
+            Assert.True(b < 80, $"Expected skipped-memory EFB copy-source red pixel, got ({r},{g},{b}).");
+            int memoryOffset = memory.TranslateMainRam(0x0002_0000, 16 * 7);
+            Assert.True(memory.MainRam.Span.Slice(memoryOffset, 16 * 7).ToArray().All(value => value == 0));
         }
         finally
         {
@@ -3167,6 +4647,22 @@ public sealed class GxFifoSoftwareRendererTests
         bytes.AddRange([r, g, b, a]);
     }
 
+    private static void AddDualColorVertex(List<byte> bytes, float x, float y, byte r0, byte g0, byte b0, byte a0, byte r1, byte g1, byte b1, byte a1)
+    {
+        AddSingle(bytes, x);
+        AddSingle(bytes, y);
+        AddSingle(bytes, 0);
+        bytes.AddRange([r0, g0, b0, a0, r1, g1, b1, a1]);
+    }
+
+    private static void AddColor1OnlyVertex(List<byte> bytes, float x, float y, byte r, byte g, byte b, byte a)
+    {
+        AddSingle(bytes, x);
+        AddSingle(bytes, y);
+        AddSingle(bytes, 0);
+        bytes.AddRange([r, g, b, a]);
+    }
+
     private static void AddTexturedVertex(List<byte> bytes, float x, float y, byte r, byte g, byte b, byte a, float s, float t)
     {
         AddVertex(bytes, x, y, r, g, b, a);
@@ -3179,6 +4675,45 @@ public sealed class GxFifoSoftwareRendererTests
         AddTexturedVertex(bytes, x, y, r, g, b, a, tex0S, tex0T);
         AddSingle(bytes, tex1S);
         AddSingle(bytes, tex1T);
+    }
+
+    private static int InvokeTextureCoordinateToIndex(float coordinate, int size, int wrapMode)
+    {
+        Type stateType = typeof(GxFifoSoftwareRenderer).GetNestedType(
+            "GxVertexState",
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("GxVertexState helper type was not found.");
+        System.Reflection.MethodInfo method = stateType.GetMethod(
+            "TextureCoordinateToIndex",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException("TextureCoordinateToIndex helper was not found.");
+
+        return (int)(method.Invoke(null, [coordinate, size, wrapMode]) ?? throw new InvalidOperationException("TextureCoordinateToIndex returned null."));
+    }
+
+    private static void WriteCmprSolidBlock(GameCubeMemory memory, uint address, ushort rgb565)
+    {
+        for (int subBlock = 0; subBlock < 4; subBlock++)
+        {
+            uint subBlockAddress = address + (uint)(subBlock * 8);
+            memory.Write16(subBlockAddress, rgb565);
+            memory.Write16(subBlockAddress + 2, rgb565);
+            memory.Write32(subBlockAddress + 4, 0);
+        }
+    }
+
+    private static void WriteRgb565Texture(GameCubeMemory memory, uint address, int width, int height, ushort rgb565)
+    {
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int blockColumns = (width + 3) / 4;
+                int block = (y / 4) * blockColumns + x / 4;
+                uint texelAddress = address + (uint)(block * 32 + ((y & 3) * 4 + (x & 3)) * 2);
+                memory.Write16(texelAddress, rgb565);
+            }
+        }
     }
 
     private static void AddSingle(List<byte> bytes, float value)

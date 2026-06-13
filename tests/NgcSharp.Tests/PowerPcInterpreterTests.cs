@@ -1280,6 +1280,29 @@ public sealed class PowerPcInterpreterTests
     }
 
     [Fact]
+    public void PairedSingleMergeReadsSourceBeforeOverwritingDestination()
+    {
+        GameCubeMemory memory = new();
+        uint pc = 0x8000_3100;
+        WriteInstruction(memory, pc, XForm(4, rSOrD: 4, rA: 2, rB: 4, xo: 528));
+
+        PowerPcState state = new()
+        {
+            Pc = pc,
+        };
+        state.Fpr[2] = 1.0d;
+        state.FprPair1[2] = 99.0d;
+        state.Fpr[4] = -0.0d;
+        state.FprPair1[4] = 77.0d;
+
+        new PowerPcInterpreter().Step(state, memory);
+
+        Assert.Equal(1.0d, state.Fpr[4]);
+        Assert.True(BitConverter.DoubleToInt64Bits(state.FprPair1[4]) < 0);
+        Assert.Equal("ps_merge00 f4, f2, f4", PowerPcDisassembler.Disassemble(XForm(4, rSOrD: 4, rA: 2, rB: 4, xo: 528)));
+    }
+
+    [Fact]
     public void PairedSingleArithmeticUpdatesBothLanes()
     {
         GameCubeMemory memory = new();
@@ -1370,6 +1393,55 @@ public sealed class PowerPcInterpreterTests
         Assert.Equal(27.0d, state.Fpr[4]);
         Assert.Equal(40.0d, state.FprPair1[4]);
         Assert.Equal("ps_madds0 f4, f1, f3, f2", PowerPcDisassembler.Disassemble(XForm(4, rSOrD: 4, rA: 1, rB: 2, xo: 46) | (3u << 6)));
+    }
+
+    [Fact]
+    public void SonicRootMatrixMultiplyRoutineMatchesAffineReference()
+    {
+        GameCubeMemory memory = new();
+        uint pc = 0x8000_3100;
+        WriteSonicRootMatrixMultiplyRoutine(memory, pc);
+
+        uint leftAddress = 0x1000;
+        uint rightAddress = 0x1100;
+        uint outputAddress = 0x1200;
+        float[] left =
+        [
+            0.75f, -0.25f, 0.50f, 10.0f,
+            0.10f, 0.90f, -0.30f, -4.0f,
+            -0.45f, 0.20f, 0.85f, 6.5f,
+        ];
+        float[] right =
+        [
+            0.60f, 0.20f, -0.70f, 3.0f,
+            -0.35f, 0.95f, 0.15f, -2.0f,
+            0.50f, 0.10f, 0.80f, 8.0f,
+        ];
+
+        WriteAffineMatrix(memory, leftAddress, left);
+        WriteAffineMatrix(memory, rightAddress, right);
+        WriteFloat(memory, 0x803A_D5C8, 0.0f);
+        WriteFloat(memory, 0x803A_D5CC, 1.0f);
+
+        PowerPcState state = new()
+        {
+            Pc = pc,
+            Lr = 0x8000_4000,
+        };
+        state.Gpr[1] = 0x2000;
+        state.Gpr[3] = leftAddress;
+        state.Gpr[4] = rightAddress;
+        state.Gpr[5] = outputAddress;
+
+        new PowerPcInterpreter().Run(state, memory, 51);
+
+        float[] expected = MultiplyAffine3x4(left, right);
+        for (int index = 0; index < expected.Length; index++)
+        {
+            Assert.InRange(Math.Abs(ReadFloat(memory, outputAddress + (uint)(index * 4)) - expected[index]), 0.0f, 0.0001f);
+        }
+
+        Assert.Equal(state.Lr, state.Pc);
     }
 
     [Fact]
@@ -2062,6 +2134,73 @@ public sealed class PowerPcInterpreterTests
             ((uint)w << 15) |
             ((uint)i << 12) |
             ((uint)displacement & 0xFFF);
+    }
+
+    private static void WriteSonicRootMatrixMultiplyRoutine(GameCubeMemory memory, uint pc)
+    {
+        uint[] instructions =
+        [
+            0x9421_FFC0, 0xE003_0000, 0xD9C1_0008, 0xE0C4_0000,
+            0xE0E4_0008, 0xD9E1_0010, 0x3CC0_803B, 0x38C6_D5C8,
+            0xDBE1_0028, 0xE104_0010, 0x1186_0018, 0xE043_0010,
+            0x11A7_0018, 0xE3E6_0000, 0x11C6_0098, 0xE124_0018,
+            0x11E7_0098, 0xE023_0008, 0x1188_601E, 0xE063_0018,
+            0x11C8_709E, 0xE144_0020, 0x11A9_681E, 0xE164_0028,
+            0x11E9_789E, 0xE083_0020, 0xE0A3_0028, 0x118A_605C,
+            0x11AB_685C, 0x11CA_70DC, 0x11EB_78DC, 0xF185_0000,
+            0x1046_0118, 0x11BF_685E, 0x1007_0118, 0xF1C5_0010,
+            0x11FF_78DE, 0xF1A5_0008, 0x1048_111E, 0x1009_011E,
+            0x104A_115C, 0xC9C1_0008, 0xF1E5_0018, 0x100B_015C,
+            0xF045_0020, 0x101F_015E, 0xC9E1_0010, 0xF005_0028,
+            0xCBE1_0028, 0x3821_0040, 0x4E80_0020,
+        ];
+
+        for (int index = 0; index < instructions.Length; index++)
+        {
+            WriteInstruction(memory, pc + (uint)(index * 4), instructions[index]);
+        }
+    }
+
+    private static void WriteAffineMatrix(GameCubeMemory memory, uint address, float[] values)
+    {
+        Assert.Equal(12, values.Length);
+        for (int index = 0; index < values.Length; index++)
+        {
+            WriteFloat(memory, address + (uint)(index * 4), values[index]);
+        }
+    }
+
+    private static float[] MultiplyAffine3x4(float[] left, float[] right)
+    {
+        float[] result = new float[12];
+        for (int row = 0; row < 3; row++)
+        {
+            for (int column = 0; column < 4; column++)
+            {
+                float value =
+                    left[row * 4 + 0] * right[0 * 4 + column] +
+                    left[row * 4 + 1] * right[1 * 4 + column] +
+                    left[row * 4 + 2] * right[2 * 4 + column];
+                if (column == 3)
+                {
+                    value += left[row * 4 + 3];
+                }
+
+                result[row * 4 + column] = value;
+            }
+        }
+
+        return result;
+    }
+
+    private static void WriteFloat(GameCubeMemory memory, uint address, float value)
+    {
+        memory.Write32(address, BitConverter.SingleToUInt32Bits(value));
+    }
+
+    private static float ReadFloat(GameCubeMemory memory, uint address)
+    {
+        return BitConverter.UInt32BitsToSingle(memory.Read32(address));
     }
 
     private static uint XlForm(int bt, int ba, int bb, int xo, bool link = false)

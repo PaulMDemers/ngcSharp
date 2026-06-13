@@ -2,7 +2,8 @@ param(
     [string]$DolphinDirectory = "dolphin-2603a-x64/Dolphin-x64",
     [string]$OutputDirectory = "artifacts/dolphin-reference",
     [int]$Seconds = 18,
-    [int[]]$SampleFrames = @(1, 60, 180, 300, 600, 900),
+    [string[]]$SampleFrames = @("1", "60", "180", "300", "600", "900"),
+    [string[]]$Games = @("sonic-adventure-2-battle", "pikmin"),
     [switch]$KeepFullDump
 )
 
@@ -235,18 +236,68 @@ if (-not (Test-Path -LiteralPath $dolphinExe)) {
     throw "Dolphin.exe not found: $dolphinExe"
 }
 
-$games = @(
+$gameDefinitions = @(
     [pscustomobject]@{
         slug = "sonic-adventure-2-battle"
-        path = Join-Path $repoRoot "Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz"
+        aliases = @("sonic", "sa2b", "sonic-adventure-2-battle")
+        path = (Join-Path $repoRoot "Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz")
     },
     [pscustomobject]@{
         slug = "pikmin"
-        path = Join-Path $repoRoot "Pikmin (USA).rvz"
+        aliases = @("pikmin")
+        path = (Join-Path $repoRoot "Pikmin (USA).rvz")
     }
 )
 
-$missing = @($games | Where-Object { -not (Test-Path -LiteralPath $_.path) })
+$requestedGames = @(
+    $Games |
+        ForEach-Object { $_ -split "," } |
+        ForEach-Object { $_.Trim().ToLowerInvariant() } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+)
+if ($requestedGames.Count -eq 0) {
+    throw "At least one game must be requested."
+}
+
+$selectedGames = [System.Collections.Generic.List[object]]::new()
+$matchedRequests = [System.Collections.Generic.HashSet[string]]::new()
+foreach ($definition in $gameDefinitions) {
+    $matchedAliases = @($definition.aliases | Where-Object { $requestedGames -contains $_ })
+    if ($matchedAliases.Count -eq 0) {
+        continue
+    }
+
+    $selectedGames.Add($definition) | Out-Null
+    foreach ($alias in $matchedAliases) {
+        $matchedRequests.Add($alias) | Out-Null
+    }
+}
+
+$unknownRequests = @($requestedGames | Where-Object { -not $matchedRequests.Contains($_) })
+if ($unknownRequests.Count -ne 0) {
+    $known = @($gameDefinitions | ForEach-Object { $_.slug }) -join ", "
+    throw "Unknown game selection. Requested: $($unknownRequests -join ', '). Known: $known"
+}
+
+$requestedSampleFrames = @(
+    $SampleFrames |
+        ForEach-Object { $_ -split "," } |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        ForEach-Object {
+            $frame = 0
+            if (-not [int]::TryParse($_, [ref]$frame) -or $frame -le 0) {
+                throw "Sample frame values must be positive integers: $_"
+            }
+
+            $frame
+        }
+)
+if ($requestedSampleFrames.Count -eq 0) {
+    throw "At least one sample frame must be requested."
+}
+
+$missing = @($selectedGames | Where-Object { -not (Test-Path -LiteralPath $_.path) })
 if ($missing.Count -gt 0) {
     $names = ($missing | ForEach-Object { $_.path }) -join ", "
     throw "Missing benchmark game(s): $names"
@@ -259,7 +310,7 @@ New-Item -ItemType Directory -Force -Path $runRoot | Out-Null
 
 $summaryRows = New-Object System.Collections.Generic.List[object]
 
-foreach ($game in $games) {
+foreach ($game in $selectedGames) {
     Write-Host "Dumping Dolphin reference for $($game.slug)..."
     $gameRoot = Join-Path $runRoot $game.slug
     $userDir = Join-Path $gameRoot "user"
@@ -302,7 +353,7 @@ foreach ($game in $games) {
 
     $samples = @()
     if ($frameCount -gt 0) {
-        $samples = @(Copy-ReferenceSamples -FrameDirectory $frameDir -SampleDirectory $sampleDir -RequestedFrames $SampleFrames)
+        $samples = @(Copy-ReferenceSamples -FrameDirectory $frameDir -SampleDirectory $sampleDir -RequestedFrames $requestedSampleFrames)
         Write-ContactSheet -SampleDirectory $sampleDir -OutPath (Join-Path $gameRoot "contact-sheet.png") -Title "Dolphin reference: $($game.slug)"
     }
 

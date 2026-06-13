@@ -1308,8 +1308,10 @@ public sealed class PowerPcInterpreter
         int fD = Rd(instruction);
         int fA = Ra(instruction);
         int fB = Rb(instruction);
-        state.Fpr[fD] = takeAFromPair1 ? state.FprPair1[fA] : state.Fpr[fA];
-        state.FprPair1[fD] = takeBFromPair1 ? state.FprPair1[fB] : state.Fpr[fB];
+        double result0 = takeAFromPair1 ? state.FprPair1[fA] : state.Fpr[fA];
+        double result1 = takeBFromPair1 ? state.FprPair1[fB] : state.Fpr[fB];
+        state.Fpr[fD] = result0;
+        state.FprPair1[fD] = result1;
     }
 
     private static void ExecuteOpcode19(PowerPcState state, uint instruction)

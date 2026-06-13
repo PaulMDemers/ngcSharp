@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.Drawing.Imaging;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using NgcSharp.App;
 using NgcSharp.Core;
@@ -13,33 +15,56 @@ public sealed class MainForm : Form
 {
     private const int DefaultFrameWidth = 640;
     private const int DefaultFrameHeight = 480;
+    private const int DesktopDefaultMaxInstructions = int.MaxValue;
     private const int VideoFrameLimit = 4_194_304;
+    private const int MaxOutputCharacters = 256 * 1024;
+    private const int OutputTrimTargetCharacters = 192 * 1024;
+    private const int LiveFrameCapturePollInstructions = 4096;
 
-    private readonly SplitContainer _mainSplit = new()
-    {
-        Dock = DockStyle.Fill,
-        FixedPanel = FixedPanel.Panel1,
-        SplitterWidth = 1,
-        SplitterDistance = 330,
-    };
-
-    private readonly TableLayoutPanel _controlPanel = new()
+    private readonly TableLayoutPanel _rootLayout = new()
     {
         Dock = DockStyle.Fill,
         ColumnCount = 1,
-        Padding = new Padding(12),
+        RowCount = 4,
+    };
+
+    private readonly MenuStrip _menuStrip = new()
+    {
+        Dock = DockStyle.Top,
+    };
+
+    private readonly ToolStripMenuItem _presetsMenu = new("Presets");
+    private readonly ToolStripMenuItem _traceMenuItem = new("Instruction trace") { CheckOnClick = true };
+    private readonly ToolStripMenuItem _verboseOutputMenuItem = new("Verbose runner output") { CheckOnClick = true };
+    private readonly ToolStripMenuItem _liveFrameCaptureMenuItem = new("Live screen capture") { CheckOnClick = true, Checked = true };
+    private readonly ToolStripMenuItem _dumpMmioMenuItem = new("Dump MMIO") { CheckOnClick = true };
+    private readonly ToolStripMenuItem _dumpRegistersMenuItem = new("Dump registers") { CheckOnClick = true };
+    private readonly ToolStripMenuItem _fastForwardIdleMenuItem = new("Fast-forward known idle loops") { CheckOnClick = true, Checked = true };
+    private readonly ToolStripMenuItem _memoryCardAMenuItem = new("Memory card A") { CheckOnClick = true, Checked = true };
+    private readonly ToolStripMenuItem _memoryCardBMenuItem = new("Memory card B") { CheckOnClick = true };
+    private readonly ToolStripMenuItem _controllerMenu = new("Controller");
+    private readonly ToolStripMenuItem _runMenuItem = new("Run");
+    private readonly ToolStripMenuItem _cancelRunMenuItem = new("Cancel") { Enabled = false };
+    private readonly ToolStripMenuItem _clearOutputMenuItem = new("Clear Output");
+
+    private readonly TableLayoutPanel _commandBar = new()
+    {
+        Dock = DockStyle.Fill,
+        ColumnCount = 10,
+        RowCount = 2,
+        Padding = new Padding(8, 6, 8, 6),
         BackColor = Color.FromArgb(30, 32, 36),
     };
 
     private readonly ComboBox _commandSelector = new()
     {
-        Dock = DockStyle.Top,
+        Dock = DockStyle.Fill,
         DropDownStyle = ComboBoxStyle.DropDownList,
     };
 
     private readonly ComboBox _presetSelector = new()
     {
-        Dock = DockStyle.Top,
+        Dock = DockStyle.Fill,
         DropDownStyle = ComboBoxStyle.DropDownList,
     };
 
@@ -58,11 +83,21 @@ public sealed class MainForm : Form
 
     private readonly NumericUpDown _maxInstructionsInput = new()
     {
-        Dock = DockStyle.Top,
-        Minimum = 0,
+        Dock = DockStyle.Fill,
+        Minimum = 1,
         Maximum = int.MaxValue,
-        Value = 1_000_000,
-        Increment = 100_000,
+        Value = DesktopDefaultMaxInstructions,
+        Increment = 10_000_000,
+        ThousandsSeparator = true,
+    };
+
+    private readonly NumericUpDown _frameCaptureStrideInput = new()
+    {
+        Dock = DockStyle.Fill,
+        Minimum = 1,
+        Maximum = 600,
+        Value = 2,
+        Increment = 1,
         ThousandsSeparator = true,
     };
 
@@ -91,7 +126,6 @@ public sealed class MainForm : Form
     {
         Text = "Dump registers",
         AutoSize = true,
-        Checked = true,
         ForeColor = Color.Gainsboro,
     };
 
@@ -120,7 +154,7 @@ public sealed class MainForm : Form
 
     private readonly ComboBox _controllerButtons = new()
     {
-        Dock = DockStyle.Top,
+        Dock = DockStyle.Fill,
         DropDownStyle = ComboBoxStyle.DropDownList,
     };
 
@@ -149,13 +183,16 @@ public sealed class MainForm : Form
         Enabled = false,
     };
 
-    private readonly Label _statusLabel = new()
+    private readonly StatusStrip _statusStrip = new()
+    {
+        Dock = DockStyle.Bottom,
+    };
+
+    private readonly ToolStripStatusLabel _statusLabel = new()
     {
         Text = "Ready",
-        AutoEllipsis = true,
-        Dock = DockStyle.Fill,
-        ForeColor = Color.Gainsboro,
-        Padding = new Padding(0, 8, 0, 0),
+        Spring = true,
+        TextAlign = ContentAlignment.MiddleLeft,
     };
 
     private readonly SplitContainer _rightSplit = new()
@@ -198,6 +235,18 @@ public sealed class MainForm : Form
         BorderStyle = BorderStyle.None,
     };
 
+    private readonly RichTextBox _telemetryOutput = new()
+    {
+        Dock = DockStyle.Fill,
+        ReadOnly = true,
+        WordWrap = false,
+        Font = new Font("Consolas", 9f),
+        ScrollBars = RichTextBoxScrollBars.Both,
+        BackColor = Color.FromArgb(18, 18, 18),
+        ForeColor = Color.FromArgb(210, 220, 210),
+        BorderStyle = BorderStyle.None,
+    };
+
     private readonly TextBox _additionalArgs = new()
     {
         Multiline = true,
@@ -207,7 +256,7 @@ public sealed class MainForm : Form
         BackColor = Color.FromArgb(24, 24, 24),
         ForeColor = Color.Gainsboro,
         BorderStyle = BorderStyle.FixedSingle,
-        PlaceholderText = "Additional ngcsharp options, e.g. --fast-forward-idle --dump-gx-frame frame.png",
+        PlaceholderText = "Additional ngcsharp options, e.g. --dump-frame frame.png --dump-gx-frame gx-frame.png",
     };
 
     private readonly TextBox _commandPreview = new()
@@ -252,25 +301,36 @@ public sealed class MainForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         ClientSize = new Size(1180, 780);
 
-        BuildControlPanel();
-        BuildContentArea();
-
-        Controls.Add(_mainSplit);
-        _mainSplit.Panel1.Controls.Add(_controlPanel);
-        _mainSplit.Panel2.Controls.Add(_rightSplit);
-
         _presetSelector.Items.AddRange(BuildPresets());
-        _presetSelector.SelectedIndex = 0;
         _commandSelector.Items.AddRange(["Run DOL", "Run Disc", "Disc Info", "DOL Info"]);
         _commandSelector.SelectedIndex = 0;
         _controllerButtons.Items.AddRange(["None", "A", "Start", "B", "X", "Y", "A+Start"]);
         _controllerButtons.SelectedIndex = 0;
 
+        BuildMenuBar();
+        BuildCommandBar();
+        BuildContentArea();
+
+        Controls.Add(_rootLayout);
+        MainMenuStrip = _menuStrip;
+        _statusStrip.Items.Add(_statusLabel);
+        _rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _rootLayout.Controls.Add(_menuStrip, 0, 0);
+        _rootLayout.Controls.Add(_commandBar, 0, 1);
+        _rootLayout.Controls.Add(_rightSplit, 0, 2);
+        _rootLayout.Controls.Add(_statusStrip, 0, 3);
+
         _traceCheck.CheckedChanged += (_, _) => _tracePathTextBox.Enabled = _traceCheck.Checked;
         _browseButton.Click += OnBrowseClicked;
         _runButton.Click += OnRunClicked;
         _cancelButton.Click += OnCancelClicked;
-        _clearButton.Click += (_, _) => _output.Clear();
+        _clearButton.Click += (_, _) => ClearLogs();
+        _runMenuItem.Click += OnRunClicked;
+        _cancelRunMenuItem.Click += OnCancelClicked;
+        _clearOutputMenuItem.Click += (_, _) => ClearLogs();
         _commandSelector.SelectedIndexChanged += (_, _) =>
         {
             if (!_applyingPreset)
@@ -284,6 +344,7 @@ public sealed class MainForm : Form
         RegisterPreviewUpdateHandlers();
         _screenUpdateTimer.Tick += OnScreenFrameTick;
 
+        _presetSelector.SelectedIndex = SelectInitialPresetIndex();
         UpdateModeState();
         UpdateCommandPreview();
     }
@@ -307,6 +368,9 @@ public sealed class MainForm : Form
         int MaxInstructions,
         bool TraceEnabled,
         string TracePath,
+        bool VerboseRunnerOutput,
+        bool LiveFrameCapture,
+        int FrameCaptureStride,
         bool DumpMmio,
         bool DumpRegisters,
         bool FastForwardIdle,
@@ -316,143 +380,126 @@ public sealed class MainForm : Form
         string ArtifactDirectory,
         IReadOnlyList<string> AdditionalArguments);
 
-    private void BuildControlPanel()
+    private void BuildMenuBar()
     {
-        _controlPanel.RowStyles.Clear();
-        _controlPanel.RowCount = 0;
+        ToolStripMenuItem fileMenu = new("&File");
+        ToolStripMenuItem openMenuItem = new("&Open...")
+        {
+            ShortcutKeys = Keys.Control | Keys.O,
+        };
+        openMenuItem.Click += OnBrowseClicked;
+        ToolStripMenuItem discInfoMenuItem = new("Disc &Info");
+        discInfoMenuItem.Click += (_, _) => SelectCommandAndRun("Disc Info");
+        ToolStripMenuItem dolInfoMenuItem = new("DOL I&nfo");
+        dolInfoMenuItem.Click += (_, _) => SelectCommandAndRun("DOL Info");
+        ToolStripMenuItem exitMenuItem = new("E&xit");
+        exitMenuItem.Click += (_, _) => Close();
+        fileMenu.DropDownItems.AddRange([openMenuItem, new ToolStripSeparator(), discInfoMenuItem, dolInfoMenuItem, new ToolStripSeparator(), exitMenuItem]);
 
-        AddControlRow(CreateTitleBlock());
-        AddControlRow(CreateLabeledControl("Preset", _presetSelector));
-        AddControlRow(CreateLabeledControl("Mode", _commandSelector));
-        AddControlRow(CreateFilePicker());
-        AddControlRow(CreateLabeledControl("Max instructions", _maxInstructionsInput));
-        AddControlRow(CreateOptionsGroup());
-        AddControlRow(CreateLabeledControl("Controller", _controllerButtons));
-        AddControlRow(CreateRunButtons());
-        AddControlRow(_statusLabel, true);
+        foreach (DesktopPreset preset in _presetSelector.Items.OfType<DesktopPreset>())
+        {
+            ToolStripMenuItem item = new(preset.Name);
+            item.Click += (_, _) => _presetSelector.SelectedItem = preset;
+            _presetsMenu.DropDownItems.Add(item);
+        }
+
+        ToolStripMenuItem emulationMenu = new("&Emulation");
+        _runMenuItem.ShortcutKeys = Keys.F5;
+        _cancelRunMenuItem.ShortcutKeys = Keys.Shift | Keys.F5;
+        emulationMenu.DropDownItems.AddRange([_runMenuItem, _cancelRunMenuItem, new ToolStripSeparator(), _clearOutputMenuItem]);
+
+        ToolStripMenuItem optionsMenu = new("&Options");
+        optionsMenu.DropDownItems.AddRange([
+            _traceMenuItem,
+            _verboseOutputMenuItem,
+            _liveFrameCaptureMenuItem,
+            _dumpMmioMenuItem,
+            _dumpRegistersMenuItem,
+            _fastForwardIdleMenuItem,
+            new ToolStripSeparator(),
+            _memoryCardAMenuItem,
+            _memoryCardBMenuItem,
+            new ToolStripSeparator(),
+            _controllerMenu,
+        ]);
+
+        foreach (string controller in _controllerButtons.Items.Cast<string>())
+        {
+            ToolStripMenuItem item = new(controller);
+            item.Click += (_, _) =>
+            {
+                _controllerButtons.SelectedItem = controller;
+                SyncMenuItemsFromControls();
+            };
+            _controllerMenu.DropDownItems.Add(item);
+        }
+
+        ToolStripMenuItem viewMenu = new("&View");
+        ToolStripMenuItem outputMenuItem = new("&Output");
+        outputMenuItem.Click += (_, _) => _bottomTabs.SelectedTab = _bottomTabs.TabPages["Output"];
+        ToolStripMenuItem telemetryMenuItem = new("&Telemetry");
+        telemetryMenuItem.Click += (_, _) => _bottomTabs.SelectedTab = _bottomTabs.TabPages["Telemetry"];
+        ToolStripMenuItem advancedMenuItem = new("&Advanced Options");
+        advancedMenuItem.Click += (_, _) => _bottomTabs.SelectedTab = _bottomTabs.TabPages["Advanced Options"];
+        ToolStripMenuItem commandPreviewMenuItem = new("&Command Preview");
+        commandPreviewMenuItem.Click += (_, _) => _bottomTabs.SelectedTab = _bottomTabs.TabPages["Command Preview"];
+        viewMenu.DropDownItems.AddRange([outputMenuItem, telemetryMenuItem, advancedMenuItem, commandPreviewMenuItem]);
+
+        _traceMenuItem.CheckedChanged += (_, _) => _traceCheck.Checked = _traceMenuItem.Checked;
+        _verboseOutputMenuItem.CheckedChanged += (_, _) => UpdateCommandPreview();
+        _liveFrameCaptureMenuItem.CheckedChanged += (_, _) => UpdateCommandPreview();
+        _dumpMmioMenuItem.CheckedChanged += (_, _) => _dumpMmio.Checked = _dumpMmioMenuItem.Checked;
+        _dumpRegistersMenuItem.CheckedChanged += (_, _) => _dumpRegisters.Checked = _dumpRegistersMenuItem.Checked;
+        _fastForwardIdleMenuItem.CheckedChanged += (_, _) => _fastForwardIdle.Checked = _fastForwardIdleMenuItem.Checked;
+        _memoryCardAMenuItem.CheckedChanged += (_, _) => _memoryCardA.Checked = _memoryCardAMenuItem.Checked;
+        _memoryCardBMenuItem.CheckedChanged += (_, _) => _memoryCardB.Checked = _memoryCardBMenuItem.Checked;
+
+        _menuStrip.Items.AddRange([fileMenu, _presetsMenu, emulationMenu, optionsMenu, viewMenu]);
     }
 
-    private Control CreateTitleBlock()
+    private void BuildCommandBar()
     {
-        TableLayoutPanel title = new()
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            ColumnCount = 1,
-            Margin = new Padding(0, 0, 0, 14),
-        };
-        title.Controls.Add(new Label
-        {
-            Text = "ngcSharp",
-            Dock = DockStyle.Top,
-            Font = new Font(Font.FontFamily, 18f, FontStyle.Bold),
-            ForeColor = Color.White,
-            AutoSize = true,
-        });
-        title.Controls.Add(new Label
-        {
-            Text = "GameCube emulator workbench",
-            Dock = DockStyle.Top,
-            ForeColor = Color.FromArgb(170, 176, 186),
-            AutoSize = true,
-        });
-        return title;
+        _commandBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        _commandBar.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        _commandBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 54));
+        _commandBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
+        _commandBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 44));
+        _commandBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 126));
+        _commandBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
+        _commandBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
+        _commandBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
+        _commandBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82));
+        _commandBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78));
+        _commandBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 8));
+
+        _commandBar.Controls.Add(CreateInlineLabel("Preset"), 0, 0);
+        _commandBar.Controls.Add(_presetSelector, 1, 0);
+        _commandBar.Controls.Add(CreateInlineLabel("Mode"), 2, 0);
+        _commandBar.Controls.Add(_commandSelector, 3, 0);
+        _commandBar.Controls.Add(CreateInlineLabel("Controller"), 4, 0);
+        _commandBar.Controls.Add(_controllerButtons, 5, 0);
+        _commandBar.Controls.Add(_runButton, 6, 0);
+        _commandBar.Controls.Add(_cancelButton, 7, 0);
+        _commandBar.Controls.Add(_clearButton, 8, 0);
+
+        _commandBar.Controls.Add(CreateInlineLabel("Input"), 0, 1);
+        _commandBar.Controls.Add(_pathTextBox, 1, 1);
+        _commandBar.SetColumnSpan(_pathTextBox, 7);
+        _commandBar.Controls.Add(_browseButton, 8, 1);
     }
 
-    private Control CreateFilePicker()
-    {
-        TableLayoutPanel picker = new()
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            ColumnCount = 1,
-            Margin = new Padding(0, 0, 0, 10),
-        };
-        picker.Controls.Add(CreateSectionLabel("Input file"));
-
-        TableLayoutPanel row = new()
-        {
-            Dock = DockStyle.Top,
-            Height = 30,
-            ColumnCount = 2,
-        };
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
-        row.Controls.Add(_pathTextBox, 0, 0);
-        row.Controls.Add(_browseButton, 1, 0);
-        picker.Controls.Add(row);
-        return picker;
-    }
-
-    private Control CreateOptionsGroup()
-    {
-        FlowLayoutPanel panel = new()
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            Margin = new Padding(0, 0, 0, 10),
-        };
-        panel.Controls.Add(_traceCheck);
-        panel.Controls.Add(_tracePathTextBox);
-        panel.Controls.Add(_dumpMmio);
-        panel.Controls.Add(_dumpRegisters);
-        panel.Controls.Add(_fastForwardIdle);
-        panel.Controls.Add(_memoryCardA);
-        panel.Controls.Add(_memoryCardB);
-        return panel;
-    }
-
-    private Control CreateRunButtons()
-    {
-        TableLayoutPanel row = new()
-        {
-            Dock = DockStyle.Top,
-            Height = 40,
-            ColumnCount = 3,
-            Margin = new Padding(0, 8, 0, 12),
-        };
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-        row.Controls.Add(_runButton, 0, 0);
-        row.Controls.Add(_cancelButton, 1, 0);
-        row.Controls.Add(_clearButton, 2, 0);
-        return row;
-    }
-
-    private static Label CreateSectionLabel(string text)
+    private static Label CreateInlineLabel(string text)
     {
         return new Label
         {
             Text = text,
-            Dock = DockStyle.Top,
-            AutoSize = true,
+            Dock = DockStyle.Fill,
+            AutoSize = false,
+            TextAlign = ContentAlignment.MiddleLeft,
             ForeColor = Color.FromArgb(190, 196, 206),
             Font = new Font("Segoe UI", 8.75f, FontStyle.Bold),
-            Margin = new Padding(0, 0, 0, 4),
+            Margin = new Padding(4, 0, 4, 0),
         };
-    }
-
-    private static Control CreateLabeledControl(string label, Control control)
-    {
-        TableLayoutPanel panel = new()
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            ColumnCount = 1,
-            Margin = new Padding(0, 0, 0, 10),
-        };
-        panel.Controls.Add(CreateSectionLabel(label));
-        panel.Controls.Add(control);
-        return panel;
-    }
-
-    private void AddControlRow(Control control, bool fill = false)
-    {
-        _controlPanel.RowStyles.Add(new RowStyle(fill ? SizeType.Percent : SizeType.AutoSize, fill ? 100 : 0));
-        _controlPanel.Controls.Add(control, 0, _controlPanel.RowCount++);
     }
 
     private void BuildContentArea()
@@ -460,32 +507,86 @@ public sealed class MainForm : Form
         _screenPanel.Controls.Add(_screen);
         _rightSplit.Panel1.Controls.Add(_screenPanel);
 
-        TabPage outputPage = new("Output");
+        TabPage outputPage = new("Output") { Name = "Output" };
         outputPage.Controls.Add(_output);
-        TabPage advancedPage = new("Advanced Options");
-        advancedPage.Controls.Add(_additionalArgs);
-        TabPage commandPage = new("Command Preview");
+        TabPage telemetryPage = new("Telemetry") { Name = "Telemetry" };
+        telemetryPage.Controls.Add(_telemetryOutput);
+        TabPage advancedPage = new("Advanced Options") { Name = "Advanced Options" };
+        advancedPage.Controls.Add(CreateAdvancedOptionsPanel());
+        TabPage commandPage = new("Command Preview") { Name = "Command Preview" };
         commandPage.Controls.Add(_commandPreview);
         _bottomTabs.TabPages.Add(outputPage);
+        _bottomTabs.TabPages.Add(telemetryPage);
         _bottomTabs.TabPages.Add(advancedPage);
         _bottomTabs.TabPages.Add(commandPage);
         _rightSplit.Panel2.Controls.Add(_bottomTabs);
     }
 
+    private Control CreateAdvancedOptionsPanel()
+    {
+        TableLayoutPanel panel = new()
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 8,
+            Padding = new Padding(8),
+            BackColor = Color.FromArgb(18, 18, 18),
+        };
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        panel.Controls.Add(CreateInlineLabel("Max instructions"), 0, 0);
+        panel.Controls.Add(_maxInstructionsInput, 0, 1);
+        panel.Controls.Add(CreateInlineLabel("Live capture cadence (video frames)"), 0, 2);
+        panel.Controls.Add(_frameCaptureStrideInput, 0, 3);
+        panel.Controls.Add(CreateInlineLabel("Trace path"), 0, 4);
+        panel.Controls.Add(_tracePathTextBox, 0, 5);
+        panel.Controls.Add(CreateInlineLabel("Additional command-line arguments"), 0, 6);
+        panel.Controls.Add(_additionalArgs, 0, 7);
+        return panel;
+    }
+
     private object[] BuildPresets()
     {
+        string? sonicPath = FindWorkspaceFile("Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz");
+        string? pikminPath = FindWorkspaceFile("Pikmin (USA).rvz");
+        string? marioKartDebugPath = FindWorkspaceFile("Mario Kart - Double Dash!! (USA) (Debug).rvz");
+        string? xfbSmokePath = FindWorkspaceFile("fixtures", "devkitpro", "xfb-smoke", "xfb-smoke.dol");
+
         return
         [
-            new DesktopPreset("Custom", "Run DOL", null, 1_000_000, MemoryCardA: false, MemoryCardB: false, "None", string.Empty),
-            new DesktopPreset("Quick DOL smoke - 1M", "Run DOL", FindWorkspaceFile("fixtures", "devkitpro", "xfb-smoke", "xfb-smoke.dol"), 1_000_000, MemoryCardA: false, MemoryCardB: false, "None", string.Empty),
-            new DesktopPreset("One frame-ish - 8M", "Run Disc", FindWorkspaceFile("Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz"), 8_000_000, MemoryCardA: true, MemoryCardB: false, "A", string.Empty),
-            new DesktopPreset("Retail boot probe - 20M", "Run Disc", FindWorkspaceFile("Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz"), 20_000_000, MemoryCardA: true, MemoryCardB: false, "A", string.Empty),
-            new DesktopPreset("Sonic Sega splash - 35M", "Run Disc", FindWorkspaceFile("Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz"), 35_000_000, MemoryCardA: true, MemoryCardB: false, "A", "--gx-frame-source largest-display-copy"),
-            new DesktopPreset("Sonic resource flag watch - 35M", "Run Disc", FindWorkspaceFile("Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz"), 35_000_000, MemoryCardA: true, MemoryCardB: false, "A", "--watch-write-range 0x803ADCE0 0x4 --watch-write-after 0x01C00000 --stop-after-write-watch 12 --watch-limit 24 --trace-pc-after 0x01C00000 --profile-after 0x01C00000 --profile-pc 24"),
-            new DesktopPreset("Pikmin boot probe - 20M", "Run Disc", FindWorkspaceFile("Pikmin (USA).rvz"), 20_000_000, MemoryCardA: true, MemoryCardB: false, "None", "--gx-frame-source largest-display-copy"),
-            new DesktopPreset("Mario Kart Debug startup - 5M", "Run Disc", FindWorkspaceFile("Mario Kart - Double Dash!! (USA) (Debug).rvz"), 5_000_000, MemoryCardA: true, MemoryCardB: false, "None", string.Empty),
-            new DesktopPreset("Deep retail probe - 50M", "Run Disc", FindWorkspaceFile("Sonic Adventure 2 - Battle (USA) (En,Ja,Fr,De,Es).rvz"), 50_000_000, MemoryCardA: true, MemoryCardB: false, "A", "--gx-frame-source largest-display-copy"),
+            new DesktopPreset("Custom", "Run Disc", null, DesktopDefaultMaxInstructions, MemoryCardA: true, MemoryCardB: false, "None", string.Empty),
+            new DesktopPreset("Play Sonic Adventure 2 Battle", "Run Disc", sonicPath, DesktopDefaultMaxInstructions, MemoryCardA: true, MemoryCardB: false, "None", string.Empty),
+            new DesktopPreset("Play Pikmin", "Run Disc", pikminPath, DesktopDefaultMaxInstructions, MemoryCardA: true, MemoryCardB: false, "None", string.Empty),
+            new DesktopPreset("Play Mario Kart Double Dash Debug", "Run Disc", marioKartDebugPath, DesktopDefaultMaxInstructions, MemoryCardA: true, MemoryCardB: false, "None", string.Empty),
+            new DesktopPreset("Dev: Quick DOL smoke - 1M", "Run DOL", xfbSmokePath, 1_000_000, MemoryCardA: false, MemoryCardB: false, "None", string.Empty),
+            new DesktopPreset("Dev: Sonic boot probe - 20M", "Run Disc", sonicPath, 20_000_000, MemoryCardA: true, MemoryCardB: false, "A", string.Empty),
+            new DesktopPreset("Dev: Sonic Sega splash - 35M", "Run Disc", sonicPath, 35_000_000, MemoryCardA: true, MemoryCardB: false, "A", "--gx-frame-source largest-display-copy"),
+            new DesktopPreset("Dev: Sonic resource flag watch - 35M", "Run Disc", sonicPath, 35_000_000, MemoryCardA: true, MemoryCardB: false, "A", "--watch-write-range 0x803ADCE0 0x4 --watch-write-after 0x01C00000 --stop-after-write-watch 12 --watch-limit 24 --trace-pc-after 0x01C00000 --profile-after 0x01C00000 --profile-pc 24"),
+            new DesktopPreset("Dev: Pikmin boot probe - 20M", "Run Disc", pikminPath, 20_000_000, MemoryCardA: true, MemoryCardB: false, "None", "--gx-frame-source largest-display-copy"),
+            new DesktopPreset("Dev: Mario Kart Debug startup - 5M", "Run Disc", marioKartDebugPath, 5_000_000, MemoryCardA: true, MemoryCardB: false, "None", string.Empty),
+            new DesktopPreset("Dev: Deep Sonic visual probe - 50M", "Run Disc", sonicPath, 50_000_000, MemoryCardA: true, MemoryCardB: false, "A", "--gx-frame-source largest-display-copy"),
         ];
+    }
+
+    private int SelectInitialPresetIndex()
+    {
+        for (int index = 0; index < _presetSelector.Items.Count; index++)
+        {
+            if (_presetSelector.Items[index] is DesktopPreset { Path: not null } preset
+                && preset.Name.StartsWith("Play ", StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+
+        return 0;
     }
 
     private void UpdateModeState()
@@ -497,6 +598,7 @@ public sealed class MainForm : Form
         _maxInstructionsInput.Enabled = runMode;
         _traceCheck.Enabled = runMode;
         _tracePathTextBox.Enabled = runMode && _traceCheck.Checked;
+        _frameCaptureStrideInput.Enabled = runMode && _liveFrameCaptureMenuItem.Checked;
         _dumpMmio.Enabled = runMode;
         _dumpRegisters.Enabled = runMode;
         _fastForwardIdle.Enabled = runMode;
@@ -505,6 +607,16 @@ public sealed class MainForm : Form
         _controllerButtons.Enabled = runMode;
         _additionalArgs.Enabled = runMode;
         _runButton.Text = runMode ? "Run" : "Inspect";
+        _runMenuItem.Text = _runButton.Text;
+        _traceMenuItem.Enabled = runMode;
+        _verboseOutputMenuItem.Enabled = runMode;
+        _liveFrameCaptureMenuItem.Enabled = runMode;
+        _dumpMmioMenuItem.Enabled = runMode;
+        _dumpRegistersMenuItem.Enabled = runMode;
+        _fastForwardIdleMenuItem.Enabled = runMode;
+        _memoryCardAMenuItem.Enabled = runMode && discMode;
+        _memoryCardBMenuItem.Enabled = runMode && discMode;
+        _controllerMenu.Enabled = runMode;
 
         if (!discMode)
         {
@@ -516,7 +628,37 @@ public sealed class MainForm : Form
             _memoryCardA.Checked = true;
         }
 
+        SyncMenuItemsFromControls();
         UpdateCommandPreview();
+    }
+
+    private void SyncMenuItemsFromControls()
+    {
+        SetMenuChecked(_traceMenuItem, _traceCheck.Checked);
+        SetMenuChecked(_dumpMmioMenuItem, _dumpMmio.Checked);
+        SetMenuChecked(_dumpRegistersMenuItem, _dumpRegisters.Checked);
+        SetMenuChecked(_fastForwardIdleMenuItem, _fastForwardIdle.Checked);
+        SetMenuChecked(_memoryCardAMenuItem, _memoryCardA.Checked);
+        SetMenuChecked(_memoryCardBMenuItem, _memoryCardB.Checked);
+
+        foreach (ToolStripMenuItem item in _controllerMenu.DropDownItems.OfType<ToolStripMenuItem>())
+        {
+            SetMenuChecked(item, string.Equals(item.Text, _controllerButtons.Text, StringComparison.Ordinal));
+        }
+    }
+
+    private static void SetMenuChecked(ToolStripMenuItem item, bool isChecked)
+    {
+        if (item.Checked != isChecked)
+        {
+            item.Checked = isChecked;
+        }
+    }
+
+    private void SelectCommandAndRun(string commandName)
+    {
+        _commandSelector.SelectedItem = commandName;
+        OnRunClicked(this, EventArgs.Empty);
     }
 
     private bool IsRunMode => _commandSelector.SelectedItem is "Run DOL" or "Run Disc";
@@ -569,6 +711,11 @@ public sealed class MainForm : Form
             _additionalArgs.Text = preset.AdditionalArguments;
             _fastForwardIdle.Checked = true;
             _traceCheck.Checked = false;
+            _liveFrameCaptureMenuItem.Checked = true;
+            _frameCaptureStrideInput.Value = 2;
+            _verboseOutputMenuItem.Checked = false;
+            _dumpMmio.Checked = false;
+            _dumpRegisters.Checked = false;
             _tracePathTextBox.Clear();
         }
         finally
@@ -583,6 +730,7 @@ public sealed class MainForm : Form
     {
         _pathTextBox.TextChanged += OnManualRunSettingChanged;
         _maxInstructionsInput.ValueChanged += OnManualRunSettingChanged;
+        _frameCaptureStrideInput.ValueChanged += OnManualRunSettingChanged;
         _traceCheck.CheckedChanged += OnManualRunSettingChanged;
         _tracePathTextBox.TextChanged += OnManualRunSettingChanged;
         _dumpMmio.CheckedChanged += OnManualRunSettingChanged;
@@ -601,6 +749,7 @@ public sealed class MainForm : Form
             MarkCustomPreset();
         }
 
+        SyncMenuItemsFromControls();
         UpdateCommandPreview();
     }
 
@@ -634,7 +783,7 @@ public sealed class MainForm : Form
         using CancellationTokenSource cancellation = new();
         _activeRunCancellation = cancellation;
         SetBusyState(isBusy: true);
-        StartScreenCapture();
+        StartScreenCapture(request.LiveFrameCapture);
         AppendOutput($"{Environment.NewLine}--- {DateTime.Now:G} {request.CommandName} ---{Environment.NewLine}");
         AppendOutput($"Artifacts: {request.ArtifactDirectory}{Environment.NewLine}");
         AppendOutput($"Command: {FormatCommandPreview(request, request.ArtifactDirectory)}{Environment.NewLine}");
@@ -687,6 +836,9 @@ public sealed class MainForm : Form
             (int)_maxInstructionsInput.Value,
             _traceCheck.Checked,
             _tracePathTextBox.Text.Trim(),
+            _verboseOutputMenuItem.Checked,
+            _liveFrameCaptureMenuItem.Checked,
+            (int)_frameCaptureStrideInput.Value,
             _dumpMmio.Checked,
             _dumpRegisters.Checked,
             _fastForwardIdle.Checked,
@@ -717,6 +869,9 @@ public sealed class MainForm : Form
             (int)_maxInstructionsInput.Value,
             _traceCheck.Checked,
             _tracePathTextBox.Text.Trim(),
+            _verboseOutputMenuItem.Checked,
+            _liveFrameCaptureMenuItem.Checked,
+            (int)_frameCaptureStrideInput.Value,
             _dumpMmio.Checked,
             _dumpRegisters.Checked,
             _fastForwardIdle.Checked,
@@ -744,6 +899,7 @@ public sealed class MainForm : Form
         _commandSelector.Enabled = !isBusy;
         _pathTextBox.Enabled = !isBusy;
         _maxInstructionsInput.Enabled = !isBusy && IsRunMode;
+        _frameCaptureStrideInput.Enabled = !isBusy && IsRunMode && _liveFrameCaptureMenuItem.Checked;
         _traceCheck.Enabled = !isBusy && IsRunMode;
         _tracePathTextBox.Enabled = !isBusy && IsRunMode && _traceCheck.Checked;
         _dumpMmio.Enabled = !isBusy && IsRunMode;
@@ -754,6 +910,19 @@ public sealed class MainForm : Form
         _controllerButtons.Enabled = !isBusy && IsRunMode;
         _additionalArgs.Enabled = !isBusy && IsRunMode;
         _statusLabel.Text = isBusy ? "Running..." : _statusLabel.Text;
+        _runMenuItem.Enabled = !isBusy;
+        _cancelRunMenuItem.Enabled = isBusy;
+        _clearOutputMenuItem.Enabled = !isBusy;
+        _presetsMenu.Enabled = !isBusy;
+        _traceMenuItem.Enabled = !isBusy && IsRunMode;
+        _verboseOutputMenuItem.Enabled = !isBusy && IsRunMode;
+        _liveFrameCaptureMenuItem.Enabled = !isBusy && IsRunMode;
+        _dumpMmioMenuItem.Enabled = !isBusy && IsRunMode;
+        _dumpRegistersMenuItem.Enabled = !isBusy && IsRunMode;
+        _fastForwardIdleMenuItem.Enabled = !isBusy && IsRunMode;
+        _memoryCardAMenuItem.Enabled = !isBusy && IsRunMode && IsDiscMode;
+        _memoryCardBMenuItem.Enabled = !isBusy && IsRunMode && IsDiscMode;
+        _controllerMenu.Enabled = !isBusy && IsRunMode;
     }
 
     private void SetStatus(string message)
@@ -792,20 +961,29 @@ public sealed class MainForm : Form
             return false;
         }
         RunDolOptions runOptions = options!;
+        DesktopRunTelemetry telemetry = DesktopRunTelemetry.Start(request);
 
         AppendOutput($"Starting run-dol for: {request.Path}\n");
         DolFile dol = DolFile.Load(request.Path);
         GameCubeBus bus = new();
         GameCubeStandaloneBoot.PrepareMemory(bus.Memory);
-        DolRunner runner = new(CreateWriter(), CreateWriter());
+        using CountingTextWriter outputWriter = CreateOutputWriter(request);
+        DolRunner runner = new(outputWriter, CreateWriter());
         EmulationFrameCapture frameCapture = new(
             runOptions.FrameAddress,
             runOptions.FrameWidth ?? DefaultFrameWidth,
             runOptions.FrameHeight ?? DefaultFrameHeight,
-            runOptions.FrameFormat);
-        int executed = runner.Run(dol, runOptions, bus, step => CaptureFrameFromStep(step, frameCapture), cancellationToken);
-        AppendOutput($"run-dol completed: {executed} instructions\n");
-        return true;
+            runOptions.FrameFormat,
+            request.FrameCaptureStride);
+        Action<DolRunStep>? stepObserver = request.LiveFrameCapture
+            ? step => CaptureFrameFromStep(step, frameCapture, telemetry)
+            : null;
+        int exitCode = runner.Run(dol, runOptions, bus, stepObserver, cancellationToken);
+        telemetry.Finish(exitCode, outputWriter.BytesWritten, frameCapture);
+        AppendTelemetry(telemetry.FormatSummary());
+        AppendOutput(telemetry.FormatSummary());
+        AppendOutput($"run-dol exited with code {exitCode}\n");
+        return exitCode == 0;
     }
 
     private bool ExecuteRunDisc(RunCommandRequest request, CancellationToken cancellationToken)
@@ -815,6 +993,7 @@ public sealed class MainForm : Form
             return false;
         }
         RunDolOptions runOptions = options!;
+        DesktopRunTelemetry telemetry = DesktopRunTelemetry.Start(request);
 
         AppendOutput($"Starting run-disc for: {request.Path}\n");
         using DiscImageReader reader = DiscImageReader.Open(request.Path);
@@ -825,11 +1004,19 @@ public sealed class MainForm : Form
             runOptions.FrameAddress,
             runOptions.FrameWidth ?? DefaultFrameWidth,
             runOptions.FrameHeight ?? DefaultFrameHeight,
-            runOptions.FrameFormat);
-        DolRunner runner = new(CreateWriter(), CreateWriter());
-        int executed = runner.Run(dol, runOptions, bus, step => CaptureFrameFromStep(step, frameCapture), cancellationToken);
-        AppendOutput($"run-disc completed: {executed} instructions\n");
-        return true;
+            runOptions.FrameFormat,
+            request.FrameCaptureStride);
+        using CountingTextWriter outputWriter = CreateOutputWriter(request);
+        DolRunner runner = new(outputWriter, CreateWriter());
+        Action<DolRunStep>? stepObserver = request.LiveFrameCapture
+            ? step => CaptureFrameFromStep(step, frameCapture, telemetry)
+            : null;
+        int exitCode = runner.Run(dol, runOptions, bus, stepObserver, cancellationToken);
+        telemetry.Finish(exitCode, outputWriter.BytesWritten, frameCapture);
+        AppendTelemetry(telemetry.FormatSummary());
+        AppendOutput(telemetry.FormatSummary());
+        AppendOutput($"run-disc exited with code {exitCode}\n");
+        return exitCode == 0;
     }
 
     private bool TryBuildRunOptions(string command, RunCommandRequest request, out RunDolOptions? options)
@@ -862,8 +1049,16 @@ public sealed class MainForm : Form
 
         args.Add("--run-summary");
         args.Add(Path.Combine(artifactDirectory, "run-summary.json"));
-        args.Add("--dump-gx-frame");
-        args.Add(Path.Combine(artifactDirectory, "gx-frame.png"));
+        if (!request.VerboseRunnerOutput)
+        {
+            args.Add("--quiet");
+        }
+
+        if (ShouldAddDefaultGxFrameDump(request.AdditionalArguments))
+        {
+            args.Add("--dump-gx-frame");
+            args.Add(Path.Combine(artifactDirectory, "gx-frame.png"));
+        }
 
         if (request.TraceEnabled)
         {
@@ -907,6 +1102,20 @@ public sealed class MainForm : Form
 
         args.AddRange(request.AdditionalArguments);
         return args;
+    }
+
+    private static bool ShouldAddDefaultGxFrameDump(IReadOnlyList<string> additionalArguments)
+    {
+        if (additionalArguments.Any(static arg => string.Equals(arg, "--dump-gx-frame", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return additionalArguments.Any(static arg =>
+            string.Equals(arg, "--gx-frame-source", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(arg, "--gx-frame-copy-index", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(arg, "--gx-frame-max-draws", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(arg, "--gx-frame-skip-draws", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string FormatCommandPreview(RunCommandRequest request, string artifactDirectory)
@@ -1069,15 +1278,68 @@ public sealed class MainForm : Form
             return;
         }
 
+        if (text.Length > MaxOutputCharacters)
+        {
+            text = text[^MaxOutputCharacters..];
+        }
+
         if (InvokeRequired)
         {
+            if (IsDisposed || !IsHandleCreated)
+            {
+                return;
+            }
+
             BeginInvoke(new Action<string>(AppendOutput), text);
             return;
         }
 
         _output.AppendText(text);
+        TrimOutputIfNeeded();
         _output.SelectionStart = _output.TextLength;
         _output.ScrollToCaret();
+    }
+
+    private void TrimOutputIfNeeded()
+    {
+        int overflow = _output.TextLength - MaxOutputCharacters;
+        if (overflow <= 0)
+        {
+            return;
+        }
+
+        int trimCharacters = Math.Max(overflow, _output.TextLength - OutputTrimTargetCharacters);
+        _output.Select(0, trimCharacters);
+        _output.SelectedText = string.Empty;
+    }
+
+    private void AppendTelemetry(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            if (IsDisposed || !IsHandleCreated)
+            {
+                return;
+            }
+
+            BeginInvoke(new Action<string>(AppendTelemetry), text);
+            return;
+        }
+
+        _telemetryOutput.AppendText(text);
+        _telemetryOutput.SelectionStart = _telemetryOutput.TextLength;
+        _telemetryOutput.ScrollToCaret();
+    }
+
+    private void ClearLogs()
+    {
+        _output.Clear();
+        _telemetryOutput.Clear();
     }
 
     private void OnScreenFrameTick(object? sender, EventArgs e)
@@ -1099,8 +1361,14 @@ public sealed class MainForm : Form
         old?.Dispose();
     }
 
-    private void CaptureFrameFromStep(DolRunStep step, EmulationFrameCapture frameCapture)
+    private void CaptureFrameFromStep(DolRunStep step, EmulationFrameCapture frameCapture, DesktopRunTelemetry telemetry)
     {
+        telemetry.ObserveStep(step);
+        if (!ShouldPollLiveFrameCapture(step))
+        {
+            return;
+        }
+
         if (!frameCapture.TryCapture(step.Bus, out Bitmap? frame))
         {
             return;
@@ -1113,11 +1381,18 @@ public sealed class MainForm : Form
         }
     }
 
-    private void StartScreenCapture()
+    private static bool ShouldPollLiveFrameCapture(DolRunStep step)
+    {
+        return step.IsInitial
+            || step.IsFinal
+            || step.ExecutedInstructions % LiveFrameCapturePollInstructions == 0;
+    }
+
+    private void StartScreenCapture(bool enabled)
     {
         if (InvokeRequired)
         {
-            BeginInvoke(new Action(StartScreenCapture));
+            BeginInvoke(new Action<bool>(StartScreenCapture), enabled);
             return;
         }
 
@@ -1133,7 +1408,10 @@ public sealed class MainForm : Form
             _screen.Image = null;
         }
 
-        _screenUpdateTimer.Start();
+        if (enabled)
+        {
+            _screenUpdateTimer.Start();
+        }
     }
 
     private void StopScreenCapture()
@@ -1157,9 +1435,14 @@ public sealed class MainForm : Form
         uint? explicitAddress,
         int width,
         int height,
-        FramebufferPixelFormat format)
+        FramebufferPixelFormat format,
+        int frameStride)
     {
         private ulong _lastFrame = ulong.MaxValue;
+
+        public int ObservedFrames { get; private set; }
+
+        public int CapturedFrames { get; private set; }
 
         public bool TryCapture(GameCubeBus bus, out Bitmap? frame)
         {
@@ -1171,6 +1454,11 @@ public sealed class MainForm : Form
             }
 
             _lastFrame = frameCounter;
+            ObservedFrames++;
+            if (frameStride > 1 && frameCounter % (ulong)frameStride != 0)
+            {
+                return false;
+            }
 
             if (!TryResolveFramebufferAddress(bus, out uint address, out int resolvedWidth, out int resolvedHeight, out FramebufferPixelFormat resolvedFormat))
             {
@@ -1186,6 +1474,7 @@ public sealed class MainForm : Form
             {
                 byte[] rgb = FramebufferDumper.CaptureRgb(bus.Memory, address, resolvedWidth, resolvedHeight, resolvedFormat);
                 frame = CreateBitmapFromRgb(rgb, resolvedWidth, resolvedHeight);
+                CapturedFrames++;
                 return true;
             }
             catch (AddressTranslationException)
@@ -1319,6 +1608,241 @@ public sealed class MainForm : Form
             5 => "zstd",
             _ => $"unknown ({value})",
         };
+    }
+
+    private sealed class DesktopRunTelemetry
+    {
+        private const int MemorySampleIntervalInstructions = 1_000_000;
+
+        private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+        private readonly long _startAllocatedBytes = GC.GetTotalAllocatedBytes(precise: false);
+        private readonly long _startManagedBytes = GC.GetTotalMemory(forceFullCollection: false);
+        private readonly string _summaryPath;
+        private readonly bool _liveFrameCapture;
+        private readonly int _frameCaptureStride;
+        private readonly bool _verboseRunnerOutput;
+        private long _nextMemorySampleInstruction = MemorySampleIntervalInstructions;
+
+        private DesktopRunTelemetry(RunCommandRequest request)
+        {
+            _summaryPath = Path.Combine(request.ArtifactDirectory, "run-summary.json");
+            _liveFrameCapture = request.LiveFrameCapture;
+            _frameCaptureStride = request.FrameCaptureStride;
+            _verboseRunnerOutput = request.VerboseRunnerOutput;
+            PeakManagedBytes = _startManagedBytes;
+        }
+
+        public long LastObservedInstructions { get; private set; }
+
+        public long ExecutedInstructions { get; private set; }
+
+        public long AllocatedBytes { get; private set; }
+
+        public long EndManagedBytes { get; private set; }
+
+        public long PeakManagedBytes { get; private set; }
+
+        public long RunnerStdoutBytes { get; private set; }
+
+        public int ExitCode { get; private set; }
+
+        public int ObservedFrames { get; private set; }
+
+        public int CapturedFrames { get; private set; }
+
+        public string? StopReason { get; private set; }
+
+        public double? SummaryTotalMilliseconds { get; private set; }
+
+        public double? SummaryEmulationMilliseconds { get; private set; }
+
+        public TimeSpan Elapsed => _stopwatch.Elapsed;
+
+        public static DesktopRunTelemetry Start(RunCommandRequest request) => new(request);
+
+        public void ObserveStep(DolRunStep step)
+        {
+            LastObservedInstructions = Math.Max(LastObservedInstructions, step.ExecutedInstructions);
+            if (step.IsInitial || (step.ExecutedInstructions < _nextMemorySampleInstruction && !step.IsFinal))
+            {
+                return;
+            }
+
+            SampleManagedMemory();
+            while (_nextMemorySampleInstruction <= step.ExecutedInstructions)
+            {
+                _nextMemorySampleInstruction += MemorySampleIntervalInstructions;
+            }
+        }
+
+        public void Finish(int exitCode, long runnerStdoutBytes, EmulationFrameCapture frameCapture)
+        {
+            _stopwatch.Stop();
+            ExitCode = exitCode;
+            RunnerStdoutBytes = runnerStdoutBytes;
+            ObservedFrames = frameCapture.ObservedFrames;
+            CapturedFrames = frameCapture.CapturedFrames;
+            SampleManagedMemory();
+            AllocatedBytes = Math.Max(0, GC.GetTotalAllocatedBytes(precise: false) - _startAllocatedBytes);
+            EndManagedBytes = GC.GetTotalMemory(forceFullCollection: false);
+            PeakManagedBytes = Math.Max(PeakManagedBytes, EndManagedBytes);
+
+            if (TryReadRunSummary(_summaryPath, out RunSummaryInfo summary))
+            {
+                ExecutedInstructions = summary.ExecutedInstructions ?? LastObservedInstructions;
+                StopReason = summary.StopReason;
+                SummaryTotalMilliseconds = summary.TotalMilliseconds;
+                SummaryEmulationMilliseconds = summary.EmulationMilliseconds;
+            }
+            else
+            {
+                ExecutedInstructions = LastObservedInstructions;
+            }
+        }
+
+        public string FormatSummary()
+        {
+            double elapsedSeconds = Math.Max(Elapsed.TotalSeconds, 0.001);
+            double mips = ExecutedInstructions / elapsedSeconds / 1_000_000.0;
+            string capture = _liveFrameCapture
+                ? $"{CapturedFrames}/{ObservedFrames} frames captured, stride {_frameCaptureStride}"
+                : "live capture off";
+            string stdoutMode = _verboseRunnerOutput ? "shown" : "suppressed";
+            string coreTiming = SummaryEmulationMilliseconds is double emulationMs
+                ? $", core emu {emulationMs:N1} ms"
+                : string.Empty;
+
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"Telemetry: {Elapsed.TotalSeconds:N2}s wall, {ExecutedInstructions:N0} instr, {mips:N2} MIPS, {capture}, allocated {FormatBytes(AllocatedBytes)}, managed {FormatBytes(_startManagedBytes)} -> {FormatBytes(EndManagedBytes)} peak {FormatBytes(PeakManagedBytes)}, runner stdout {FormatBytes(RunnerStdoutBytes)} {stdoutMode}, exit {ExitCode}, stop {StopReason ?? "unknown"}{coreTiming}{Environment.NewLine}");
+        }
+
+        private void SampleManagedMemory()
+        {
+            PeakManagedBytes = Math.Max(PeakManagedBytes, GC.GetTotalMemory(forceFullCollection: false));
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            string[] units = ["B", "KB", "MB", "GB"];
+            double value = bytes;
+            int unitIndex = 0;
+            while (value >= 1024 && unitIndex < units.Length - 1)
+            {
+                value /= 1024;
+                unitIndex++;
+            }
+
+            return $"{value:N1} {units[unitIndex]}";
+        }
+
+        private static bool TryReadRunSummary(string path, out RunSummaryInfo summary)
+        {
+            summary = default;
+            if (!File.Exists(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                using FileStream stream = File.OpenRead(path);
+                using JsonDocument document = JsonDocument.Parse(stream);
+                JsonElement root = document.RootElement;
+                long? executedInstructions = TryGetInt64(root, "executedInstructions");
+                string? stopReason = TryGetString(root, "stopReason");
+                double? totalMs = null;
+                double? emulationMs = null;
+                if (root.TryGetProperty("timings", out JsonElement timings))
+                {
+                    totalMs = TryGetDouble(timings, "totalMs");
+                    emulationMs = TryGetDouble(timings, "emulationMs");
+                }
+
+                summary = new RunSummaryInfo(executedInstructions, stopReason, totalMs, emulationMs);
+                return true;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
+        private static long? TryGetInt64(JsonElement element, string propertyName)
+        {
+            return element.TryGetProperty(propertyName, out JsonElement property) && property.TryGetInt64(out long value)
+                ? value
+                : null;
+        }
+
+        private static double? TryGetDouble(JsonElement element, string propertyName)
+        {
+            return element.TryGetProperty(propertyName, out JsonElement property) && property.TryGetDouble(out double value)
+                ? value
+                : null;
+        }
+
+        private static string? TryGetString(JsonElement element, string propertyName)
+        {
+            return element.TryGetProperty(propertyName, out JsonElement property) && property.ValueKind == JsonValueKind.String
+                ? property.GetString()
+                : null;
+        }
+
+        private readonly record struct RunSummaryInfo(
+            long? ExecutedInstructions,
+            string? StopReason,
+            double? TotalMilliseconds,
+            double? EmulationMilliseconds);
+    }
+
+    private sealed class CountingTextWriter(TextWriter inner) : TextWriter
+    {
+        public override Encoding Encoding => inner.Encoding;
+
+        public long BytesWritten { get; private set; }
+
+        public override void Write(char value)
+        {
+            BytesWritten += Encoding.GetByteCount(value.ToString());
+            inner.Write(value);
+        }
+
+        public override void Write(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return;
+            }
+
+            BytesWritten += Encoding.GetByteCount(value);
+            inner.Write(value);
+        }
+
+        public override void WriteLine(string? value)
+        {
+            Write(value);
+            Write(Environment.NewLine);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                inner.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+
+    private CountingTextWriter CreateOutputWriter(RunCommandRequest request)
+    {
+        return new CountingTextWriter(request.VerboseRunnerOutput ? CreateWriter() : TextWriter.Null);
     }
 
     private UiTextWriter CreateWriter()

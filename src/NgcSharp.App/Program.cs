@@ -17,6 +17,7 @@ try
         "disc-info" => PrintDiscInfo(args),
         "disc-files" => PrintDiscFiles(args),
         "disc-read" => ReadDiscBytes(args),
+        "disc-read-bin" => ReadDiscBytesToFile(args),
         "disc-disasm" => DisassembleDiscMemory(args),
         "disc-dump-memory" => DumpDiscMemory(args),
         "disc-find-dform" => FindDiscDFormInstructions(args),
@@ -24,6 +25,7 @@ try
         "disc-find-word" => FindDiscWord(args),
         "diagnose-disc" => DiagnoseDisc(args),
         "dol-info" => PrintDolInfo(args),
+        "prs-decode" => DecodePrsFile(args),
         "compare-images" => CompareImages(args),
         "run-dol" => RunDol(args),
         "run-disc" => RunDisc(args),
@@ -125,6 +127,28 @@ static int ReadDiscBytes(string[] args)
         Console.WriteLine();
     }
 
+    return 0;
+}
+
+static int ReadDiscBytesToFile(string[] args)
+{
+    if (args.Length < 5 || !TryParseUInt32(args[2], out uint offset) || !TryParseInt32(args[3], out int size) || size < 0)
+    {
+        Console.Error.WriteLine("Usage: ngcsharp disc-read-bin <path-to-iso-gcm-rvz> <offset> <size> <output-path>");
+        return 1;
+    }
+
+    using DiscImageReader reader = DiscImageReader.Open(args[1]);
+    byte[] bytes = reader.ReadBytes(offset, size);
+    string fullPath = Path.GetFullPath(args[4]);
+    string? directory = Path.GetDirectoryName(fullPath);
+    if (!string.IsNullOrEmpty(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    File.WriteAllBytes(fullPath, bytes);
+    Console.WriteLine($"Wrote {bytes.Length} byte(s) from disc offset 0x{offset:X8} to {fullPath}.");
     return 0;
 }
 
@@ -288,20 +312,20 @@ static bool TryGetBranchTarget(uint address, uint instruction, out uint target)
     switch (opcode)
     {
         case 16:
-        {
-            int displacement = (short)(instruction & 0xFFFC);
-            bool absolute = (instruction & 0x2) != 0;
-            target = absolute ? unchecked((uint)displacement) : unchecked(address + (uint)displacement);
-            return true;
-        }
+            {
+                int displacement = (short)(instruction & 0xFFFC);
+                bool absolute = (instruction & 0x2) != 0;
+                target = absolute ? unchecked((uint)displacement) : unchecked(address + (uint)displacement);
+                return true;
+            }
 
         case 18:
-        {
-            int displacement = SignExtend26(instruction & 0x03FF_FFFC);
-            bool absolute = (instruction & 0x2) != 0;
-            target = absolute ? unchecked((uint)displacement) : unchecked(address + (uint)displacement);
-            return true;
-        }
+            {
+                int displacement = SignExtend26(instruction & 0x03FF_FFFC);
+                bool absolute = (instruction & 0x2) != 0;
+                target = absolute ? unchecked((uint)displacement) : unchecked(address + (uint)displacement);
+                return true;
+            }
 
         default:
             return false;
@@ -413,6 +437,91 @@ static int CompareImages(string[] args)
     return 0;
 }
 
+static int DecodePrsFile(string[] args)
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("Usage: ngcsharp prs-decode <input-bin> <output-bin> [--offset <n>] [--slice <offset> <size> <output-bin>]");
+        return 1;
+    }
+
+    int sourceOffset = 0;
+    List<(int Offset, int Size, string Path)> slices = [];
+    for (int index = 3; index < args.Length; index++)
+    {
+        switch (args[index])
+        {
+            case "--offset":
+                if (index + 1 >= args.Length || !TryParseInt32(args[++index], out sourceOffset) || sourceOffset < 0)
+                {
+                    Console.Error.WriteLine("--offset requires a non-negative integer.");
+                    return 1;
+                }
+
+                break;
+            case "--slice":
+                if (index + 3 >= args.Length
+                    || !TryParseInt32(args[++index], out int sliceOffset)
+                    || !TryParseInt32(args[++index], out int sliceSize)
+                    || sliceOffset < 0
+                    || sliceSize < 0)
+                {
+                    Console.Error.WriteLine("--slice requires a non-negative offset, size, and output path.");
+                    return 1;
+                }
+
+                slices.Add((sliceOffset, sliceSize, args[++index]));
+                break;
+            default:
+                Console.Error.WriteLine($"Unknown prs-decode option '{args[index]}'.");
+                return 1;
+        }
+    }
+
+    byte[] input = File.ReadAllBytes(args[1]);
+    if (sourceOffset > input.Length)
+    {
+        Console.Error.WriteLine($"--offset 0x{sourceOffset:X} is beyond the input length 0x{input.Length:X}.");
+        return 1;
+    }
+
+    if (!SegaPrsDecoder.TryDecode(input.AsMemory(sourceOffset), out SegaPrsDecodeResult result, out string? failure))
+    {
+        Console.Error.WriteLine($"PRS decode failed: {failure}");
+        return 1;
+    }
+
+    WriteBinaryFile(args[2], result.Output);
+    Console.WriteLine($"Decoded 0x{result.Output.Length:X} byte(s) from 0x{result.SourceBytesConsumed:X} source byte(s) to {Path.GetFullPath(args[2])}.");
+
+    foreach ((int offset, int size, string path) in slices)
+    {
+        if (offset > result.Output.Length || size > result.Output.Length - offset)
+        {
+            Console.Error.WriteLine($"Slice 0x{offset:X}+0x{size:X} is outside decoded output length 0x{result.Output.Length:X}.");
+            return 1;
+        }
+
+        WriteBinaryFile(path, result.Output.AsSpan(offset, size));
+        Console.WriteLine($"Wrote decoded slice 0x{offset:X}+0x{size:X} to {Path.GetFullPath(path)}.");
+    }
+
+    Console.WriteLine($"Final flag byte: 0x{result.LastFlagByte:X2}; bits remaining: {result.BitsRemaining}.");
+    return 0;
+}
+
+static void WriteBinaryFile(string path, ReadOnlySpan<byte> bytes)
+{
+    string fullPath = Path.GetFullPath(path);
+    string? directory = Path.GetDirectoryName(fullPath);
+    if (!string.IsNullOrEmpty(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    File.WriteAllBytes(fullPath, bytes);
+}
+
 static int WriteTestDol(string[] args)
 {
     if (args.Length < 2)
@@ -441,6 +550,7 @@ static void PrintUsage()
     Console.WriteLine("  ngcsharp disc-info <path-to-iso-gcm-rvz>");
     Console.WriteLine("  ngcsharp disc-files <path-to-iso-gcm-rvz>");
     Console.WriteLine("  ngcsharp disc-read <path-to-iso-gcm-rvz> <offset> <size>");
+    Console.WriteLine("  ngcsharp disc-read-bin <path-to-iso-gcm-rvz> <offset> <size> <output-path>");
     Console.WriteLine("  ngcsharp disc-disasm <path-to-iso-gcm-rvz> <address> <instruction-count>");
     Console.WriteLine("  ngcsharp disc-dump-memory <path-to-iso-gcm-rvz> <address> <size>");
     Console.WriteLine("  ngcsharp disc-find-dform <path-to-iso-gcm-rvz> <opcode|load|store|any> <ra> <signed-displacement>");
@@ -448,10 +558,12 @@ static void PrintUsage()
     Console.WriteLine("  ngcsharp disc-find-word <path-to-iso-gcm-rvz> <value>");
     Console.WriteLine("  ngcsharp diagnose-disc <path-to-iso-gcm-rvz> [--max-instructions <n>] [--snapshot-interval <n>] [--probe-word <name> <addr>] [--out <directory>] [--name <label>]");
     Console.WriteLine("  ngcsharp dol-info <path-to-dol>");
+    Console.WriteLine("  ngcsharp prs-decode <input-bin> <output-bin> [--offset <n>] [--slice <offset> <size> <output-bin>]");
     Console.WriteLine("  ngcsharp compare-images <baseline-png> <candidate-png> [--diff <png-path>]");
-    Console.WriteLine($"  ngcsharp run-dol <path-to-dol> [--max-instructions <n>] [--trace] [--trace-file <path>] [--trace-tail <n>] [--dump-mmio] [--dump-threads] [--dump-message-queues] [--dump-memory <addr> <len>] [--dump-disasm <addr> <count>] [--dump-pointer-table <addr> <count> <stride> <ptr-offset> <target-words>] [--dump-frame <png-path>] [--dump-gx-frame <png-path>] [--dump-gx-frame-sweep <dir> <start-skip> <step> <count>] [--gx-frame-source <efb|auto|last-display-copy|last-nonblack-display-copy|largest-display-copy|last-nonblack-efb|vi-framebuffer|last-nonblack-vi-framebuffer|copy-index|copy-source-index>] [--gx-frame-copy-index <n>] [--gx-frame-max-draws <n, default {RunDolOptions.DefaultGxFrameMaxDraws}>] [--gx-frame-skip-draws <n>] [--gx-frame-max-raster-pixels <n, default {RunDolOptions.DefaultGxFrameMaxRasterPixels}>] [--gx-frame-ignore-efb-copy-clear] [--dump-gx-draws <txt-path>] [--dump-gx-copies <csv-path>] [--dump-gx-copy-events <csv-path>] [--dump-gx-coverage <csv-path>] [--dump-gx-tev-samples <csv-path>] [--dump-gx-textures <dir>] [--gx-draw-skip-draws <n>] [--gx-draw-max-draws <n, default {RunDolOptions.DefaultGxDrawMaxDraws}>] [--trace-gx-fifo-writes <csv-path>] [--gx-memory-checkpoint <fifo-offset> <addr> <len> <path>] [--gx-disable-auto-texture-snapshots] [--trace-exi <csv-path>] [--trace-si <csv-path>] [--trace-mmio <csv-path>] [--trace-scheduler <csv-path>] [--run-summary <json-path>] [--memory-card-a] [--memory-card-b] [--frame-address <addr>] [--frame-width <n>] [--frame-height <n>] [--frame-format <rgb565|yuyv|uyvy|xrgb8888>] [--watch-address <addr>] [--watch-write-value <value>] [--watch-write-range <addr> <len>] [--watch-write-after <n>] [--watch-load-range <addr> <len>] [--stop-after-write-watch <n>] [--watch-call-target <addr>] [--watch-call-range <addr> <len>] [--find-memory-word <value>] [--watch-gpr <r0-r31>] [--watch-gpr-after <n>] [--fast-forward-idle] [--fast-forward-write-watch] [--trace-prs-decompress] [--trace-sonic-path-lookup <csv-path>] [--trace-sonic-resource-flags <csv-path>] [--di-command-latency-cycles <n>] [--controller-button <name|mask>] [--controller-buttons <mask>] [--controller-button-window <name|mask> <start> <end>] [--watch-limit <n>] [--profile-pc <n>] [--profile-after <n>] [--profile-indirect-call-site <addr> <n>] [--profile-branch-site <addr> <n>] [--profile-pc-lr <addr> <n>] [--stop-on-pc <addr>] [--stop-on-pc-after <n>] [--trace-pc <addr>] [--trace-pc-after <n>] [--stop-on-gx-fifo-offset <n>] [--stop-on-hot-pc <n>] [--stop-on-hot-pc-after <n>] [--no-registers] [--quiet]");
-    Console.WriteLine("  ngcsharp run-disc <path-to-iso-gcm-rvz> [--max-instructions <n>] [--trace] [--trace-file <path>] [--trace-tail <n>] [--dump-mmio] [--dump-threads] [--dump-message-queues] [--dump-memory <addr> <len>] [--dump-disasm <addr> <count>] [--dump-pointer-table <addr> <count> <stride> <ptr-offset> <target-words>] [--dump-gx-frame <png-path>] [--dump-gx-frame-sweep <dir> <start-skip> <step> <count>] [--gx-frame-source <efb|auto|last-display-copy|last-nonblack-display-copy|largest-display-copy|last-nonblack-efb|vi-framebuffer|last-nonblack-vi-framebuffer|copy-index|copy-source-index>] [--gx-frame-copy-index <n>] [--gx-frame-max-draws <n>] [--gx-frame-skip-draws <n>] [--gx-frame-max-raster-pixels <n>] [--gx-frame-ignore-efb-copy-clear] [--dump-gx-draws <txt-path>] [--dump-gx-copies <csv-path>] [--dump-gx-copy-events <csv-path>] [--dump-gx-coverage <csv-path>] [--dump-gx-tev-samples <csv-path>] [--dump-gx-textures <dir>] [--gx-draw-skip-draws <n>] [--gx-draw-max-draws <n>] [--trace-gx-fifo-writes <csv-path>] [--gx-memory-checkpoint <fifo-offset> <addr> <len> <path>] [--gx-disable-auto-texture-snapshots] [--trace-exi <csv-path>] [--trace-si <csv-path>] [--trace-mmio <csv-path>] [--trace-scheduler <csv-path>] [--run-summary <json-path>] [--memory-card-a] [--memory-card-b] [--watch-address <addr>] [--watch-write-value <value>] [--watch-write-range <addr> <len>] [--watch-write-after <n>] [--watch-load-range <addr> <len>] [--stop-after-write-watch <n>] [--watch-call-target <addr>] [--watch-call-range <addr> <len>] [--find-memory-word <value>] [--watch-gpr <r0-r31>] [--watch-gpr-after <n>] [--fast-forward-idle] [--fast-forward-write-watch] [--trace-prs-decompress] [--trace-sonic-path-lookup <csv-path>] [--trace-sonic-resource-flags <csv-path>] [--di-command-latency-cycles <n>] [--controller-button <name|mask>] [--controller-buttons <mask>] [--controller-button-window <name|mask> <start> <end>] [--watch-limit <n>] [--profile-pc <n>] [--profile-after <n>] [--profile-indirect-call-site <addr> <n>] [--profile-branch-site <addr> <n>] [--profile-pc-lr <addr> <n>] [--stop-on-pc <addr>] [--stop-on-pc-after <n>] [--trace-pc <addr>] [--trace-pc-after <n>] [--stop-on-gx-fifo-offset <n>] [--stop-on-hot-pc <n>] [--stop-on-hot-pc-after <n>] [--no-registers] [--quiet]");
+    Console.WriteLine($"  ngcsharp run-dol <path-to-dol> [--max-instructions <n>] [--trace] [--trace-file <path>] [--trace-tail <n>] [--dump-mmio] [--dump-threads] [--dump-message-queues] [--dump-memory <addr> <len>] [--dump-memory-bin <addr> <len> <path>] [--dump-memory-bin-at <instruction> <addr> <len> <path>] [--dump-disasm <addr> <count>] [--dump-pointer-table <addr> <count> <stride> <ptr-offset> <target-words>] [--dump-frame <png-path>] [--dump-gx-frame <png-path>] [--dump-gx-frame-sweep <dir> <start-skip> <step> <count>] [--gx-frame-source <efb|auto|last-display-copy|last-nonblack-display-copy|largest-display-copy|last-nonblack-efb|vi-framebuffer|last-nonblack-vi-framebuffer|copy-index|copy-source-index>] [--gx-frame-copy-index <n>] [--gx-frame-max-draws <n, default {RunDolOptions.DefaultGxFrameMaxDraws}>] [--gx-frame-skip-draws <n>] [--gx-frame-max-raster-pixels <n, default {RunDolOptions.DefaultGxFrameMaxRasterPixels}>] [--gx-frame-ignore-efb-copy-clear] [--gx-frame-skip-copy-memory-writes] [--dump-gx-draws <txt-path>] [--dump-gx-copies <csv-path>] [--dump-gx-copy-events <csv-path>] [--dump-gx-coverage <csv-path>] [--dump-gx-triangle-coverage <csv-path>] [--dump-gx-tev-samples <csv-path>] [--dump-gx-transforms <csv-path>] [--dump-gx-state-timeline <csv-path>] [--dump-gx-vertices <csv-path>] [--dump-gx-textures <dir>] [--gx-draw-skip-draws <n>] [--gx-draw-max-draws <n, default {RunDolOptions.DefaultGxDrawMaxDraws}>] [--trace-gx-fifo-writes <csv-path>] [--trace-gx-fifo-window <csv-path> <start> <len>] [--gx-memory-checkpoint <fifo-offset> <addr> <len> <path>] [--gx-disable-auto-texture-snapshots] [--trace-exi <csv-path>] [--trace-si <csv-path>] [--trace-mmio <csv-path>] [--trace-scheduler <csv-path>] [--run-summary <json-path>] [--memory-card-a] [--memory-card-b] [--frame-address <addr>] [--frame-width <n>] [--frame-height <n>] [--frame-format <rgb565|yuyv|uyvy|xrgb8888>] [--watch-address <addr>] [--watch-write-value <value>] [--watch-write-range <addr> <len>] [--watch-write-after <n>] [--watch-load-range <addr> <len>] [--stop-after-write-watch <n>] [--watch-call-target <addr>] [--watch-call-range <addr> <len>] [--find-memory-word <value>] [--watch-gpr <r0-r31>] [--watch-gpr-after <n>] [--fast-forward-idle] [--fast-forward-write-watch] [--disable-sonic-bit-unpack-fast-forward] [--disable-sonic-paired-transform-fast-forward] [--disable-sonic-gx-fast-forward] [--disable-sonic-geometry-fast-forward] [--disable-sonic-resource-fast-forward] [--disable-sonic-resource-lookup-fast-forward] [--enable-sonic-resource-lookup-fast-forward] [--disable-sonic-resource-mode-query-fast-forward] [--enable-sonic-resource-mode-query-fast-forward] [--disable-sonic-resource-state-poll-fast-forward] [--enable-sonic-resource-state-poll-fast-forward] [--disable-sonic-resource-fixup-fast-forward] [--enable-sonic-resource-fixup-fast-forward] [--trace-prs-decompress] [--trace-sonic-path-lookup <csv-path>] [--trace-sonic-resource-flags <csv-path>] [--trace-sonic-matrix-stack <csv-path>] [--trace-sonic-matrix-writer <csv-path>] [--trace-sonic-root-matrix <csv-path>] [--trace-sonic-scene-state <csv-path>] [--trace-sonic-packet-selection <csv-path>] [--trace-sonic-traversal-source <csv-path>] [--trace-sonic-draw-packets <csv-path>] [--trace-sonic-gx-emitters <csv-path>] [--trace-sonic-texture-binds <csv-path>] [--trace-sonic-vertex-provenance <csv-path> <fifo-start> <fifo-len>] [--trace-sonic-transform-inputs <csv-path>] [--trace-sonic-transform-output-range <addr> <len>] [--trace-sonic-input-writes <csv-path> <addr> <len>] [--trace-locked-cache-writes <csv-path> <addr> <len>] [--di-command-latency-cycles <n>] [--controller-button <name|mask>] [--controller-buttons <mask>] [--controller-button-window <name|mask> <start> <end>] [--watch-limit <n>] [--profile-pc <n>] [--profile-after <n>] [--profile-indirect-call-site <addr> <n>] [--profile-branch-site <addr> <n>] [--profile-pc-lr <addr> <n>] [--stop-on-pc <addr>] [--stop-on-pc-after <n>] [--trace-pc <addr>] [--trace-pc-after <n>] [--stop-on-gx-fifo-offset <n>] [--stop-on-hot-pc <n>] [--stop-on-hot-pc-after <n>] [--no-registers] [--quiet]");
+    Console.WriteLine("  ngcsharp run-disc <path-to-iso-gcm-rvz> [--max-instructions <n>] [--trace] [--trace-file <path>] [--trace-tail <n>] [--dump-mmio] [--dump-threads] [--dump-message-queues] [--dump-memory <addr> <len>] [--dump-disasm <addr> <count>] [--dump-pointer-table <addr> <count> <stride> <ptr-offset> <target-words>] [--dump-gx-frame <png-path>] [--dump-gx-frame-sweep <dir> <start-skip> <step> <count>] [--gx-frame-source <efb|auto|last-display-copy|last-nonblack-display-copy|largest-display-copy|last-nonblack-efb|vi-framebuffer|last-nonblack-vi-framebuffer|copy-index|copy-source-index>] [--gx-frame-copy-index <n>] [--gx-frame-max-draws <n>] [--gx-frame-skip-draws <n>] [--gx-frame-max-raster-pixels <n>] [--gx-frame-ignore-efb-copy-clear] [--gx-frame-skip-copy-memory-writes] [--dump-gx-draws <txt-path>] [--dump-gx-copies <csv-path>] [--dump-gx-copy-events <csv-path>] [--dump-gx-coverage <csv-path>] [--dump-gx-triangle-coverage <csv-path>] [--dump-gx-tev-samples <csv-path>] [--dump-gx-transforms <csv-path>] [--dump-gx-state-timeline <csv-path>] [--dump-gx-vertices <csv-path>] [--dump-gx-textures <dir>] [--gx-draw-skip-draws <n>] [--gx-draw-max-draws <n>] [--trace-gx-fifo-writes <csv-path>] [--trace-gx-fifo-window <csv-path> <start> <len>] [--gx-memory-checkpoint <fifo-offset> <addr> <len> <path>] [--gx-disable-auto-texture-snapshots] [--trace-exi <csv-path>] [--trace-si <csv-path>] [--trace-mmio <csv-path>] [--trace-scheduler <csv-path>] [--run-summary <json-path>] [--memory-card-a] [--memory-card-b] [--watch-address <addr>] [--watch-write-value <value>] [--watch-write-range <addr> <len>] [--watch-write-after <n>] [--watch-load-range <addr> <len>] [--stop-after-write-watch <n>] [--watch-call-target <addr>] [--watch-call-range <addr> <len>] [--find-memory-word <value>] [--watch-gpr <r0-r31>] [--watch-gpr-after <n>] [--fast-forward-idle] [--fast-forward-write-watch] [--disable-sonic-bit-unpack-fast-forward] [--disable-sonic-paired-transform-fast-forward] [--disable-sonic-gx-fast-forward] [--disable-sonic-geometry-fast-forward] [--disable-sonic-resource-fast-forward] [--disable-sonic-resource-lookup-fast-forward] [--enable-sonic-resource-lookup-fast-forward] [--disable-sonic-resource-mode-query-fast-forward] [--enable-sonic-resource-mode-query-fast-forward] [--disable-sonic-resource-state-poll-fast-forward] [--enable-sonic-resource-state-poll-fast-forward] [--disable-sonic-resource-fixup-fast-forward] [--enable-sonic-resource-fixup-fast-forward] [--trace-prs-decompress] [--trace-sonic-path-lookup <csv-path>] [--trace-sonic-resource-flags <csv-path>] [--trace-sonic-matrix-stack <csv-path>] [--trace-sonic-matrix-writer <csv-path>] [--trace-sonic-root-matrix <csv-path>] [--trace-sonic-scene-state <csv-path>] [--trace-sonic-packet-selection <csv-path>] [--trace-sonic-traversal-source <csv-path>] [--trace-sonic-draw-packets <csv-path>] [--trace-sonic-gx-emitters <csv-path>] [--trace-sonic-texture-binds <csv-path>] [--trace-sonic-vertex-provenance <csv-path> <fifo-start> <fifo-len>] [--trace-sonic-transform-inputs <csv-path>] [--trace-sonic-transform-output-range <addr> <len>] [--trace-sonic-input-writes <csv-path> <addr> <len>] [--trace-locked-cache-writes <csv-path> <addr> <len>] [--di-command-latency-cycles <n>] [--controller-button <name|mask>] [--controller-buttons <mask>] [--controller-button-window <name|mask> <start> <end>] [--watch-limit <n>] [--profile-pc <n>] [--profile-after <n>] [--profile-indirect-call-site <addr> <n>] [--profile-branch-site <addr> <n>] [--profile-pc-lr <addr> <n>] [--stop-on-pc <addr>] [--stop-on-pc-after <n>] [--trace-pc <addr>] [--trace-pc-after <n>] [--stop-on-gx-fifo-offset <n>] [--stop-on-hot-pc <n>] [--stop-on-hot-pc-after <n>] [--no-registers] [--quiet]");
     Console.WriteLine("  ngcsharp write-test-dol <output-path>");
+    Console.WriteLine("  run-dol/run-disc also accept --dump-memory-bin <addr> <len> <path> for final raw RAM snapshots and --dump-memory-bin-at <instruction> <addr> <len> <path> for pre-instruction snapshots.");
 }
 
 static string FormatVersion(uint value)
@@ -503,7 +615,6 @@ static bool TryParseSigned16(string text, out short value)
     value = 0;
     return false;
 }
-
 static bool TryParseOpcodeSelector(string text, out HashSet<int>? opcodes)
 {
     opcodes = text.ToLowerInvariant() switch

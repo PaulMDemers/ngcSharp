@@ -8,11 +8,17 @@ namespace NgcSharp.App;
 public sealed record GxFifoSoftwareRenderTimings(double TotalMs, double FifoExpansionMs, double BufferInitMs, double ViResolveMs, double ReplayMs, double RegisterWriteMs, double VertexDecodeMs, double RasterizeMs, double RasterSetupMs, double RasterCoverageMs, double RasterDepthTestMs, double RasterTevTextureMs, double RasterAlphaTestMs, double RasterBlendWriteMs, double EfbCoverageMs, double EfbCopyMs, double SourceCaptureMs, double DisplayCaptureMs, double SourceSelectionMs, double PngWriteMs);
 public sealed record GxFifoSoftwareRenderFastPathStats(long SingleStageTevFastTriangles, long SingleStageTevFastPixels, long DirectTextureSamplerTriangles, long DirectTextureSamplerPixels, long GenericTevPixels, long LegacyTextureFallbackPixels, IReadOnlyDictionary<string, long> DirectTextureFormats, IReadOnlyDictionary<string, long> TextureSamplerFallbacks);
 public sealed record GxFifoSoftwareRenderEfbCopyStats(long DisplayCopies, long DirectDisplayCopies, long FilteredDisplayCopies, long TextureCopies, long Clears, long DepthClears, double DisplayCopyMs, double TextureCopyMs, double ColorClearMs, double DepthClearMs, IReadOnlyDictionary<string, long> DisplayCopyModes, IReadOnlyDictionary<string, long> TextureCopyFormats);
-public sealed record GxFifoSoftwareRenderResult(string Path, int Width, int Height, int Draws, int RenderedQuads, int DegenerateQuads, int RenderedTriangles = 0, int DegenerateTriangles = 0, GxFrameDumpSource Source = GxFrameDumpSource.Efb, uint? SourceAddress = null, FramebufferPixelFormat? SourceFormat = null, int? SourceCopyIndex = null, bool RasterBudgetExhausted = false, GxFifoSoftwareRenderTimings? Timings = null, GxFifoSoftwareRenderFastPathStats? FastPathStats = null, GxFifoSoftwareRenderEfbCopyStats? EfbCopyStats = null);
+public sealed record GxFifoSoftwareRenderCopyMarker(int CopyIndex, bool IsDisplayCopy, int DrawsSeen, int FifoOffset, uint DestinationAddress, int Width, int Height, FramebufferPixelFormat Format, bool ClearAfterCopy);
+public sealed record GxFifoSoftwareRenderLifecycle(GxFrameDumpSource RequestedSource, GxFrameDumpSource SelectedSource, bool CapturedCurrentEfb, int ParsedDraws, int CopyEventsSeen, int DisplayCopiesSeen, int TextureCopiesSeen, GxFifoSoftwareRenderCopyMarker? SelectedCopy, GxFifoSoftwareRenderCopyMarker? LastDisplayCopy, int? DrawsSinceLastDisplayCopy, int? CopyEventsSinceLastDisplayCopy, int ClearsSinceLastDisplayCopy, int TextureCopiesSinceLastDisplayCopy, bool EfbWasClearedAfterLastDisplayCopy, string Phase);
+public sealed record GxFifoSoftwareRenderResult(string Path, int Width, int Height, int Draws, int RenderedQuads, int DegenerateQuads, int RenderedTriangles = 0, int DegenerateTriangles = 0, GxFrameDumpSource Source = GxFrameDumpSource.Efb, uint? SourceAddress = null, FramebufferPixelFormat? SourceFormat = null, int? SourceCopyIndex = null, bool RasterBudgetExhausted = false, GxFifoSoftwareRenderTimings? Timings = null, GxFifoSoftwareRenderFastPathStats? FastPathStats = null, GxFifoSoftwareRenderEfbCopyStats? EfbCopyStats = null, GxFifoSoftwareRenderLifecycle? Lifecycle = null);
 public sealed record GxFifoDrawDiagnosticResult(string Path, int TotalDraws, int DrawsWritten);
 public sealed record GxFifoCopyEventTimelineResult(string Path, int EventsWritten, int TotalDraws);
 public sealed record GxFifoCopyDiagnosticResult(string Path, int CopiesWritten, int TotalDraws, bool RasterBudgetExhausted = false);
 public sealed record GxFifoCoverageDiagnosticResult(string Path, int DrawsWritten, int CopiesSeen, bool RasterBudgetExhausted);
+public sealed record GxFifoTriangleCoverageDiagnosticResult(string Path, int DrawsWritten, int TrianglesWritten, int CopiesSeen, bool RasterBudgetExhausted);
+public sealed record GxFifoTransformDiagnosticResult(string Path, int DrawsWritten, int TotalDraws);
+public sealed record GxFifoStateTimelineDiagnosticResult(string Path, int EventsWritten, int TotalDraws, int CopiesSeen);
+public sealed record GxFifoVertexDiagnosticResult(string Path, int DrawsWritten, int VerticesWritten, int TotalDraws);
 public sealed record GxFifoTevSampleDiagnosticResult(string Path, int SamplesWritten, int TotalDraws, int CopiesSeen);
 public sealed record GxFifoTextureDiagnosticResult(string DirectoryPath, string IndexPath, int TexturesWritten, int TotalDraws, int CopiesSeen);
 
@@ -39,16 +45,29 @@ public static class GxFifoSoftwareRenderer
 
     public readonly record struct DisplayCopyResult(uint DestinationAddress, int Width, int Height, FramebufferPixelFormat Format);
     private readonly record struct EfbCopyInfo(uint Control, bool IsDisplayCopy, bool Clear, bool Mipmap, int Format, int SourceLeft, int SourceTop, int SourceWidth, int SourceHeight, uint DestinationAddress, uint DestinationRaw, int DestinationTiles, int OutputWidth, int OutputHeight);
+    private readonly record struct DiagnosticRegionSpec(string Name, int Left, int Top, int Width, int Height);
+    private readonly record struct DiagnosticRegionBounds(string Name, int Left, int Top, int Right, int Bottom);
     private readonly record struct EfbCoverage(int Pixels, int NonBlackPixels, int AlphaVisibleNonBlackPixels, int MinX, int MinY, int MaxX, int MaxY, int AlphaMinX, int AlphaMinY, int AlphaMaxX, int AlphaMaxY)
     {
         public bool HasNonBlackBounds => MinX >= 0;
 
         public bool HasAlphaVisibleBounds => AlphaMinX >= 0;
     }
-    private readonly record struct IndexedDisplayCopy(int CopyIndex, DisplayCopyResult Copy);
-    private sealed record SelectedDisplayCopy(int CopyIndex, DisplayCopyResult Copy, EfbCoverage Coverage, byte[] Rgb);
+    private readonly record struct IndexedDisplayCopy(int CopyIndex, DisplayCopyResult Copy, GxFifoSoftwareRenderCopyMarker Marker);
+    private sealed record SelectedDisplayCopy(int CopyIndex, DisplayCopyResult Copy, EfbCoverage Coverage, byte[] Rgb, GxFifoSoftwareRenderCopyMarker Marker);
+    private static readonly DiagnosticRegionSpec[] DiagnosticRegions =
+    [
+        new("top_sky", 0, 0, 640, 132),
+        new("left_sky", 0, 0, 240, 220),
+        new("skyline", 48, 72, 544, 170),
+        new("empire_building", 330, 170, 160, 240),
+        new("right_city", 430, 145, 190, 190),
+        new("left_void", 0, 96, 220, 300),
+    ];
+
     private readonly record struct TextureDumpSnapshot(
         int Slot,
+        int MipLevel,
         int Width,
         int Height,
         string FormatName,
@@ -106,7 +125,7 @@ public static class GxFifoSoftwareRenderer
         return TryRender(accesses, memory, path, width, height, maxDraws, skipDraws, stopAfterMaxDraws, maxRasterizedPixels, ignoreEfbCopyClear, source, displayCopyIndex: null, out result, out error);
     }
 
-    public static bool TryRender(IReadOnlyList<MmioAccess> accesses, GameCubeMemory? memory, string path, int width, int height, int? maxDraws, int skipDraws, bool stopAfterMaxDraws, int? maxRasterizedPixels, bool ignoreEfbCopyClear, GxFrameDumpSource source, int? displayCopyIndex, out GxFifoSoftwareRenderResult? result, out string? error, GxMemorySnapshotSet? memorySnapshots = null)
+    public static bool TryRender(IReadOnlyList<MmioAccess> accesses, GameCubeMemory? memory, string path, int width, int height, int? maxDraws, int skipDraws, bool stopAfterMaxDraws, int? maxRasterizedPixels, bool ignoreEfbCopyClear, GxFrameDumpSource source, int? displayCopyIndex, out GxFifoSoftwareRenderResult? result, out string? error, bool skipEfbCopyMemoryWrites = false, GxMemorySnapshotSet? memorySnapshots = null)
     {
         long totalStartTimestamp = Stopwatch.GetTimestamp();
         long fifoExpansionTicks = 0;
@@ -228,6 +247,12 @@ public static class GxFifoSoftwareRenderer
         int degenerateTriangles = 0;
         int rasterPixelsRemaining = maxRasterizedPixels ?? int.MaxValue;
         int copiesSeen = 0;
+        bool skipCopyMemoryWrites = skipEfbCopyMemoryWrites
+            && source is GxFrameDumpSource.Efb or GxFrameDumpSource.CopyIndex or GxFrameDumpSource.CopySourceIndex;
+        int displayCopiesSeen = 0;
+        int textureCopiesSeen = 0;
+        int clearsSinceLastDisplayCopy = 0;
+        int textureCopiesSinceLastDisplayCopy = 0;
         List<IndexedDisplayCopy> displayCopies = [];
         SelectedDisplayCopy? lastDisplayCopy = null;
         SelectedDisplayCopy? lastNonBlackDisplayCopy = null;
@@ -235,7 +260,39 @@ public static class GxFifoSoftwareRenderer
         SelectedDisplayCopy? lastNonBlackEfb = null;
         SelectedDisplayCopy? indexedDisplayCopy = null;
         SelectedDisplayCopy? lastNonBlackViDisplayCopy = null;
+        GxFifoSoftwareRenderCopyMarker? lastDisplayCopyMarker = null;
         bool stopReplayAfterCommand = false;
+
+        GxFifoSoftwareRenderLifecycle BuildLifecycle(GxFrameDumpSource selectedSource, GxFifoSoftwareRenderCopyMarker? selectedCopy)
+        {
+            bool capturedCurrentEfb = selectedSource == GxFrameDumpSource.Efb;
+            int? drawsSinceLastDisplayCopy = lastDisplayCopyMarker is GxFifoSoftwareRenderCopyMarker displayMarker
+                ? draws - displayMarker.DrawsSeen
+                : null;
+            int? copyEventsSinceLastDisplayCopy = lastDisplayCopyMarker is GxFifoSoftwareRenderCopyMarker copyMarker
+                ? copiesSeen - copyMarker.CopyIndex
+                : null;
+            string phase = selectedCopy is GxFifoSoftwareRenderCopyMarker selectedMarker
+                ? selectedMarker.IsDisplayCopy ? "display-copy" : "copy-source"
+                : capturedCurrentEfb && lastDisplayCopyMarker is not null ? "post-display-copy-efb" : "current-efb";
+
+            return new GxFifoSoftwareRenderLifecycle(
+                RequestedSource: source,
+                SelectedSource: selectedSource,
+                CapturedCurrentEfb: capturedCurrentEfb,
+                ParsedDraws: draws,
+                CopyEventsSeen: copiesSeen,
+                DisplayCopiesSeen: displayCopiesSeen,
+                TextureCopiesSeen: textureCopiesSeen,
+                SelectedCopy: selectedCopy,
+                LastDisplayCopy: lastDisplayCopyMarker,
+                DrawsSinceLastDisplayCopy: drawsSinceLastDisplayCopy,
+                CopyEventsSinceLastDisplayCopy: copyEventsSinceLastDisplayCopy,
+                ClearsSinceLastDisplayCopy: lastDisplayCopyMarker is null ? 0 : clearsSinceLastDisplayCopy,
+                TextureCopiesSinceLastDisplayCopy: lastDisplayCopyMarker is null ? 0 : textureCopiesSinceLastDisplayCopy,
+                EfbWasClearedAfterLastDisplayCopy: lastDisplayCopyMarker is not null && clearsSinceLastDisplayCopy > 0,
+                Phase: phase);
+        }
 
         long replayStart = Stopwatch.GetTimestamp();
         while (offset < fifo.Length && !stopReplayAfterCommand)
@@ -296,6 +353,34 @@ public static class GxFifoSoftwareRenderer
                         }
 
                         copiesSeen++;
+                        if (copyInfo.IsDisplayCopy)
+                        {
+                            displayCopiesSeen++;
+                        }
+                        else
+                        {
+                            textureCopiesSeen++;
+                            if (lastDisplayCopyMarker is not null)
+                            {
+                                textureCopiesSinceLastDisplayCopy++;
+                            }
+                        }
+
+                        if (!copyInfo.IsDisplayCopy && copyInfo.Clear && lastDisplayCopyMarker is not null)
+                        {
+                            clearsSinceLastDisplayCopy++;
+                        }
+
+                        GxFifoSoftwareRenderCopyMarker sourceCopyMarker = new(
+                            CopyIndex: copiesSeen,
+                            IsDisplayCopy: copyInfo.IsDisplayCopy,
+                            DrawsSeen: draws,
+                            FifoOffset: commandOffset,
+                            DestinationAddress: copyInfo.DestinationAddress,
+                            Width: copyInfo.SourceWidth,
+                            Height: copyInfo.SourceHeight,
+                            Format: FramebufferPixelFormat.Xrgb8888,
+                            ClearAfterCopy: copyInfo.Clear);
                         EfbCoverage? displayCoverage = null;
                         bool needsDisplayCoverage = copyInfo.IsDisplayCopy
                             && source is GxFrameDumpSource.Auto
@@ -329,7 +414,7 @@ public static class GxFifoSoftwareRenderer
                             long captureStart = Stopwatch.GetTimestamp();
                             byte[] sourceRgb = CaptureEfbSourceRgb(rgb, width, height, copyInfo.SourceLeft, copyInfo.SourceTop, copyInfo.SourceWidth, copyInfo.SourceHeight);
                             sourceCaptureTicks += Stopwatch.GetTimestamp() - captureStart;
-                            lastNonBlackEfb = new SelectedDisplayCopy(copiesSeen, new DisplayCopyResult(copyInfo.DestinationAddress, copyInfo.SourceWidth, copyInfo.SourceHeight, FramebufferPixelFormat.Xrgb8888), efbCoverage, sourceRgb);
+                            lastNonBlackEfb = new SelectedDisplayCopy(copiesSeen, new DisplayCopyResult(copyInfo.DestinationAddress, copyInfo.SourceWidth, copyInfo.SourceHeight, FramebufferPixelFormat.Xrgb8888), efbCoverage, sourceRgb, sourceCopyMarker);
                         }
 
                         if (source == GxFrameDumpSource.CopySourceIndex && copiesSeen == displayCopyIndex)
@@ -353,18 +438,61 @@ public static class GxFifoSoftwareRenderer
                             long captureStart = Stopwatch.GetTimestamp();
                             byte[] sourceRgb = CaptureEfbSourceRgb(rgb, width, height, copyInfo.SourceLeft, copyInfo.SourceTop, copyInfo.SourceWidth, copyInfo.SourceHeight);
                             sourceCaptureTicks += Stopwatch.GetTimestamp() - captureStart;
-                            indexedDisplayCopy = new SelectedDisplayCopy(copiesSeen, new DisplayCopyResult(copyInfo.DestinationAddress, copyInfo.SourceWidth, copyInfo.SourceHeight, FramebufferPixelFormat.Xrgb8888), coverage, sourceRgb);
+                            indexedDisplayCopy = new SelectedDisplayCopy(copiesSeen, new DisplayCopyResult(copyInfo.DestinationAddress, copyInfo.SourceWidth, copyInfo.SourceHeight, FramebufferPixelFormat.Xrgb8888), coverage, sourceRgb, sourceCopyMarker);
                             stopReplayAfterCommand = true;
                         }
 
+                        DisplayCopyResult? directDisplayCopy = null;
+                        byte[]? directDisplayRgb = null;
+                        if (copyInfo.IsDisplayCopy)
+                        {
+                            EfbCoverage coverage = displayCoverage ?? default;
+                            bool hasNonBlackCoverage = coverage.NonBlackPixels > 0;
+                            bool shouldPreCaptureDisplayCopy = source switch
+                            {
+                                GxFrameDumpSource.Auto => hasNonBlackCoverage,
+                                GxFrameDumpSource.LastNonBlackDisplayCopy => hasNonBlackCoverage,
+                                GxFrameDumpSource.LargestDisplayCopy => hasNonBlackCoverage,
+                                GxFrameDumpSource.LastNonBlackViFramebuffer => hasNonBlackCoverage && requestedViAddress == copyInfo.DestinationAddress,
+                                GxFrameDumpSource.CopyIndex => copiesSeen == displayCopyIndex,
+                                GxFrameDumpSource.Efb => false,
+                                GxFrameDumpSource.CopySourceIndex or GxFrameDumpSource.ViFramebuffer => false,
+                                _ => true,
+                            };
+                            if (shouldPreCaptureDisplayCopy)
+                            {
+                                long displayCaptureStart = Stopwatch.GetTimestamp();
+                                if (state.TryCaptureCurrentDisplayCopyRgb(rgb, alpha, width, height, out DisplayCopyResult capturedDirectCopy, out byte[] capturedDirectRgb))
+                                {
+                                    directDisplayCopy = capturedDirectCopy;
+                                    directDisplayRgb = capturedDirectRgb;
+                                }
+
+                                displayCaptureTicks += Stopwatch.GetTimestamp() - displayCaptureStart;
+                            }
+                        }
+
                         long efbCopyStart = Stopwatch.GetTimestamp();
-                        if (state.TryCopyEfb(memory, rgb, alpha, depth, width, height, clearAfterCopy: !ignoreEfbCopyClear, out DisplayCopyResult? displayCopy, efbCopyCounters))
+                        if (state.TryCopyEfb(memory, rgb, alpha, depth, width, height, clearAfterCopy: !ignoreEfbCopyClear, out DisplayCopyResult? displayCopy, efbCopyCounters, skipMemoryWrite: skipCopyMemoryWrites))
                         {
                             efbCopyTicks += Stopwatch.GetTimestamp() - efbCopyStart;
                             if (displayCopy is DisplayCopyResult capturedCopy)
                             {
                                 EfbCoverage coverage = displayCoverage ?? default;
-                                displayCopies.Add(new IndexedDisplayCopy(copiesSeen, capturedCopy));
+                                GxFifoSoftwareRenderCopyMarker displayCopyMarker = new(
+                                    CopyIndex: copiesSeen,
+                                    IsDisplayCopy: true,
+                                    DrawsSeen: draws,
+                                    FifoOffset: commandOffset,
+                                    DestinationAddress: capturedCopy.DestinationAddress,
+                                    Width: capturedCopy.Width,
+                                    Height: capturedCopy.Height,
+                                    Format: capturedCopy.Format,
+                                    ClearAfterCopy: copyInfo.Clear);
+                                lastDisplayCopyMarker = displayCopyMarker;
+                                clearsSinceLastDisplayCopy = copyInfo.Clear ? 1 : 0;
+                                textureCopiesSinceLastDisplayCopy = 0;
+                                displayCopies.Add(new IndexedDisplayCopy(copiesSeen, capturedCopy, displayCopyMarker));
                                 bool hasNonBlackCoverage = coverage.NonBlackPixels > 0;
                                 bool shouldCaptureDisplayCopy = source switch
                                 {
@@ -377,12 +505,27 @@ public static class GxFifoSoftwareRenderer
                                     GxFrameDumpSource.CopySourceIndex or GxFrameDumpSource.ViFramebuffer => false,
                                     _ => true,
                                 };
+                                byte[]? displayRgb = null;
+                                bool capturedDisplayRgb = false;
+                                if (shouldCaptureDisplayCopy)
+                                {
+                                    if (directDisplayCopy == capturedCopy && directDisplayRgb is not null)
+                                    {
+                                        displayRgb = directDisplayRgb;
+                                        capturedDisplayRgb = true;
+                                    }
+                                    else
+                                    {
+                                        capturedDisplayRgb = TryTimedCaptureDisplayCopyRgb(memory, capturedCopy, ref displayCaptureTicks, out displayRgb);
+                                    }
+                                }
+
                                 if (shouldCaptureDisplayCopy
-                                    && TryTimedCaptureDisplayCopyRgb(memory, capturedCopy, ref displayCaptureTicks, out byte[]? displayRgb)
+                                    && capturedDisplayRgb
                                     && displayRgb is not null)
                                 {
                                     EfbCoverage capturedCoverage = CountNonBlackRgb(displayRgb, capturedCopy.Width, capturedCopy.Height);
-                                    SelectedDisplayCopy selected = new(copiesSeen, capturedCopy, capturedCoverage, displayRgb);
+                                    SelectedDisplayCopy selected = new(copiesSeen, capturedCopy, capturedCoverage, displayRgb, displayCopyMarker);
                                     if (source == GxFrameDumpSource.LastNonBlackViFramebuffer
                                         && requestedViAddress == capturedCopy.DestinationAddress
                                         && capturedCoverage.NonBlackPixels > 0)
@@ -502,6 +645,7 @@ public static class GxFifoSoftwareRenderer
         uint? sourceAddress = null;
         FramebufferPixelFormat? sourceFormat = null;
         int? sourceCopyIndex = null;
+        GxFifoSoftwareRenderCopyMarker? selectedCopyMarker = null;
         GxFrameDumpSource resultSource = source;
         if (source == GxFrameDumpSource.Auto)
         {
@@ -518,6 +662,7 @@ public static class GxFifoSoftwareRenderer
                 sourceAddress = copy.DestinationAddress;
                 sourceFormat = copy.Format;
                 sourceCopyIndex = selectedLargestDisplay.CopyIndex;
+                selectedCopyMarker = selectedLargestDisplay.Marker;
                 resultSource = GxFrameDumpSource.LargestDisplayCopy;
             }
             else if (lastNonBlackDisplayCopy is SelectedDisplayCopy selectedNonBlackDisplay)
@@ -529,6 +674,7 @@ public static class GxFifoSoftwareRenderer
                 sourceAddress = copy.DestinationAddress;
                 sourceFormat = copy.Format;
                 sourceCopyIndex = selectedNonBlackDisplay.CopyIndex;
+                selectedCopyMarker = selectedNonBlackDisplay.Marker;
                 resultSource = GxFrameDumpSource.LastNonBlackDisplayCopy;
             }
             else if (lastDisplayCopy is SelectedDisplayCopy selectedLastDisplay)
@@ -540,6 +686,7 @@ public static class GxFifoSoftwareRenderer
                 sourceAddress = copy.DestinationAddress;
                 sourceFormat = copy.Format;
                 sourceCopyIndex = selectedLastDisplay.CopyIndex;
+                selectedCopyMarker = selectedLastDisplay.Marker;
                 resultSource = GxFrameDumpSource.LastDisplayCopy;
             }
             else
@@ -577,11 +724,12 @@ public static class GxFifoSoftwareRenderer
                     sourceAddress = selectedNonBlackVi.Copy.DestinationAddress;
                     sourceFormat = selectedNonBlackVi.Copy.Format;
                     sourceCopyIndex = selectedNonBlackVi.CopyIndex;
+                    selectedCopyMarker = selectedNonBlackVi.Marker;
                     sourceSelectionTicks += Stopwatch.GetTimestamp() - sourceSelectionStart;
                     long pngWriteStart = Stopwatch.GetTimestamp();
                     FramebufferDumper.WriteRgbPng(fullPath, outputWidth, outputHeight, rgb);
                     pngWriteTicks += Stopwatch.GetTimestamp() - pngWriteStart;
-                    result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, source, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0, BuildTimings(), fastPathCounters.ToStats(), efbCopyCounters.ToStats());
+                    result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, source, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0, BuildTimings(), fastPathCounters.ToStats(), efbCopyCounters.ToStats(), BuildLifecycle(source, selectedCopyMarker));
                     return true;
                 }
 
@@ -591,6 +739,7 @@ public static class GxFifoSoftwareRenderer
                     {
                         selectedViCopy = displayCopies[index].Copy;
                         sourceCopyIndex = displayCopies[index].CopyIndex;
+                        selectedCopyMarker = displayCopies[index].Marker;
                         break;
                     }
                 }
@@ -622,6 +771,7 @@ public static class GxFifoSoftwareRenderer
                 sourceAddress = selectedEfb.Copy.DestinationAddress;
                 sourceFormat = selectedEfb.Copy.Format;
                 sourceCopyIndex = selectedEfb.CopyIndex;
+                selectedCopyMarker = selectedEfb.Marker;
             }
             else if (source is GxFrameDumpSource.CopyIndex or GxFrameDumpSource.CopySourceIndex)
             {
@@ -645,6 +795,7 @@ public static class GxFifoSoftwareRenderer
                 sourceAddress = indexedCopy.Copy.DestinationAddress;
                 sourceFormat = indexedCopy.Copy.Format;
                 sourceCopyIndex = indexedCopy.CopyIndex;
+                selectedCopyMarker = indexedCopy.Marker;
             }
             else
             {
@@ -674,6 +825,7 @@ public static class GxFifoSoftwareRenderer
                 sourceAddress = copy.DestinationAddress;
                 sourceFormat = copy.Format;
                 sourceCopyIndex = selectedDisplay.CopyIndex;
+                selectedCopyMarker = selectedDisplay.Marker;
             }
         }
 
@@ -681,7 +833,7 @@ public static class GxFifoSoftwareRenderer
         long finalPngWriteStart = Stopwatch.GetTimestamp();
         FramebufferDumper.WriteRgbPng(fullPath, outputWidth, outputHeight, rgb);
         pngWriteTicks += Stopwatch.GetTimestamp() - finalPngWriteStart;
-        result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, resultSource, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0, BuildTimings(), fastPathCounters.ToStats(), efbCopyCounters.ToStats());
+        result = new GxFifoSoftwareRenderResult(fullPath, outputWidth, outputHeight, draws, renderedQuads, degenerateQuads, renderedTriangles, degenerateTriangles, resultSource, sourceAddress, sourceFormat, sourceCopyIndex, rasterPixelsRemaining <= 0, BuildTimings(), fastPathCounters.ToStats(), efbCopyCounters.ToStats(), BuildLifecycle(resultSource, selectedCopyMarker));
         return true;
     }
 
@@ -1027,7 +1179,7 @@ public static class GxFifoSoftwareRenderer
 
             totalDraws++;
             bool writeFirstNonBlackDraw = false;
-            if (TryAnalyzeDraw(fifo, offset, format, vertexCount, state, memory, out int decodedVertices, out bool allZeroXy, out bool allBlackRgb, out float minX, out float maxX, out float minY, out float maxY))
+            if (TryAnalyzeDraw(fifo, offset, format, vertexCount, state, memory, out int decodedVertices, out _, out _, out bool allZeroXy, out bool allBlackRgb, out float minX, out float maxX, out float minY, out float maxY))
             {
                 decodedDraws++;
                 if (allZeroXy)
@@ -1959,7 +2111,7 @@ public static class GxFifoSoftwareRenderer
         EfbCoverage currentCoverage = CountNonBlackRegion(rgb, alpha, width, height, 0, 0, width, height);
 
         using StreamWriter writer = new(fullPath);
-        writer.WriteLine("draw_index,fifo_offset,primitive,format,vertices,decoded,all_zero_xy,all_black_rgb,min_x,max_x,min_y,max_y,copies_seen,before_nonblack,after_nonblack,delta_nonblack,before_alpha_nonblack,after_alpha_nonblack,delta_alpha_nonblack,before_percent,after_percent,raster_before,raster_after,raster_spent,covered_pixels,depth_rejected,alpha_rejected,color_update_disabled,color_writes,black_color_writes,alpha_updates,depth_updates,rendered_quads_delta,rendered_triangles_delta,degenerate_quads_delta,degenerate_triangles_delta");
+        writer.WriteLine("draw_index,fifo_offset,primitive,format,vertices,decoded,projected_vertices,clipped_vertices,all_zero_xy,all_black_rgb,min_x,max_x,min_y,max_y,copies_seen,before_nonblack,after_nonblack,delta_nonblack,before_alpha_nonblack,after_alpha_nonblack,delta_alpha_nonblack,before_percent,after_percent,raster_before,raster_after,raster_spent,clip_input_triangles,near_clip_output_vertices,near_clip_output_triangles,near_clip_culled_triangles,covered_pixels,depth_rejected,alpha_rejected,fogged_pixels,color_update_disabled,color_writes,black_color_writes,alpha_updates,depth_updates,rendered_quads_delta,rendered_triangles_delta,degenerate_quads_delta,degenerate_triangles_delta," + FormatDiagnosticRegionHeader());
 
         while (offset < fifo.Length)
         {
@@ -2037,14 +2189,18 @@ public static class GxFifoSoftwareRenderer
             totalDraws++;
             long renderEndDraw = maxDraws is int maxDrawLimit ? (long)skipDraws + maxDrawLimit : long.MaxValue;
             bool renderDraw = totalDraws > skipDraws && totalDraws <= renderEndDraw;
-            bool decoded = TryAnalyzeDraw(fifo, offset, format, vertexCount, state, memory, out _, out bool allZeroXy, out bool allBlackRgb, out float minX, out float maxX, out float minY, out float maxY);
+            bool decoded = TryAnalyzeDraw(fifo, offset, format, vertexCount, state, memory, out _, out int projectedVertices, out int clippedVertices, out bool allZeroXy, out bool allBlackRgb, out float minX, out float maxX, out float minY, out float maxY);
             EfbCoverage before = currentCoverage;
+            EfbCoverage[] beforeRegions = renderDraw ? CountDiagnosticRegions(rgb, alpha, width, height) : [];
             int rasterBefore = rasterPixelsRemaining;
             int quadsBefore = renderedQuads;
             int trianglesBefore = renderedTriangles;
             int degenerateQuadsBefore = degenerateQuads;
             int degenerateTrianglesBefore = degenerateTriangles;
             RasterDiagnosticCounters counters = new();
+            DiagnosticRegionRasterCounters? regionCounters = renderDraw
+                ? new DiagnosticRegionRasterCounters(width, height)
+                : null;
 
             if (renderDraw && state.IsRenderablePositionFormat(format) && vertexCount <= int.MaxValue)
             {
@@ -2062,7 +2218,7 @@ public static class GxFifoSoftwareRenderer
 
                 if (decodedVertices)
                 {
-                    RenderPrimitiveBounds(rgb, alpha, depth, width, height, command, vertices, state, memory, ref renderedQuads, ref degenerateQuads, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters);
+                    RenderPrimitiveBounds(rgb, alpha, depth, width, height, command, vertices, state, memory, ref renderedQuads, ref degenerateQuads, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, regionCounters: regionCounters);
                 }
             }
 
@@ -2070,7 +2226,8 @@ public static class GxFifoSoftwareRenderer
             if (renderDraw)
             {
                 drawsWritten++;
-                WriteDrawCoverageCsv(writer, totalDraws, commandOffset, command, format, vertexCount, decoded, allZeroXy, allBlackRgb, minX, maxX, minY, maxY, copiesSeen, before, currentCoverage, rasterBefore, rasterPixelsRemaining, counters, renderedQuads - quadsBefore, renderedTriangles - trianglesBefore, degenerateQuads - degenerateQuadsBefore, degenerateTriangles - degenerateTrianglesBefore);
+                EfbCoverage[] afterRegions = CountDiagnosticRegions(rgb, alpha, width, height);
+                WriteDrawCoverageCsv(writer, totalDraws, commandOffset, command, format, vertexCount, decoded, projectedVertices, clippedVertices, allZeroXy, allBlackRgb, minX, maxX, minY, maxY, copiesSeen, before, currentCoverage, beforeRegions, afterRegions, regionCounters, rasterBefore, rasterPixelsRemaining, counters, renderedQuads - quadsBefore, renderedTriangles - trianglesBefore, degenerateQuads - degenerateQuadsBefore, degenerateTriangles - degenerateTrianglesBefore);
             }
 
             offset += (int)payloadBytes;
@@ -2084,7 +2241,981 @@ public static class GxFifoSoftwareRenderer
         return true;
     }
 
-    private static void WriteDrawCoverageCsv(StreamWriter writer, int drawIndex, int fifoOffset, byte command, int format, uint vertexCount, bool decoded, bool allZeroXy, bool allBlackRgb, float minX, float maxX, float minY, float maxY, int copiesSeen, EfbCoverage before, EfbCoverage after, int rasterBefore, int rasterAfter, RasterDiagnosticCounters counters, int renderedQuadsDelta, int renderedTrianglesDelta, int degenerateQuadsDelta, int degenerateTrianglesDelta)
+    public static bool TryWriteTriangleCoverageDiagnostics(IReadOnlyList<MmioAccess> accesses, GameCubeMemory? memory, string path, int width, int height, int? maxRasterizedPixels, bool ignoreEfbCopyClear, int skipDraws, int? maxDraws, out GxFifoTriangleCoverageDiagnosticResult? result, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(accesses);
+
+        result = null;
+        error = null;
+        if (width <= 0 || height <= 0)
+        {
+            error = "GX triangle coverage diagnostic dimensions must be positive.";
+            return false;
+        }
+
+        if (!ValidateDiagnosticDimensions(width, height, out error))
+        {
+            return false;
+        }
+
+        if (maxRasterizedPixels is <= 0)
+        {
+            error = "GX triangle coverage diagnostic raster pixel budget must be positive.";
+            return false;
+        }
+
+        if (skipDraws < 0)
+        {
+            error = "GX triangle coverage diagnostic skipped draw count must be non-negative.";
+            return false;
+        }
+
+        if (maxDraws is <= 0)
+        {
+            error = "GX triangle coverage diagnostic draw limit must be positive.";
+            return false;
+        }
+
+        byte[] fifo = accesses
+            .Where(access => access.DeviceName == "GX FIFO" && access.Kind == MmioAccessKind.Write)
+            .SelectMany(ExpandMmioWriteBytes)
+            .ToArray();
+        if (fifo.Length == 0)
+        {
+            error = "no GX FIFO writes were captured.";
+            return false;
+        }
+
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        byte[] rgb = new byte[checked(width * height * 3)];
+        byte[] alpha = Enumerable.Repeat((byte)255, checked(width * height)).ToArray();
+        float[] depth = Enumerable.Repeat(FarDepthValue, checked(width * height)).ToArray();
+        GxVertexState state = new();
+        int offset = 0;
+        int totalDraws = 0;
+        int drawsWritten = 0;
+        int trianglesWritten = 0;
+        int copiesSeen = 0;
+        int rasterPixelsRemaining = maxRasterizedPixels ?? int.MaxValue;
+
+        using StreamWriter writer = new(fullPath);
+        writer.WriteLine("draw_index,fifo_offset,primitive,format,vertices,triangle_index,vertex_a,vertex_b,vertex_c,input_projected_vertices,input_clipped_vertices,screen_min_x,screen_max_x,screen_min_y,screen_max_y,screen_area,view_w_min,view_w_max,near_clip_w,stage0_tex_s_min,stage0_tex_s_max,stage0_tex_t_min,stage0_tex_t_max,raster_before,raster_after,raster_spent,clip_input_triangles,near_clip_output_vertices,near_clip_output_triangles,near_clip_culled_triangles,covered_pixels,depth_rejected,alpha_rejected,fogged_pixels,color_update_disabled,color_writes,black_color_writes,alpha_updates,depth_updates,z_mode,blend_mode,alpha_compare,fog_mode,fog_color,fog_range,gen_mode,stage0_mode,sample_raster_rgba,sample_tev_evaluated,sample_tev_rgba,sample_alpha_test,stage_summary,rendered,reason");
+
+        while (offset < fifo.Length)
+        {
+            int commandOffset = offset;
+            byte command = fifo[offset++];
+            if (command is 0x00 or 0x44 or 0x48)
+            {
+                continue;
+            }
+
+            if (command == 0x08 && TryReadBigEndian(fifo, offset, 1, out uint cpRegister) && TryReadBigEndian(fifo, offset + 1, 4, out uint cpValue))
+            {
+                state.WriteCpRegister((byte)cpRegister, cpValue);
+                offset += 5;
+                continue;
+            }
+
+            if (command == 0x10 && TryReadBigEndian(fifo, offset, 4, out uint xfHeader))
+            {
+                ushort xfRegister = (ushort)(xfHeader & 0xFFFF);
+                uint wordCount = ((xfHeader >> 16) & 0xFFFF) + 1;
+                int xfPayloadBytes = AvailablePayloadBytes(fifo, offset + 4, wordCount);
+                state.WriteXfRegisters(fifo, offset + 4, xfRegister, xfPayloadBytes / sizeof(uint));
+                offset += 4 + xfPayloadBytes;
+                continue;
+            }
+
+            if (command is 0x20 or 0x28 or 0x30 or 0x38)
+            {
+                offset += Math.Min(4, fifo.Length - offset);
+                continue;
+            }
+
+            if (command == 0x40)
+            {
+                offset += Math.Min(8, fifo.Length - offset);
+                continue;
+            }
+
+            if (command == 0x61)
+            {
+                if (TryReadBigEndian(fifo, offset, 4, out uint bpValue))
+                {
+                    state.WriteBpRegister(bpValue);
+                    if ((bpValue >> 24) == 0x52)
+                    {
+                        copiesSeen++;
+                        state.TryCopyEfb(memory, rgb, alpha, depth, width, height, clearAfterCopy: !ignoreEfbCopyClear, out _);
+                    }
+                }
+
+                offset += Math.Min(4, fifo.Length - offset);
+                continue;
+            }
+
+            if ((command & 0x80) == 0 || !TryReadBigEndian(fifo, offset, 2, out uint vertexCount))
+            {
+                break;
+            }
+
+            int format = command & 7;
+            if (!state.TryGetVertexStride(format, out int stride))
+            {
+                break;
+            }
+
+            offset += 2;
+            long payloadBytes = (long)vertexCount * stride;
+            if (payloadBytes > fifo.Length - offset)
+            {
+                break;
+            }
+
+            totalDraws++;
+            long renderEndDraw = maxDraws is int maxDrawLimit ? (long)skipDraws + maxDrawLimit : long.MaxValue;
+            bool renderDraw = totalDraws > skipDraws && totalDraws <= renderEndDraw;
+            if (renderDraw && state.IsRenderablePositionFormat(format) && vertexCount <= int.MaxValue)
+            {
+                int vertexOffset = offset;
+                GxVertex[] vertices = new GxVertex[(int)vertexCount];
+                bool decodedVertices = true;
+                for (int vertex = 0; vertex < vertices.Length; vertex++)
+                {
+                    if (!state.TryReadVertex(fifo, ref vertexOffset, format, memory, out vertices[vertex]))
+                    {
+                        decodedVertices = false;
+                        break;
+                    }
+                }
+
+                if (decodedVertices)
+                {
+                    drawsWritten++;
+                    foreach (DiagnosticTriangle triangle in SelectRasterTriangles(command, vertices))
+                    {
+                        RasterDiagnosticCounters counters = new();
+                        int rasterBefore = rasterPixelsRemaining;
+                        bool rendered = FillTriangleBounds(rgb, alpha, depth, width, height, triangle.A, triangle.B, triangle.C, state, memory, ref rasterPixelsRemaining, counters, timings: null);
+                        WriteTriangleCoverageCsv(writer, totalDraws, commandOffset, command, format, vertexCount, triangle, state, memory, rasterBefore, rasterPixelsRemaining, counters, rendered);
+                        trianglesWritten++;
+                    }
+                }
+            }
+
+            offset += (int)payloadBytes;
+            if (maxDraws is not null && totalDraws >= renderEndDraw)
+            {
+                break;
+            }
+        }
+
+        result = new GxFifoTriangleCoverageDiagnosticResult(fullPath, drawsWritten, trianglesWritten, copiesSeen, rasterPixelsRemaining <= 0);
+        return true;
+    }
+
+    public static bool TryWriteTransformDiagnostics(IReadOnlyList<MmioAccess> accesses, GameCubeMemory? memory, string path, int skipDraws, int maxDraws, out GxFifoTransformDiagnosticResult? result, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(accesses);
+        result = null;
+        error = null;
+        if (skipDraws < 0)
+        {
+            error = "GX transform diagnostic skipped draw count must be non-negative.";
+            return false;
+        }
+
+        if (maxDraws <= 0)
+        {
+            error = "GX transform diagnostic draw limit must be positive.";
+            return false;
+        }
+
+        byte[] fifo = accesses
+            .Where(access => access.DeviceName == "GX FIFO" && access.Kind == MmioAccessKind.Write)
+            .SelectMany(ExpandMmioWriteBytes)
+            .ToArray();
+        if (fifo.Length == 0)
+        {
+            error = "no GX FIFO writes were captured.";
+            return false;
+        }
+
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        GxVertexState state = new();
+        int offset = 0;
+        int totalDraws = 0;
+        int drawsWritten = 0;
+        using StreamWriter writer = new(fullPath);
+        writer.WriteLine("draw_index,fifo_offset,primitive,format,vertices,decoded,projected_vertices,clipped_vertices,matrix_index_raw,pos_base,projection_type,viewport_scale_x,viewport_scale_y,viewport_scale_z,viewport_origin_x,viewport_origin_y,viewport_origin_z,projection_00,projection_01_or_03,projection_11,projection_12_or_13,projection_22,projection_23,model_min_x,model_max_x,model_min_y,model_max_y,model_min_z,model_max_z,view_min_x,view_max_x,view_min_y,view_max_y,view_min_z,view_max_z,screen_min_x,screen_max_x,screen_min_y,screen_max_y,screen_min_z,screen_max_z,first_model,first_view,first_screen");
+
+        while (offset < fifo.Length)
+        {
+            int commandOffset = offset;
+            byte command = fifo[offset++];
+            if (command is 0x00 or 0x44 or 0x48)
+            {
+                continue;
+            }
+
+            if (command == 0x08 && TryReadBigEndian(fifo, offset, 1, out uint cpRegister) && TryReadBigEndian(fifo, offset + 1, 4, out uint cpValue))
+            {
+                state.WriteCpRegister((byte)cpRegister, cpValue);
+                offset += 5;
+                continue;
+            }
+
+            if (command == 0x10 && TryReadBigEndian(fifo, offset, 4, out uint xfHeader))
+            {
+                ushort xfRegister = (ushort)(xfHeader & 0xFFFF);
+                uint wordCount = ((xfHeader >> 16) & 0xFFFF) + 1;
+                int xfPayloadBytes = AvailablePayloadBytes(fifo, offset + 4, wordCount);
+                state.WriteXfRegisters(fifo, offset + 4, xfRegister, xfPayloadBytes / sizeof(uint));
+                offset += 4 + xfPayloadBytes;
+                continue;
+            }
+
+            if (command is 0x20 or 0x28 or 0x30 or 0x38)
+            {
+                offset += Math.Min(4, fifo.Length - offset);
+                continue;
+            }
+
+            if (command == 0x40)
+            {
+                offset += Math.Min(8, fifo.Length - offset);
+                continue;
+            }
+
+            if (command == 0x61)
+            {
+                if (TryReadBigEndian(fifo, offset, 4, out uint bpValue))
+                {
+                    state.WriteBpRegister(bpValue);
+                }
+
+                offset += Math.Min(4, fifo.Length - offset);
+                continue;
+            }
+
+            if ((command & 0x80) == 0 || !TryReadBigEndian(fifo, offset, 2, out uint vertexCount))
+            {
+                break;
+            }
+
+            int format = command & 7;
+            if (!state.TryGetVertexStride(format, out int stride))
+            {
+                break;
+            }
+
+            offset += 2;
+            long payloadBytes = (long)vertexCount * stride;
+            if (payloadBytes > fifo.Length - offset)
+            {
+                break;
+            }
+
+            totalDraws++;
+            long lastRequestedDraw = (long)skipDraws + maxDraws;
+            bool writeDraw = totalDraws > skipDraws && totalDraws <= lastRequestedDraw;
+            if (writeDraw)
+            {
+                drawsWritten++;
+                WriteTransformDiagnosticCsv(writer, totalDraws, commandOffset, command, format, vertexCount, fifo, offset, state, memory);
+            }
+
+            offset += (int)payloadBytes;
+            if (totalDraws >= lastRequestedDraw)
+            {
+                break;
+            }
+        }
+
+        result = new GxFifoTransformDiagnosticResult(fullPath, drawsWritten, totalDraws);
+        return true;
+    }
+
+    public static bool TryWriteStateTimelineDiagnostics(IReadOnlyList<MmioAccess> accesses, string path, int skipDraws, int maxDraws, out GxFifoStateTimelineDiagnosticResult? result, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(accesses);
+        result = null;
+        error = null;
+        if (skipDraws < 0)
+        {
+            error = "GX state timeline skipped draw count must be non-negative.";
+            return false;
+        }
+
+        if (maxDraws <= 0)
+        {
+            error = "GX state timeline draw limit must be positive.";
+            return false;
+        }
+
+        byte[] fifo = accesses
+            .Where(access => access.DeviceName == "GX FIFO" && access.Kind == MmioAccessKind.Write)
+            .SelectMany(ExpandMmioWriteBytes)
+            .ToArray();
+        if (fifo.Length == 0)
+        {
+            error = "no GX FIFO writes were captured.";
+            return false;
+        }
+
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        GxVertexState state = new();
+        int offset = 0;
+        int totalDraws = 0;
+        int copiesSeen = 0;
+        int eventsWritten = 0;
+        long lastRequestedDraw = (long)skipDraws + maxDraws;
+        using StreamWriter writer = new(fullPath);
+        writer.WriteLine("event_index,fifo_offset,draws_seen,copies_seen,event,register,raw_value,primitive,format,vertices,matrix_index_raw,pos_base,tex0_base,texgen0_raw,texgen0_projection,texgen0_source,texgen0_type,projection_type,viewport_scale_x,viewport_scale_y,viewport_scale_z,viewport_origin_x,viewport_origin_y,viewport_origin_z,projection_00,projection_01_or_03,projection_11,projection_12_or_13,projection_22,projection_23,pos_row0,pos_row1,pos_row2,scissor_left,scissor_top,scissor_right,scissor_bottom,scissor_top_left_raw,scissor_bottom_right_raw,z_mode,blend_mode,alpha_compare,fog_mode,fog_color,fog_range,gen_mode,copy_kind,copy_destination_address,copy_source_rect,copy_output_size,copy_format,copy_clear,xf_color_channel_count,xf_color0_ambient,xf_color0_material,xf_color0_control,xf_alpha0_control,xf_color0_material_source,xf_alpha0_material_source,xf_color0_ambient_source,xf_alpha0_ambient_source,xf_color0_lighting,xf_alpha0_lighting,xf_color0_lights,xf_alpha0_lights,xf_color1_ambient,xf_color1_material,xf_color1_control,xf_alpha1_control,xf_color1_material_source,xf_alpha1_material_source,xf_color1_ambient_source,xf_alpha1_ambient_source,xf_color1_lighting,xf_alpha1_lighting,xf_color1_lights,xf_alpha1_lights");
+
+        bool IncludeStateEventBeforeNextDraw() => totalDraws >= skipDraws && totalDraws < lastRequestedDraw;
+
+        while (offset < fifo.Length)
+        {
+            int commandOffset = offset;
+            byte command = fifo[offset++];
+            if (command is 0x00 or 0x44 or 0x48)
+            {
+                continue;
+            }
+
+            if (command == 0x08 && TryReadBigEndian(fifo, offset, 1, out uint cpRegister) && TryReadBigEndian(fifo, offset + 1, 4, out uint cpValue))
+            {
+                state.WriteCpRegister((byte)cpRegister, cpValue);
+                if (IncludeStateEventBeforeNextDraw() && IsImportantCpRegister((byte)cpRegister))
+                {
+                    WriteStateTimelineCsv(writer, ++eventsWritten, commandOffset, totalDraws, copiesSeen, "cp", $"0x{cpRegister:X2}", $"0x{cpValue:X8}", string.Empty, string.Empty, string.Empty, state);
+                }
+
+                offset += 5;
+                continue;
+            }
+
+            if (command == 0x10 && TryReadBigEndian(fifo, offset, 4, out uint xfHeader))
+            {
+                ushort xfRegister = (ushort)(xfHeader & 0xFFFF);
+                uint wordCount = ((xfHeader >> 16) & 0xFFFF) + 1;
+                int xfPayloadBytes = AvailablePayloadBytes(fifo, offset + 4, wordCount);
+                state.WriteXfRegisters(fifo, offset + 4, xfRegister, xfPayloadBytes / sizeof(uint));
+                int actualWords = xfPayloadBytes / sizeof(uint);
+                if (IncludeStateEventBeforeNextDraw() && actualWords != 0 && IsImportantXfRange(xfRegister, actualWords))
+                {
+                    string registerRange = actualWords == 1
+                        ? $"0x{xfRegister:X4}"
+                        : $"0x{xfRegister:X4}..0x{xfRegister + actualWords - 1:X4}";
+                    WriteStateTimelineCsv(writer, ++eventsWritten, commandOffset, totalDraws, copiesSeen, "xf", registerRange, FormatXfPayloadWords(fifo, offset + 4, actualWords), string.Empty, string.Empty, actualWords.ToString(CultureInfo.InvariantCulture), state);
+                }
+
+                offset += 4 + xfPayloadBytes;
+                continue;
+            }
+
+            if (command is 0x20 or 0x28 or 0x30 or 0x38)
+            {
+                offset += Math.Min(4, fifo.Length - offset);
+                continue;
+            }
+
+            if (command == 0x40)
+            {
+                offset += Math.Min(8, fifo.Length - offset);
+                continue;
+            }
+
+            if (command == 0x61)
+            {
+                if (TryReadBigEndian(fifo, offset, 4, out uint bpValue))
+                {
+                    byte bpRegister = (byte)(bpValue >> 24);
+                    state.WriteBpRegister(bpValue);
+                    if (bpRegister == 0x52)
+                    {
+                        copiesSeen++;
+                    }
+
+                    if (IncludeStateEventBeforeNextDraw() && IsImportantBpRegister(bpRegister))
+                    {
+                        string eventName = bpRegister == 0x52 && state.TryGetEfbCopyInfo(out _) ? "copy" : "bp";
+                        WriteStateTimelineCsv(writer, ++eventsWritten, commandOffset, totalDraws, copiesSeen, eventName, $"0x{bpRegister:X2}", $"0x{bpValue & 0x00FF_FFFF:X6}", string.Empty, string.Empty, string.Empty, state);
+                    }
+                }
+
+                offset += Math.Min(4, fifo.Length - offset);
+                continue;
+            }
+
+            if ((command & 0x80) == 0 || !TryReadBigEndian(fifo, offset, 2, out uint vertexCount))
+            {
+                break;
+            }
+
+            int format = command & 7;
+            if (!state.TryGetVertexStride(format, out int stride))
+            {
+                break;
+            }
+
+            offset += 2;
+            long payloadBytes = (long)vertexCount * stride;
+            if (payloadBytes > fifo.Length - offset)
+            {
+                break;
+            }
+
+            totalDraws++;
+            if (totalDraws > skipDraws && totalDraws <= lastRequestedDraw)
+            {
+                WriteStateTimelineCsv(writer, ++eventsWritten, commandOffset, totalDraws, copiesSeen, "draw", string.Empty, $"0x{command:X2}", PrimitiveName(command).Replace(",", ";", StringComparison.Ordinal), format.ToString(CultureInfo.InvariantCulture), vertexCount.ToString(CultureInfo.InvariantCulture), state);
+            }
+
+            offset += (int)payloadBytes;
+            if (totalDraws >= lastRequestedDraw)
+            {
+                break;
+            }
+        }
+
+        result = new GxFifoStateTimelineDiagnosticResult(fullPath, eventsWritten, totalDraws, copiesSeen);
+        return true;
+    }
+
+    public static bool TryWriteVertexDiagnostics(IReadOnlyList<MmioAccess> accesses, GameCubeMemory? memory, string path, int skipDraws, int maxDraws, out GxFifoVertexDiagnosticResult? result, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(accesses);
+        result = null;
+        error = null;
+        if (skipDraws < 0)
+        {
+            error = "GX vertex diagnostic skipped draw count must be non-negative.";
+            return false;
+        }
+
+        if (maxDraws <= 0)
+        {
+            error = "GX vertex diagnostic draw limit must be positive.";
+            return false;
+        }
+
+        byte[] fifo = accesses
+            .Where(access => access.DeviceName == "GX FIFO" && access.Kind == MmioAccessKind.Write)
+            .SelectMany(ExpandMmioWriteBytes)
+            .ToArray();
+        if (fifo.Length == 0)
+        {
+            error = "no GX FIFO writes were captured.";
+            return false;
+        }
+
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        GxVertexState state = new();
+        int offset = 0;
+        int totalDraws = 0;
+        int drawsWritten = 0;
+        int verticesWritten = 0;
+        using StreamWriter writer = new(fullPath);
+        writer.WriteLine("draw_index,fifo_offset,primitive,format,vertex_count,vertex_index,vertex_payload_offset,decoded,clip_rejected,has_view,model_x,model_y,model_z,view_x,view_y,view_z,clip_x,clip_y,clip_z,clip_w,clip_near,clip_far,screen_x,screen_y,screen_z,inv_w,color_r,color_g,color_b,color_a,color1_r,color1_g,color1_b,color1_a,tex0_s,tex0_t,raw_tex0_s,raw_tex0_t,raw_bytes");
+
+        while (offset < fifo.Length)
+        {
+            int commandOffset = offset;
+            byte command = fifo[offset++];
+            if (command is 0x00 or 0x44 or 0x48)
+            {
+                continue;
+            }
+
+            if (command == 0x08 && TryReadBigEndian(fifo, offset, 1, out uint cpRegister) && TryReadBigEndian(fifo, offset + 1, 4, out uint cpValue))
+            {
+                state.WriteCpRegister((byte)cpRegister, cpValue);
+                offset += 5;
+                continue;
+            }
+
+            if (command == 0x10 && TryReadBigEndian(fifo, offset, 4, out uint xfHeader))
+            {
+                ushort xfRegister = (ushort)(xfHeader & 0xFFFF);
+                uint wordCount = ((xfHeader >> 16) & 0xFFFF) + 1;
+                int xfPayloadBytes = AvailablePayloadBytes(fifo, offset + 4, wordCount);
+                state.WriteXfRegisters(fifo, offset + 4, xfRegister, xfPayloadBytes / sizeof(uint));
+                offset += 4 + xfPayloadBytes;
+                continue;
+            }
+
+            if (command is 0x20 or 0x28 or 0x30 or 0x38)
+            {
+                offset += Math.Min(4, fifo.Length - offset);
+                continue;
+            }
+
+            if (command == 0x40)
+            {
+                offset += Math.Min(8, fifo.Length - offset);
+                continue;
+            }
+
+            if (command == 0x61)
+            {
+                if (TryReadBigEndian(fifo, offset, 4, out uint bpValue))
+                {
+                    state.WriteBpRegister(bpValue);
+                }
+
+                offset += Math.Min(4, fifo.Length - offset);
+                continue;
+            }
+
+            if ((command & 0x80) == 0 || !TryReadBigEndian(fifo, offset, 2, out uint vertexCount))
+            {
+                break;
+            }
+
+            int format = command & 7;
+            if (!state.TryGetVertexStride(format, out int stride))
+            {
+                break;
+            }
+
+            offset += 2;
+            long payloadBytes = (long)vertexCount * stride;
+            if (payloadBytes > fifo.Length - offset)
+            {
+                break;
+            }
+
+            totalDraws++;
+            long lastRequestedDraw = (long)skipDraws + maxDraws;
+            bool writeDraw = totalDraws > skipDraws && totalDraws <= lastRequestedDraw;
+            if (writeDraw)
+            {
+                drawsWritten++;
+                verticesWritten += WriteVertexDiagnosticCsv(writer, totalDraws, commandOffset, command, format, vertexCount, fifo, offset, stride, state, memory);
+            }
+
+            offset += (int)payloadBytes;
+            if (totalDraws >= lastRequestedDraw)
+            {
+                break;
+            }
+        }
+
+        result = new GxFifoVertexDiagnosticResult(fullPath, drawsWritten, verticesWritten, totalDraws);
+        return true;
+    }
+
+    private static int WriteVertexDiagnosticCsv(StreamWriter writer, int drawIndex, int fifoOffset, byte command, int format, uint vertexCount, byte[] fifo, int payloadOffset, int stride, GxVertexState state, GameCubeMemory? memory)
+    {
+        int decodeOffset = payloadOffset;
+        int rows = 0;
+        int verticesToDecode = checked((int)Math.Min(vertexCount, int.MaxValue));
+        for (int vertexIndex = 0; vertexIndex < verticesToDecode; vertexIndex++)
+        {
+            int vertexOffset = decodeOffset;
+            bool decoded = state.TryReadVertex(fifo, ref decodeOffset, format, memory, out GxVertex vertex);
+            float clipX = 0;
+            float clipY = 0;
+            float clipZ = 0;
+            float clipW = 0;
+            float clipNear = 0;
+            float clipFar = 0;
+            bool hasClip = decoded
+                && vertex.HasViewPosition
+                && state.TryGetClipPosition(vertex.ViewX, vertex.ViewY, vertex.ViewZ, out clipX, out clipY, out clipZ, out clipW, out clipNear, out clipFar);
+            writer.WriteLine(string.Join(',',
+                drawIndex.ToString(CultureInfo.InvariantCulture),
+                $"+0x{fifoOffset:X}",
+                PrimitiveName(command).Replace(",", ";", StringComparison.Ordinal),
+                format.ToString(CultureInfo.InvariantCulture),
+                vertexCount.ToString(CultureInfo.InvariantCulture),
+                vertexIndex.ToString(CultureInfo.InvariantCulture),
+                $"+0x{vertexOffset:X}",
+                decoded ? "True" : "False",
+                decoded && vertex.ClipRejected ? "True" : "False",
+                decoded && vertex.HasViewPosition ? "True" : "False",
+                decoded ? FormatFloat(vertex.ModelX) : string.Empty,
+                decoded ? FormatFloat(vertex.ModelY) : string.Empty,
+                decoded ? FormatFloat(vertex.ModelZ) : string.Empty,
+                decoded && vertex.HasViewPosition ? FormatFloat(vertex.ViewX) : string.Empty,
+                decoded && vertex.HasViewPosition ? FormatFloat(vertex.ViewY) : string.Empty,
+                decoded && vertex.HasViewPosition ? FormatFloat(vertex.ViewZ) : string.Empty,
+                hasClip ? FormatFloat(clipX) : string.Empty,
+                hasClip ? FormatFloat(clipY) : string.Empty,
+                hasClip ? FormatFloat(clipZ) : string.Empty,
+                hasClip ? FormatFloat(clipW) : string.Empty,
+                hasClip ? FormatFloat(clipNear) : string.Empty,
+                hasClip ? FormatFloat(clipFar) : string.Empty,
+                decoded && !vertex.ClipRejected ? FormatFloat(vertex.X) : string.Empty,
+                decoded && !vertex.ClipRejected ? FormatFloat(vertex.Y) : string.Empty,
+                decoded && !vertex.ClipRejected ? FormatFloat(vertex.Z) : string.Empty,
+                decoded ? FormatFloat(vertex.InvW) : string.Empty,
+                decoded ? vertex.R.ToString(CultureInfo.InvariantCulture) : string.Empty,
+                decoded ? vertex.G.ToString(CultureInfo.InvariantCulture) : string.Empty,
+                decoded ? vertex.B.ToString(CultureInfo.InvariantCulture) : string.Empty,
+                decoded ? vertex.A.ToString(CultureInfo.InvariantCulture) : string.Empty,
+                decoded && vertex.HasColor1 ? vertex.R1.ToString(CultureInfo.InvariantCulture) : string.Empty,
+                decoded && vertex.HasColor1 ? vertex.G1.ToString(CultureInfo.InvariantCulture) : string.Empty,
+                decoded && vertex.HasColor1 ? vertex.B1.ToString(CultureInfo.InvariantCulture) : string.Empty,
+                decoded && vertex.HasColor1 ? vertex.A1.ToString(CultureInfo.InvariantCulture) : string.Empty,
+                decoded && vertex.HasTex0 ? FormatFloat(vertex.Tex0S) : string.Empty,
+                decoded && vertex.HasTex0 ? FormatFloat(vertex.Tex0T) : string.Empty,
+                decoded && vertex.HasRawTex0 ? FormatFloat(vertex.RawTex0S) : string.Empty,
+                decoded && vertex.HasRawTex0 ? FormatFloat(vertex.RawTex0T) : string.Empty,
+                CsvField(FormatHexInline(fifo, vertexOffset, Math.Min(stride, 64)))));
+            rows++;
+
+            if (!decoded)
+            {
+                break;
+            }
+        }
+
+        return rows;
+    }
+
+    private static void WriteTransformDiagnosticCsv(StreamWriter writer, int drawIndex, int fifoOffset, byte command, int format, uint vertexCount, byte[] fifo, int payloadOffset, GxVertexState state, GameCubeMemory? memory)
+    {
+        int decodeOffset = payloadOffset;
+        bool decoded = vertexCount <= int.MaxValue;
+        GxVertex[] vertices = decoded ? new GxVertex[(int)vertexCount] : [];
+        for (int vertex = 0; decoded && vertex < vertices.Length; vertex++)
+        {
+            decoded = state.TryReadVertex(fifo, ref decodeOffset, format, memory, out vertices[vertex]);
+        }
+
+        int projectedVertices = decoded ? vertices.Count(vertex => vertex.HasViewPosition && !vertex.ClipRejected) : 0;
+        int clippedVertices = decoded ? vertices.Count(vertex => vertex.ClipRejected) : 0;
+        TransformBounds model = TransformBounds.From(vertices, decoded, vertex => vertex.ModelX, vertex => vertex.ModelY, vertex => vertex.ModelZ);
+        TransformBounds view = TransformBounds.From(vertices.Where(vertex => vertex.HasViewPosition), decoded, vertex => vertex.ViewX, vertex => vertex.ViewY, vertex => vertex.ViewZ);
+        TransformBounds screen = TransformBounds.From(vertices.Where(vertex => !vertex.ClipRejected), decoded, vertex => vertex.X, vertex => vertex.Y, vertex => vertex.Z);
+        TransformDiagnosticState transform = state.GetTransformDiagnosticState();
+
+        string firstModel = decoded && vertices.Length != 0
+            ? FormatVector(vertices[0].ModelX, vertices[0].ModelY, vertices[0].ModelZ)
+            : string.Empty;
+        string firstView = decoded && vertices.Length != 0 && vertices[0].HasViewPosition
+            ? FormatVector(vertices[0].ViewX, vertices[0].ViewY, vertices[0].ViewZ)
+            : string.Empty;
+        string firstScreen = decoded && vertices.Length != 0 && !vertices[0].ClipRejected
+            ? FormatVector(vertices[0].X, vertices[0].Y, vertices[0].Z)
+            : string.Empty;
+
+        writer.WriteLine(string.Join(',',
+            drawIndex.ToString(CultureInfo.InvariantCulture),
+            $"+0x{fifoOffset:X}",
+            PrimitiveName(command).Replace(",", ";", StringComparison.Ordinal),
+            format.ToString(CultureInfo.InvariantCulture),
+            vertexCount.ToString(CultureInfo.InvariantCulture),
+            decoded ? "True" : "False",
+            projectedVertices.ToString(CultureInfo.InvariantCulture),
+            clippedVertices.ToString(CultureInfo.InvariantCulture),
+            transform.MatrixIndexRaw,
+            transform.PositionMatrixBase,
+            transform.ProjectionType,
+            transform.ViewportScaleX,
+            transform.ViewportScaleY,
+            transform.ViewportScaleZ,
+            transform.ViewportOriginX,
+            transform.ViewportOriginY,
+            transform.ViewportOriginZ,
+            transform.Projection00,
+            transform.Projection01Or03,
+            transform.Projection11,
+            transform.Projection12Or13,
+            transform.Projection22,
+            transform.Projection23,
+            model.MinX,
+            model.MaxX,
+            model.MinY,
+            model.MaxY,
+            model.MinZ,
+            model.MaxZ,
+            view.MinX,
+            view.MaxX,
+            view.MinY,
+            view.MaxY,
+            view.MinZ,
+            view.MaxZ,
+            screen.MinX,
+            screen.MaxX,
+            screen.MinY,
+            screen.MaxY,
+            screen.MinZ,
+            screen.MaxZ,
+            CsvField(firstModel),
+            CsvField(firstView),
+            CsvField(firstScreen)));
+    }
+
+    private static void WriteStateTimelineCsv(
+        StreamWriter writer,
+        int eventIndex,
+        int fifoOffset,
+        int drawsSeen,
+        int copiesSeen,
+        string eventName,
+        string register,
+        string rawValue,
+        string primitive,
+        string format,
+        string vertices,
+        GxVertexState state)
+    {
+        StateTimelineSnapshot snapshot = state.GetStateTimelineSnapshot();
+        TransformDiagnosticState transform = snapshot.Transform;
+        writer.WriteLine(string.Join(',',
+            eventIndex.ToString(CultureInfo.InvariantCulture),
+            $"+0x{fifoOffset:X}",
+            drawsSeen.ToString(CultureInfo.InvariantCulture),
+            copiesSeen.ToString(CultureInfo.InvariantCulture),
+            eventName,
+            register,
+            rawValue,
+            primitive,
+            format,
+            vertices,
+            transform.MatrixIndexRaw,
+            transform.PositionMatrixBase,
+            snapshot.Tex0MatrixBase,
+            snapshot.TexGen0Raw,
+            snapshot.TexGen0Projection,
+            snapshot.TexGen0Source,
+            snapshot.TexGen0Type,
+            transform.ProjectionType,
+            transform.ViewportScaleX,
+            transform.ViewportScaleY,
+            transform.ViewportScaleZ,
+            transform.ViewportOriginX,
+            transform.ViewportOriginY,
+            transform.ViewportOriginZ,
+            transform.Projection00,
+            transform.Projection01Or03,
+            transform.Projection11,
+            transform.Projection12Or13,
+            transform.Projection22,
+            transform.Projection23,
+            CsvField(snapshot.PositionMatrixRow0),
+            CsvField(snapshot.PositionMatrixRow1),
+            CsvField(snapshot.PositionMatrixRow2),
+            snapshot.ScissorLeft,
+            snapshot.ScissorTop,
+            snapshot.ScissorRight,
+            snapshot.ScissorBottom,
+            snapshot.ScissorTopLeftRaw,
+            snapshot.ScissorBottomRightRaw,
+            snapshot.ZMode,
+            snapshot.BlendMode,
+            snapshot.AlphaCompare,
+            CsvField(snapshot.FogMode),
+            CsvField(snapshot.FogColor),
+            CsvField(snapshot.FogRange),
+            snapshot.GenMode,
+            snapshot.CopyKind,
+            snapshot.CopyDestinationAddress,
+            snapshot.CopySourceRect,
+            snapshot.CopyOutputSize,
+            snapshot.CopyFormat,
+            snapshot.CopyClear,
+            snapshot.XfColor.ChannelCount,
+            CsvField(snapshot.XfColor.Channel0Ambient),
+            CsvField(snapshot.XfColor.Channel0Material),
+            snapshot.XfColor.Channel0ColorControl,
+            snapshot.XfColor.Channel0AlphaControl,
+            snapshot.XfColor.Channel0ColorMaterialSource,
+            snapshot.XfColor.Channel0AlphaMaterialSource,
+            snapshot.XfColor.Channel0ColorAmbientSource,
+            snapshot.XfColor.Channel0AlphaAmbientSource,
+            snapshot.XfColor.Channel0ColorLighting,
+            snapshot.XfColor.Channel0AlphaLighting,
+            snapshot.XfColor.Channel0ColorLights,
+            snapshot.XfColor.Channel0AlphaLights,
+            CsvField(snapshot.XfColor.Channel1Ambient),
+            CsvField(snapshot.XfColor.Channel1Material),
+            snapshot.XfColor.Channel1ColorControl,
+            snapshot.XfColor.Channel1AlphaControl,
+            snapshot.XfColor.Channel1ColorMaterialSource,
+            snapshot.XfColor.Channel1AlphaMaterialSource,
+            snapshot.XfColor.Channel1ColorAmbientSource,
+            snapshot.XfColor.Channel1AlphaAmbientSource,
+            snapshot.XfColor.Channel1ColorLighting,
+            snapshot.XfColor.Channel1AlphaLighting,
+            snapshot.XfColor.Channel1ColorLights,
+            snapshot.XfColor.Channel1AlphaLights));
+    }
+
+    private static bool IsImportantCpRegister(byte register) =>
+        register is >= 0x50 and <= 0x57
+            or >= 0x60 and <= 0x67
+            or >= 0x70 and <= 0x97
+            or >= 0xA0 and <= 0xBF;
+
+    private static string FormatXfPayloadWords(byte[] fifo, int payloadOffset, int actualWords)
+    {
+        const int MaxInlineWords = 4;
+        int wordsToFormat = Math.Min(actualWords, MaxInlineWords);
+        string[] words = new string[wordsToFormat + (actualWords > MaxInlineWords ? 1 : 0)];
+        for (int word = 0; word < wordsToFormat; word++)
+        {
+            _ = TryReadBigEndian(fifo, payloadOffset + (word * sizeof(uint)), sizeof(uint), out uint value);
+            words[word] = $"0x{value:X8}";
+        }
+
+        if (actualWords > MaxInlineWords)
+        {
+            words[^1] = "...";
+        }
+
+        return string.Join('|', words);
+    }
+
+    private static bool IsImportantXfRange(ushort register, int wordCount)
+    {
+        ushort end = checked((ushort)(register + Math.Max(0, wordCount - 1)));
+        return register <= 0x00FF
+            || RangesOverlap(register, end, 0x1009, 0x1011)
+            || RangesOverlap(register, end, 0x1018, 0x1026)
+            || RangesOverlap(register, end, 0x1040, 0x104F);
+    }
+
+    private static bool IsImportantBpRegister(byte register) =>
+        register is 0x00
+            or 0x20
+            or 0x21
+            or 0x28
+            or 0x40
+            or 0x41
+            or 0x42
+            or 0x45
+            or 0x49
+            or 0x4A
+            or 0x4B
+            or 0x4D
+            or 0x4F
+            or 0x50
+            or 0x51
+            or 0x52
+            or >= 0xE8 and <= 0xF2
+            or 0xF3
+            or >= 0xC0 and <= 0xDF;
+
+    private static bool RangesOverlap(int firstStart, int firstEnd, int secondStart, int secondEnd) =>
+        firstStart <= secondEnd && secondStart <= firstEnd;
+
+    private static string FormatDiagnosticRegionHeader()
+    {
+        return string.Join(',', DiagnosticRegions.Select(region => string.Join(',',
+            $"{region.Name}_before_nonblack",
+            $"{region.Name}_after_nonblack",
+            $"{region.Name}_delta_nonblack",
+            $"{region.Name}_before_percent",
+            $"{region.Name}_after_percent",
+            $"{region.Name}_after_bounds",
+            $"{region.Name}_covered_pixels",
+            $"{region.Name}_depth_rejected",
+            $"{region.Name}_alpha_rejected",
+            $"{region.Name}_texture_samples",
+            $"{region.Name}_texture_nonblack_samples",
+            $"{region.Name}_texture_black_samples",
+            $"{region.Name}_texture_alpha_zero_samples",
+            $"{region.Name}_texture_s_min",
+            $"{region.Name}_texture_s_max",
+            $"{region.Name}_texture_t_min",
+            $"{region.Name}_texture_t_max",
+            $"{region.Name}_texture_nonblack_s_min",
+            $"{region.Name}_texture_nonblack_s_max",
+            $"{region.Name}_texture_nonblack_t_min",
+            $"{region.Name}_texture_nonblack_t_max",
+            $"{region.Name}_texture_frac8_buckets",
+            $"{region.Name}_texture_frac8_nonblack_buckets",
+            $"{region.Name}_color_writes",
+            $"{region.Name}_black_color_writes")));
+    }
+
+    private static EfbCoverage[] CountDiagnosticRegions(byte[] rgb, byte[] alpha, int frameWidth, int frameHeight)
+    {
+        EfbCoverage[] coverages = new EfbCoverage[DiagnosticRegions.Length];
+        for (int index = 0; index < DiagnosticRegions.Length; index++)
+        {
+            DiagnosticRegionSpec region = DiagnosticRegions[index];
+            int left = Math.Clamp(region.Left, 0, frameWidth);
+            int top = Math.Clamp(region.Top, 0, frameHeight);
+            int right = Math.Clamp(region.Left + region.Width, left, frameWidth);
+            int bottom = Math.Clamp(region.Top + region.Height, top, frameHeight);
+            coverages[index] = CountNonBlackRegion(rgb, alpha, frameWidth, frameHeight, left, top, right - left, bottom - top);
+        }
+
+        return coverages;
+    }
+
+    private static string FormatDiagnosticRegionValues(EfbCoverage[] beforeRegions, EfbCoverage[] afterRegions, DiagnosticRegionRasterCounters? regionCounters)
+    {
+        List<string> values = new(DiagnosticRegions.Length * 25);
+        for (int index = 0; index < DiagnosticRegions.Length; index++)
+        {
+            EfbCoverage before = index < beforeRegions.Length ? beforeRegions[index] : default;
+            EfbCoverage after = index < afterRegions.Length ? afterRegions[index] : default;
+            values.Add(before.NonBlackPixels.ToString(CultureInfo.InvariantCulture));
+            values.Add(after.NonBlackPixels.ToString(CultureInfo.InvariantCulture));
+            values.Add((after.NonBlackPixels - before.NonBlackPixels).ToString(CultureInfo.InvariantCulture));
+            values.Add(FormatPercent(before));
+            values.Add(FormatPercent(after));
+            values.Add(FormatBounds(after));
+            values.Add((regionCounters is not null && index < regionCounters.CoveredPixels.Length ? regionCounters.CoveredPixels[index] : 0).ToString(CultureInfo.InvariantCulture));
+            values.Add((regionCounters is not null && index < regionCounters.DepthRejected.Length ? regionCounters.DepthRejected[index] : 0).ToString(CultureInfo.InvariantCulture));
+            values.Add((regionCounters is not null && index < regionCounters.AlphaRejected.Length ? regionCounters.AlphaRejected[index] : 0).ToString(CultureInfo.InvariantCulture));
+            values.Add((regionCounters is not null && index < regionCounters.TextureSamples.Length ? regionCounters.TextureSamples[index] : 0).ToString(CultureInfo.InvariantCulture));
+            values.Add((regionCounters is not null && index < regionCounters.TextureNonBlackSamples.Length ? regionCounters.TextureNonBlackSamples[index] : 0).ToString(CultureInfo.InvariantCulture));
+            values.Add((regionCounters is not null && index < regionCounters.TextureBlackSamples.Length ? regionCounters.TextureBlackSamples[index] : 0).ToString(CultureInfo.InvariantCulture));
+            values.Add((regionCounters is not null && index < regionCounters.TextureAlphaZeroSamples.Length ? regionCounters.TextureAlphaZeroSamples[index] : 0).ToString(CultureInfo.InvariantCulture));
+            values.Add(regionCounters is not null && index < regionCounters.TextureMinS.Length ? FormatFiniteFloat(regionCounters.TextureMinS[index]) : string.Empty);
+            values.Add(regionCounters is not null && index < regionCounters.TextureMaxS.Length ? FormatFiniteFloat(regionCounters.TextureMaxS[index]) : string.Empty);
+            values.Add(regionCounters is not null && index < regionCounters.TextureMinT.Length ? FormatFiniteFloat(regionCounters.TextureMinT[index]) : string.Empty);
+            values.Add(regionCounters is not null && index < regionCounters.TextureMaxT.Length ? FormatFiniteFloat(regionCounters.TextureMaxT[index]) : string.Empty);
+            values.Add(regionCounters is not null && index < regionCounters.TextureNonBlackMinS.Length ? FormatFiniteFloat(regionCounters.TextureNonBlackMinS[index]) : string.Empty);
+            values.Add(regionCounters is not null && index < regionCounters.TextureNonBlackMaxS.Length ? FormatFiniteFloat(regionCounters.TextureNonBlackMaxS[index]) : string.Empty);
+            values.Add(regionCounters is not null && index < regionCounters.TextureNonBlackMinT.Length ? FormatFiniteFloat(regionCounters.TextureNonBlackMinT[index]) : string.Empty);
+            values.Add(regionCounters is not null && index < regionCounters.TextureNonBlackMaxT.Length ? FormatFiniteFloat(regionCounters.TextureNonBlackMaxT[index]) : string.Empty);
+            values.Add(regionCounters is not null && index < regionCounters.TextureFrac8Buckets.Length ? FormatBucketCsvValue(regionCounters.TextureFrac8Buckets[index]) : string.Empty);
+            values.Add(regionCounters is not null && index < regionCounters.TextureFrac8NonBlackBuckets.Length ? FormatBucketCsvValue(regionCounters.TextureFrac8NonBlackBuckets[index]) : string.Empty);
+            values.Add((regionCounters is not null && index < regionCounters.ColorWrites.Length ? regionCounters.ColorWrites[index] : 0).ToString(CultureInfo.InvariantCulture));
+            values.Add((regionCounters is not null && index < regionCounters.BlackColorWrites.Length ? regionCounters.BlackColorWrites[index] : 0).ToString(CultureInfo.InvariantCulture));
+        }
+
+        return string.Join(',', values);
+    }
+
+    private static string FormatBucketCsvValue(int[] buckets) =>
+        string.Join('|', buckets.Select(value => value.ToString(CultureInfo.InvariantCulture)));
+
+    private static void WriteDrawCoverageCsv(StreamWriter writer, int drawIndex, int fifoOffset, byte command, int format, uint vertexCount, bool decoded, int projectedVertices, int clippedVertices, bool allZeroXy, bool allBlackRgb, float minX, float maxX, float minY, float maxY, int copiesSeen, EfbCoverage before, EfbCoverage after, EfbCoverage[] beforeRegions, EfbCoverage[] afterRegions, DiagnosticRegionRasterCounters? regionCounters, int rasterBefore, int rasterAfter, RasterDiagnosticCounters counters, int renderedQuadsDelta, int renderedTrianglesDelta, int degenerateQuadsDelta, int degenerateTrianglesDelta)
     {
         writer.WriteLine(string.Join(',',
             drawIndex.ToString(CultureInfo.InvariantCulture),
@@ -2093,6 +3224,8 @@ public static class GxFifoSoftwareRenderer
             format.ToString(CultureInfo.InvariantCulture),
             vertexCount.ToString(CultureInfo.InvariantCulture),
             decoded ? "True" : "False",
+            decoded ? projectedVertices.ToString(CultureInfo.InvariantCulture) : string.Empty,
+            decoded ? clippedVertices.ToString(CultureInfo.InvariantCulture) : string.Empty,
             decoded && allZeroXy ? "True" : "False",
             decoded && allBlackRgb ? "True" : "False",
             decoded ? FormatFloat(minX) : string.Empty,
@@ -2111,9 +3244,14 @@ public static class GxFifoSoftwareRenderer
             rasterBefore.ToString(CultureInfo.InvariantCulture),
             rasterAfter.ToString(CultureInfo.InvariantCulture),
             (rasterBefore - rasterAfter).ToString(CultureInfo.InvariantCulture),
+            counters.ClipInputTriangles.ToString(CultureInfo.InvariantCulture),
+            counters.NearClipOutputVertices.ToString(CultureInfo.InvariantCulture),
+            counters.NearClipOutputTriangles.ToString(CultureInfo.InvariantCulture),
+            counters.NearClipCulledTriangles.ToString(CultureInfo.InvariantCulture),
             counters.CoveredPixels.ToString(CultureInfo.InvariantCulture),
             counters.DepthRejected.ToString(CultureInfo.InvariantCulture),
             counters.AlphaRejected.ToString(CultureInfo.InvariantCulture),
+            counters.FoggedPixels.ToString(CultureInfo.InvariantCulture),
             counters.ColorUpdateDisabled.ToString(CultureInfo.InvariantCulture),
             counters.ColorWrites.ToString(CultureInfo.InvariantCulture),
             counters.BlackColorWrites.ToString(CultureInfo.InvariantCulture),
@@ -2122,7 +3260,301 @@ public static class GxFifoSoftwareRenderer
             renderedQuadsDelta.ToString(CultureInfo.InvariantCulture),
             renderedTrianglesDelta.ToString(CultureInfo.InvariantCulture),
             degenerateQuadsDelta.ToString(CultureInfo.InvariantCulture),
-            degenerateTrianglesDelta.ToString(CultureInfo.InvariantCulture)));
+            degenerateTrianglesDelta.ToString(CultureInfo.InvariantCulture),
+            FormatDiagnosticRegionValues(beforeRegions, afterRegions, regionCounters)));
+    }
+
+    private static void WriteTriangleCoverageCsv(StreamWriter writer, int drawIndex, int fifoOffset, byte command, int format, uint vertexCount, DiagnosticTriangle triangle, GxVertexState state, GameCubeMemory? memory, int rasterBefore, int rasterAfter, RasterDiagnosticCounters counters, bool rendered)
+    {
+        TryGetInputProjectedBounds(triangle, out int projectedVertices, out int clippedVertices);
+        TryGetRasterDiagnosticVertices(triangle, state, out List<GxVertex> rasterVertices);
+        TryGetRasterProjectedBounds(rasterVertices, out float minX, out float maxX, out float minY, out float maxY, out float screenArea);
+        GetVertexViewWBounds(rasterVertices, out float minW, out float maxW);
+        GetVertexTexCoordBounds(rasterVertices, state.Stage0TexCoord, out float minS, out float maxS, out float minT, out float maxT);
+        StateTimelineSnapshot snapshot = state.GetStateTimelineSnapshot();
+        string rasterColor = string.Empty;
+        string tevEvaluatedText = string.Empty;
+        string tevColor = string.Empty;
+        string alphaTest = string.Empty;
+        string stageSummary = string.Empty;
+        bool hasRasterSampleTriangle = TryGetRasterDiagnosticSampleTriangle(rasterVertices, out DiagnosticTriangle rasterSampleTriangle);
+        if (rendered && hasRasterSampleTriangle)
+        {
+            SampleTriangleCentroidTev(state, memory, rasterSampleTriangle, out rasterColor, out bool tevEvaluated, out tevColor, out bool alphaPass, out stageSummary);
+            tevEvaluatedText = tevEvaluated ? "True" : "False";
+            alphaTest = alphaPass ? "True" : "False";
+        }
+
+        writer.WriteLine(string.Join(',',
+            drawIndex.ToString(CultureInfo.InvariantCulture),
+            $"+0x{fifoOffset:X}",
+            PrimitiveName(command).Replace(",", ";", StringComparison.Ordinal),
+            format.ToString(CultureInfo.InvariantCulture),
+            vertexCount.ToString(CultureInfo.InvariantCulture),
+            triangle.Index.ToString(CultureInfo.InvariantCulture),
+            triangle.VertexAIndex.ToString(CultureInfo.InvariantCulture),
+            triangle.VertexBIndex.ToString(CultureInfo.InvariantCulture),
+            triangle.VertexCIndex.ToString(CultureInfo.InvariantCulture),
+            projectedVertices.ToString(CultureInfo.InvariantCulture),
+            clippedVertices.ToString(CultureInfo.InvariantCulture),
+            rasterVertices.Count > 0 ? FormatFloat(minX) : string.Empty,
+            rasterVertices.Count > 0 ? FormatFloat(maxX) : string.Empty,
+            rasterVertices.Count > 0 ? FormatFloat(minY) : string.Empty,
+            rasterVertices.Count > 0 ? FormatFloat(maxY) : string.Empty,
+            rasterVertices.Count >= 3 ? FormatFloat(screenArea) : string.Empty,
+            float.IsFinite(minW) ? FormatFloat(minW) : string.Empty,
+            float.IsFinite(maxW) ? FormatFloat(maxW) : string.Empty,
+            FormatFloat(state.GetPerspectiveNearClipW()),
+            float.IsFinite(minS) ? FormatFloat(minS) : string.Empty,
+            float.IsFinite(maxS) ? FormatFloat(maxS) : string.Empty,
+            float.IsFinite(minT) ? FormatFloat(minT) : string.Empty,
+            float.IsFinite(maxT) ? FormatFloat(maxT) : string.Empty,
+            rasterBefore.ToString(CultureInfo.InvariantCulture),
+            rasterAfter.ToString(CultureInfo.InvariantCulture),
+            (rasterBefore - rasterAfter).ToString(CultureInfo.InvariantCulture),
+            counters.ClipInputTriangles.ToString(CultureInfo.InvariantCulture),
+            counters.NearClipOutputVertices.ToString(CultureInfo.InvariantCulture),
+            counters.NearClipOutputTriangles.ToString(CultureInfo.InvariantCulture),
+            counters.NearClipCulledTriangles.ToString(CultureInfo.InvariantCulture),
+            counters.CoveredPixels.ToString(CultureInfo.InvariantCulture),
+            counters.DepthRejected.ToString(CultureInfo.InvariantCulture),
+            counters.AlphaRejected.ToString(CultureInfo.InvariantCulture),
+            counters.FoggedPixels.ToString(CultureInfo.InvariantCulture),
+            counters.ColorUpdateDisabled.ToString(CultureInfo.InvariantCulture),
+            counters.ColorWrites.ToString(CultureInfo.InvariantCulture),
+            counters.BlackColorWrites.ToString(CultureInfo.InvariantCulture),
+            counters.AlphaUpdates.ToString(CultureInfo.InvariantCulture),
+            counters.DepthUpdates.ToString(CultureInfo.InvariantCulture),
+            snapshot.ZMode,
+            snapshot.BlendMode,
+            snapshot.AlphaCompare,
+            CsvField(snapshot.FogMode),
+            CsvField(snapshot.FogColor),
+            CsvField(snapshot.FogRange),
+            snapshot.GenMode,
+            state.Stage0Mode.ToString(),
+            rasterColor,
+            tevEvaluatedText,
+            tevColor,
+            alphaTest,
+            CsvField(stageSummary),
+            rendered ? "True" : "False",
+            CsvField(ClassifyTriangleCoverage(projectedVertices, clippedVertices, rasterBefore, counters, rendered))));
+    }
+
+    private static bool TryGetRasterDiagnosticVertices(DiagnosticTriangle triangle, GxVertexState state, out List<GxVertex> vertices)
+    {
+        vertices = [];
+        if (!triangle.A.ClipRejected && !triangle.B.ClipRejected && !triangle.C.ClipRejected)
+        {
+            vertices.Add(triangle.A);
+            vertices.Add(triangle.B);
+            vertices.Add(triangle.C);
+            return true;
+        }
+
+        if (!triangle.A.HasViewPosition || !triangle.B.HasViewPosition || !triangle.C.HasViewPosition)
+        {
+            return false;
+        }
+
+        vertices.AddRange(ClipTriangleToClipVolume([triangle.A, triangle.B, triangle.C], state));
+        return vertices.Count >= 3;
+    }
+
+    private static bool TryGetRasterDiagnosticSampleTriangle(IReadOnlyList<GxVertex> vertices, out DiagnosticTriangle triangle)
+    {
+        triangle = default;
+        if (vertices.Count < 3)
+        {
+            return false;
+        }
+
+        if (vertices.Count == 3)
+        {
+            triangle = new DiagnosticTriangle(0, 0, 1, 2, vertices[0], vertices[1], vertices[2]);
+            return true;
+        }
+
+        float largestArea = float.NegativeInfinity;
+        for (int index = 1; index + 1 < vertices.Count; index++)
+        {
+            DiagnosticTriangle candidate = new(index - 1, 0, index, index + 1, vertices[0], vertices[index], vertices[index + 1]);
+            float area = MathF.Abs(Edge(candidate.A.X, candidate.A.Y, candidate.B.X, candidate.B.Y, candidate.C.X, candidate.C.Y));
+            if (area > largestArea)
+            {
+                largestArea = area;
+                triangle = candidate;
+            }
+        }
+
+        return true;
+    }
+
+    private static void GetVertexViewWBounds(IReadOnlyList<GxVertex> vertices, out float minW, out float maxW)
+    {
+        minW = float.PositiveInfinity;
+        maxW = float.NegativeInfinity;
+        foreach (GxVertex vertex in vertices)
+        {
+            if (!vertex.HasViewPosition)
+            {
+                continue;
+            }
+
+            float w = -vertex.ViewZ;
+            minW = Math.Min(minW, w);
+            maxW = Math.Max(maxW, w);
+        }
+    }
+
+    private static void GetVertexTexCoordBounds(IReadOnlyList<GxVertex> vertices, int texCoord, out float minS, out float maxS, out float minT, out float maxT)
+    {
+        float localMinS = float.PositiveInfinity;
+        float localMaxS = float.NegativeInfinity;
+        float localMinT = float.PositiveInfinity;
+        float localMaxT = float.NegativeInfinity;
+        foreach (GxVertex vertex in vertices)
+        {
+            Update(vertex);
+        }
+
+        minS = localMinS;
+        maxS = localMaxS;
+        minT = localMinT;
+        maxT = localMaxT;
+
+        void Update(GxVertex vertex)
+        {
+            if (!vertex.TryGetTexCoord(texCoord, out float s, out float t))
+            {
+                return;
+            }
+
+            localMinS = Math.Min(localMinS, s);
+            localMaxS = Math.Max(localMaxS, s);
+            localMinT = Math.Min(localMinT, t);
+            localMaxT = Math.Max(localMaxT, t);
+        }
+    }
+
+    private static void SampleTriangleCentroidTev(GxVertexState state, GameCubeMemory? memory, DiagnosticTriangle triangle, out string rasterColor, out bool tevEvaluated, out string tevColor, out bool alphaPass, out string stageSummary)
+    {
+        const float weight = 1f / 3f;
+        byte rasterR = InterpolateByte(triangle.A.R, triangle.B.R, triangle.C.R, weight, weight, weight);
+        byte rasterG = InterpolateByte(triangle.A.G, triangle.B.G, triangle.C.G, weight, weight, weight);
+        byte rasterB = InterpolateByte(triangle.A.B, triangle.B.B, triangle.C.B, weight, weight, weight);
+        byte rasterA = InterpolateByte(triangle.A.A, triangle.B.A, triangle.C.A, weight, weight, weight);
+        rasterColor = FormatColor(rasterR, rasterG, rasterB, rasterA);
+        float? textureLod = EstimateDiagnosticTextureLod(state, triangle);
+        tevEvaluated = state.TryEvaluateTevStagesDetailed(memory, triangle.A, triangle.B, triangle.C, weight, weight, weight, rasterR, rasterG, rasterB, rasterA, out byte tevR, out byte tevG, out byte tevB, out byte tevA, out stageSummary, textureLod);
+        if (!tevEvaluated)
+        {
+            tevR = rasterR;
+            tevG = rasterG;
+            tevB = rasterB;
+            tevA = rasterA;
+        }
+
+        tevColor = FormatColor(tevR, tevG, tevB, tevA);
+        alphaPass = state.AlphaTestPasses(tevA);
+    }
+
+    private static float? EstimateDiagnosticTextureLod(GxVertexState state, DiagnosticTriangle triangle)
+    {
+        int textureMap = state.Stage0TextureMap;
+        int texCoord = state.Stage0TexCoord;
+        if (textureMap is < 0 or >= 8
+            || texCoord is < 0 or >= 8
+            || !triangle.A.TryGetTexCoord(texCoord, out float aTexS, out float aTexT)
+            || !triangle.B.TryGetTexCoord(texCoord, out float bTexS, out float bTexT)
+            || !triangle.C.TryGetTexCoord(texCoord, out float cTexS, out float cTexT))
+        {
+            return null;
+        }
+
+        if (ForcedTextureLod is { } forcedLod)
+        {
+            return forcedLod;
+        }
+
+        float area = Edge(triangle.A.X, triangle.A.Y, triangle.B.X, triangle.B.Y, triangle.C.X, triangle.C.Y);
+        return state.EstimateTextureLod(textureMap, triangle.A.X, triangle.A.Y, triangle.B.X, triangle.B.Y, triangle.C.X, triangle.C.Y, aTexS, aTexT, bTexS, bTexT, cTexS, cTexT, area);
+    }
+
+    private static void TryGetInputProjectedBounds(DiagnosticTriangle triangle, out int projectedVertices, out int clippedVertices)
+    {
+        projectedVertices = 0;
+        clippedVertices = 0;
+
+        foreach (GxVertex vertex in new[] { triangle.A, triangle.B, triangle.C })
+        {
+            if (vertex.ClipRejected)
+            {
+                clippedVertices++;
+                continue;
+            }
+
+            projectedVertices++;
+        }
+    }
+
+    private static bool TryGetRasterProjectedBounds(IReadOnlyList<GxVertex> vertices, out float minX, out float maxX, out float minY, out float maxY, out float screenArea)
+    {
+        minX = float.PositiveInfinity;
+        maxX = float.NegativeInfinity;
+        minY = float.PositiveInfinity;
+        maxY = float.NegativeInfinity;
+        screenArea = 0;
+        foreach (GxVertex vertex in vertices)
+        {
+            minX = MathF.Min(minX, vertex.X);
+            maxX = MathF.Max(maxX, vertex.X);
+            minY = MathF.Min(minY, vertex.Y);
+            maxY = MathF.Max(maxY, vertex.Y);
+        }
+
+        if (vertices.Count == 3)
+        {
+            screenArea = Edge(vertices[0].X, vertices[0].Y, vertices[1].X, vertices[1].Y, vertices[2].X, vertices[2].Y);
+        }
+        else if (vertices.Count == 4)
+        {
+            screenArea = Edge(vertices[0].X, vertices[0].Y, vertices[1].X, vertices[1].Y, vertices[2].X, vertices[2].Y)
+                + Edge(vertices[0].X, vertices[0].Y, vertices[2].X, vertices[2].Y, vertices[3].X, vertices[3].Y);
+        }
+
+        return vertices.Count > 0;
+    }
+
+    private static string ClassifyTriangleCoverage(int projectedVertices, int clippedVertices, int rasterBefore, RasterDiagnosticCounters counters, bool rendered)
+    {
+        if (rendered)
+        {
+            return "rendered";
+        }
+
+        if (rasterBefore <= 0)
+        {
+            return "raster-budget-exhausted";
+        }
+
+        if (counters.NearClipCulledTriangles > 0)
+        {
+            return "near-clip-culled";
+        }
+
+        if (clippedVertices > 0 && counters.NearClipOutputTriangles > 0)
+        {
+            return "near-clip-degenerate-or-offscreen";
+        }
+
+        if (projectedVertices == 0)
+        {
+            return "all-vertices-clipped";
+        }
+
+        return "degenerate-or-offscreen";
     }
 
     public static bool TryWriteTevSampleDiagnostics(IReadOnlyList<MmioAccess> accesses, GameCubeMemory? memory, string path, int skipDraws, int maxDraws, out GxFifoTevSampleDiagnosticResult? result, out string? error)
@@ -2166,7 +3598,7 @@ public static class GxFifoSoftwareRenderer
         int copiesSeen = 0;
         int samplesWritten = 0;
         using StreamWriter writer = new(fullPath);
-        writer.WriteLine("draw_index,fifo_offset,primitive,format,vertices,copies_seen,triangle_index,sample_name,sample_a_weight,sample_b_weight,sample_c_weight,sample_x,sample_y,raster_rgba,tev_evaluated,tev_rgba,alpha_test,color_update,alpha_update,stage0_mode,stage_summary");
+        writer.WriteLine("draw_index,fifo_offset,primitive,format,vertices,copies_seen,triangle_index,sample_name,sample_a_weight,sample_b_weight,sample_c_weight,sample_x,sample_y,raster_rgba,tev_evaluated,tev_rgba,alpha_test,color_update,alpha_update,stage0_mode,tev_stage_count,indirect_stage_count,gen_mode,selected_texture_lod,tev_state,texture_map0_state,tev_registers,tev_kcolors,stage_summary");
 
         while (offset < fifo.Length)
         {
@@ -2260,6 +3692,7 @@ public static class GxFifoSoftwareRenderer
                 {
                     foreach (DiagnosticTriangle triangle in SelectDiagnosticTriangles(command, vertices))
                     {
+                        float? textureLod = EstimateDiagnosticTextureLod(state, triangle);
                         foreach (DiagnosticSamplePoint sample in DiagnosticSamplePoints)
                         {
                             float sampleX = triangle.A.X * sample.AWeight + triangle.B.X * sample.BWeight + triangle.C.X * sample.CWeight;
@@ -2268,7 +3701,7 @@ public static class GxFifoSoftwareRenderer
                             byte rasterG = InterpolateByte(triangle.A.G, triangle.B.G, triangle.C.G, sample.AWeight, sample.BWeight, sample.CWeight);
                             byte rasterB = InterpolateByte(triangle.A.B, triangle.B.B, triangle.C.B, sample.AWeight, sample.BWeight, sample.CWeight);
                             byte rasterA = InterpolateByte(triangle.A.A, triangle.B.A, triangle.C.A, sample.AWeight, sample.BWeight, sample.CWeight);
-                            bool tevEvaluated = state.TryEvaluateTevStagesDetailed(memory, triangle.A, triangle.B, triangle.C, sample.AWeight, sample.BWeight, sample.CWeight, rasterR, rasterG, rasterB, rasterA, out byte tevR, out byte tevG, out byte tevB, out byte tevA, out string stageSummary);
+                            bool tevEvaluated = state.TryEvaluateTevStagesDetailed(memory, triangle.A, triangle.B, triangle.C, sample.AWeight, sample.BWeight, sample.CWeight, rasterR, rasterG, rasterB, rasterA, out byte tevR, out byte tevG, out byte tevB, out byte tevA, out string stageSummary, textureLod);
                             if (!tevEvaluated)
                             {
                                 tevR = rasterR;
@@ -2277,6 +3710,11 @@ public static class GxFifoSoftwareRenderer
                                 tevA = rasterA;
                             }
 
+                            int tevStageCount = state.TevDiagnosticStageCount;
+                            int indirectStageCount = state.IndirectDiagnosticStageCount;
+                            string genMode = state.TryGetBpDiagnostic(0x00, out uint genModeValue)
+                                ? $"0x{genModeValue:X6}"
+                                : string.Empty;
                             writer.WriteLine(string.Join(',',
                                 totalDraws.ToString(CultureInfo.InvariantCulture),
                                 $"+0x{commandOffset:X}",
@@ -2298,6 +3736,14 @@ public static class GxFifoSoftwareRenderer
                                 state.ColorUpdateEnabled ? "True" : "False",
                                 state.AlphaUpdateEnabled ? "True" : "False",
                                 state.Stage0Mode.ToString(),
+                                tevStageCount.ToString(CultureInfo.InvariantCulture),
+                                indirectStageCount.ToString(CultureInfo.InvariantCulture),
+                                genMode,
+                                textureLod.HasValue ? FormatFloat(textureLod.Value) : string.Empty,
+                                CsvField(state.DescribeTevDiagnosticState()),
+                                CsvField(state.DescribeTextureMapDiagnostic(0)),
+                                CsvField(state.DescribeTevRegistersDiagnostic()),
+                                CsvField(state.DescribeTevKColorsDiagnostic()),
                                 CsvField(stageSummary)));
                             samplesWritten++;
                         }
@@ -2363,7 +3809,7 @@ public static class GxFifoSoftwareRenderer
         int copiesSeen = 0;
         int texturesWritten = 0;
         using StreamWriter writer = new(indexPath);
-        writer.WriteLine("draw_index,fifo_offset,slot,path,alpha_path,width,height,format,source_address,tmem_even,tmem_odd,wrap_s,wrap_t,mag_filter,min_filter,tlut,mode0,mode1,image0,image1,image2,image3,sample_source,source_bytes,source_hash,nonblack_pixels,nontransparent_pixels,transparent_pixels,min_alpha,max_alpha,samples");
+        writer.WriteLine("draw_index,fifo_offset,slot,mip_level,path,alpha_path,width,height,format,source_address,tmem_even,tmem_odd,wrap_s,wrap_t,mag_filter,min_filter,tlut,mode0,mode1,image0,image1,image2,image3,sample_source,source_bytes,source_hash,nonblack_pixels,nontransparent_pixels,transparent_pixels,min_alpha,max_alpha,samples");
 
         while (offset < fifo.Length)
         {
@@ -2444,54 +3890,59 @@ public static class GxFifoSoftwareRenderer
             {
                 for (int slot = 0; slot < 8; slot++)
                 {
-                    if (!state.TryDumpTextureMap(memory, slot, out TextureDumpSnapshot snapshot, out byte[]? rgb, out byte[]? alphaRgb, out _)
-                        || rgb is null)
+                    int mipLevels = state.GetTextureDiagnosticMipLevelCount(slot);
+                    for (int mipLevel = 0; mipLevel < mipLevels; mipLevel++)
                     {
-                        continue;
-                    }
+                        if (!state.TryDumpTextureMap(memory, slot, mipLevel, out TextureDumpSnapshot snapshot, out byte[]? rgb, out byte[]? alphaRgb, out _)
+                            || rgb is null)
+                        {
+                            continue;
+                        }
 
-                    string fileName = $"draw{totalDraws:D5}_tex{slot}_{snapshot.FormatName}_{snapshot.Width}x{snapshot.Height}.png";
-                    string alphaFileName = $"draw{totalDraws:D5}_tex{slot}_{snapshot.FormatName}_{snapshot.Width}x{snapshot.Height}_alpha.png";
-                    string filePath = Path.Combine(fullDirectory, fileName);
-                    FramebufferDumper.WriteRgbPng(filePath, snapshot.Width, snapshot.Height, rgb);
-                    if (alphaRgb is not null)
-                    {
-                        FramebufferDumper.WriteRgbPng(Path.Combine(fullDirectory, alphaFileName), snapshot.Width, snapshot.Height, alphaRgb);
-                    }
+                        string fileName = $"draw{totalDraws:D5}_tex{slot}_mip{snapshot.MipLevel}_{snapshot.FormatName}_{snapshot.Width}x{snapshot.Height}.png";
+                        string alphaFileName = $"draw{totalDraws:D5}_tex{slot}_mip{snapshot.MipLevel}_{snapshot.FormatName}_{snapshot.Width}x{snapshot.Height}_alpha.png";
+                        string filePath = Path.Combine(fullDirectory, fileName);
+                        FramebufferDumper.WriteRgbPng(filePath, snapshot.Width, snapshot.Height, rgb);
+                        if (alphaRgb is not null)
+                        {
+                            FramebufferDumper.WriteRgbPng(Path.Combine(fullDirectory, alphaFileName), snapshot.Width, snapshot.Height, alphaRgb);
+                        }
 
-                    writer.WriteLine(string.Join(',',
-                        totalDraws.ToString(CultureInfo.InvariantCulture),
-                        $"+0x{commandOffset:X}",
-                        slot.ToString(CultureInfo.InvariantCulture),
-                        CsvField(fileName),
-                        alphaRgb is null ? string.Empty : CsvField(alphaFileName),
-                        snapshot.Width.ToString(CultureInfo.InvariantCulture),
-                        snapshot.Height.ToString(CultureInfo.InvariantCulture),
-                        snapshot.FormatName,
-                        $"0x{snapshot.SourceAddress:X8}",
-                        $"0x{snapshot.TmemEven:X6}",
-                        $"0x{snapshot.TmemOdd:X6}",
-                        snapshot.WrapS,
-                        snapshot.WrapT,
-                        snapshot.MagFilter,
-                        snapshot.MinFilter,
-                        CsvField(snapshot.Tlut),
-                        $"0x{snapshot.Mode0:X6}",
-                        $"0x{snapshot.Mode1:X6}",
-                        $"0x{snapshot.Image0:X6}",
-                        $"0x{snapshot.Image1:X6}",
-                        $"0x{snapshot.Image2:X6}",
-                        $"0x{snapshot.Image3:X6}",
-                        snapshot.SampleSource,
-                        snapshot.SourceByteLength.ToString(CultureInfo.InvariantCulture),
-                        $"0x{snapshot.SourceHash:X8}",
-                        snapshot.NonBlackPixels.ToString(CultureInfo.InvariantCulture),
-                        snapshot.NonTransparentPixels.ToString(CultureInfo.InvariantCulture),
-                        snapshot.TransparentPixels.ToString(CultureInfo.InvariantCulture),
-                        snapshot.MinAlpha.ToString(CultureInfo.InvariantCulture),
-                        snapshot.MaxAlpha.ToString(CultureInfo.InvariantCulture),
-                        CsvField(snapshot.Samples)));
-                    texturesWritten++;
+                        writer.WriteLine(string.Join(',',
+                            totalDraws.ToString(CultureInfo.InvariantCulture),
+                            $"+0x{commandOffset:X}",
+                            slot.ToString(CultureInfo.InvariantCulture),
+                            snapshot.MipLevel.ToString(CultureInfo.InvariantCulture),
+                            CsvField(fileName),
+                            alphaRgb is null ? string.Empty : CsvField(alphaFileName),
+                            snapshot.Width.ToString(CultureInfo.InvariantCulture),
+                            snapshot.Height.ToString(CultureInfo.InvariantCulture),
+                            snapshot.FormatName,
+                            $"0x{snapshot.SourceAddress:X8}",
+                            $"0x{snapshot.TmemEven:X6}",
+                            $"0x{snapshot.TmemOdd:X6}",
+                            snapshot.WrapS,
+                            snapshot.WrapT,
+                            snapshot.MagFilter,
+                            snapshot.MinFilter,
+                            CsvField(snapshot.Tlut),
+                            $"0x{snapshot.Mode0:X6}",
+                            $"0x{snapshot.Mode1:X6}",
+                            $"0x{snapshot.Image0:X6}",
+                            $"0x{snapshot.Image1:X6}",
+                            $"0x{snapshot.Image2:X6}",
+                            $"0x{snapshot.Image3:X6}",
+                            snapshot.SampleSource,
+                            snapshot.SourceByteLength.ToString(CultureInfo.InvariantCulture),
+                            $"0x{snapshot.SourceHash:X8}",
+                            snapshot.NonBlackPixels.ToString(CultureInfo.InvariantCulture),
+                            snapshot.NonTransparentPixels.ToString(CultureInfo.InvariantCulture),
+                            snapshot.TransparentPixels.ToString(CultureInfo.InvariantCulture),
+                            snapshot.MinAlpha.ToString(CultureInfo.InvariantCulture),
+                            snapshot.MaxAlpha.ToString(CultureInfo.InvariantCulture),
+                            CsvField(snapshot.Samples)));
+                        texturesWritten++;
+                    }
                 }
             }
 
@@ -2516,6 +3967,11 @@ public static class GxFifoSoftwareRenderer
 
     private static IReadOnlyList<DiagnosticTriangle> SelectDiagnosticTriangles(byte command, GxVertex[] vertices)
     {
+        return SelectRepresentativeTriangles(SelectRasterTriangles(command, vertices));
+    }
+
+    private static IReadOnlyList<DiagnosticTriangle> SelectRasterTriangles(byte command, GxVertex[] vertices)
+    {
         if (vertices.Length < 3)
         {
             return [];
@@ -2527,35 +3983,42 @@ public static class GxFifoSoftwareRenderer
             case 0x80:
                 for (int vertex = 0; vertex + 3 < vertices.Length; vertex += 4)
                 {
-                    triangles.Add(new DiagnosticTriangle(triangles.Count, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2]));
-                    triangles.Add(new DiagnosticTriangle(triangles.Count, vertices[vertex], vertices[vertex + 2], vertices[vertex + 3]));
+                    triangles.Add(new DiagnosticTriangle(triangles.Count, vertex, vertex + 1, vertex + 2, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2]));
+                    triangles.Add(new DiagnosticTriangle(triangles.Count, vertex, vertex + 2, vertex + 3, vertices[vertex], vertices[vertex + 2], vertices[vertex + 3]));
                 }
 
                 break;
             case 0x90:
                 for (int vertex = 0; vertex + 2 < vertices.Length; vertex += 3)
                 {
-                    triangles.Add(new DiagnosticTriangle(triangles.Count, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2]));
+                    triangles.Add(new DiagnosticTriangle(triangles.Count, vertex, vertex + 1, vertex + 2, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2]));
                 }
 
                 break;
             case 0x98:
                 for (int vertex = 0; vertex + 2 < vertices.Length; vertex++)
                 {
-                    triangles.Add(new DiagnosticTriangle(triangles.Count, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2]));
+                    if ((vertex & 1) == 0)
+                    {
+                        triangles.Add(new DiagnosticTriangle(triangles.Count, vertex, vertex + 1, vertex + 2, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2]));
+                    }
+                    else
+                    {
+                        triangles.Add(new DiagnosticTriangle(triangles.Count, vertex + 1, vertex, vertex + 2, vertices[vertex + 1], vertices[vertex], vertices[vertex + 2]));
+                    }
                 }
 
                 break;
             case 0xA0:
-                for (int vertex = 2; vertex < vertices.Length; vertex++)
+                for (int vertex = 1; vertex + 1 < vertices.Length; vertex++)
                 {
-                    triangles.Add(new DiagnosticTriangle(triangles.Count, vertices[0], vertices[vertex - 1], vertices[vertex]));
+                    triangles.Add(new DiagnosticTriangle(triangles.Count, 0, vertex, vertex + 1, vertices[0], vertices[vertex], vertices[vertex + 1]));
                 }
 
                 break;
         }
 
-        return SelectRepresentativeTriangles(triangles);
+        return triangles;
     }
 
     private static IReadOnlyList<DiagnosticTriangle> SelectRepresentativeTriangles(IReadOnlyList<DiagnosticTriangle> triangles)
@@ -2569,7 +4032,7 @@ public static class GxFifoSoftwareRenderer
         return [triangles[0], triangles[middle], triangles[^1]];
     }
 
-    private readonly record struct DiagnosticTriangle(int Index, GxVertex A, GxVertex B, GxVertex C);
+    private readonly record struct DiagnosticTriangle(int Index, int VertexAIndex, int VertexBIndex, int VertexCIndex, GxVertex A, GxVertex B, GxVertex C);
 
     private readonly record struct DiagnosticSamplePoint(string Name, float AWeight, float BWeight, float CWeight);
 
@@ -2587,9 +4050,146 @@ public static class GxFifoSoftwareRenderer
             : text;
     }
 
-    private static bool TryAnalyzeDraw(byte[] fifo, int payloadOffset, int format, uint vertexCount, GxVertexState state, GameCubeMemory? memory, out int decodedVertices, out bool allZeroXy, out bool allBlackRgb, out float minX, out float maxX, out float minY, out float maxY)
+    private readonly record struct TransformBounds(string MinX, string MaxX, string MinY, string MaxY, string MinZ, string MaxZ)
+    {
+        public static TransformBounds From(IEnumerable<GxVertex> vertices, bool decoded, Func<GxVertex, float> getX, Func<GxVertex, float> getY, Func<GxVertex, float> getZ)
+        {
+            if (!decoded)
+            {
+                return Empty;
+            }
+
+            bool any = false;
+            float minX = float.PositiveInfinity;
+            float maxX = float.NegativeInfinity;
+            float minY = float.PositiveInfinity;
+            float maxY = float.NegativeInfinity;
+            float minZ = float.PositiveInfinity;
+            float maxZ = float.NegativeInfinity;
+            foreach (GxVertex vertex in vertices)
+            {
+                float x = getX(vertex);
+                float y = getY(vertex);
+                float z = getZ(vertex);
+                if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z))
+                {
+                    continue;
+                }
+
+                any = true;
+                minX = MathF.Min(minX, x);
+                maxX = MathF.Max(maxX, x);
+                minY = MathF.Min(minY, y);
+                maxY = MathF.Max(maxY, y);
+                minZ = MathF.Min(minZ, z);
+                maxZ = MathF.Max(maxZ, z);
+            }
+
+            return any
+                ? new TransformBounds(FormatFloat(minX), FormatFloat(maxX), FormatFloat(minY), FormatFloat(maxY), FormatFloat(minZ), FormatFloat(maxZ))
+                : Empty;
+        }
+
+        private static TransformBounds Empty => new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
+    }
+
+    private readonly record struct TransformDiagnosticState(
+        string MatrixIndexRaw,
+        string PositionMatrixBase,
+        string ProjectionType,
+        string ViewportScaleX,
+        string ViewportScaleY,
+        string ViewportScaleZ,
+        string ViewportOriginX,
+        string ViewportOriginY,
+        string ViewportOriginZ,
+        string Projection00,
+        string Projection01Or03,
+        string Projection11,
+        string Projection12Or13,
+        string Projection22,
+        string Projection23);
+
+    private readonly record struct StateTimelineSnapshot(
+        TransformDiagnosticState Transform,
+        string PositionMatrixRow0,
+        string PositionMatrixRow1,
+        string PositionMatrixRow2,
+        string ScissorLeft,
+        string ScissorTop,
+        string ScissorRight,
+        string ScissorBottom,
+        string ScissorTopLeftRaw,
+        string ScissorBottomRightRaw,
+        string ZMode,
+        string BlendMode,
+        string AlphaCompare,
+        string FogMode,
+        string FogColor,
+        string FogRange,
+        string GenMode,
+        string CopyKind,
+        string CopyDestinationAddress,
+        string CopySourceRect,
+        string CopyOutputSize,
+        string CopyFormat,
+        string CopyClear,
+        string Tex0MatrixBase,
+        string TexGen0Raw,
+        string TexGen0Projection,
+        string TexGen0Source,
+        string TexGen0Type,
+        XfColorTimelineSnapshot XfColor);
+
+    private readonly record struct XfColorTimelineSnapshot(
+        string ChannelCount,
+        string Channel0Ambient,
+        string Channel0Material,
+        string Channel0ColorControl,
+        string Channel0AlphaControl,
+        string Channel0ColorMaterialSource,
+        string Channel0AlphaMaterialSource,
+        string Channel0ColorAmbientSource,
+        string Channel0AlphaAmbientSource,
+        string Channel0ColorLighting,
+        string Channel0AlphaLighting,
+        string Channel0ColorLights,
+        string Channel0AlphaLights,
+        string Channel1Ambient,
+        string Channel1Material,
+        string Channel1ColorControl,
+        string Channel1AlphaControl,
+        string Channel1ColorMaterialSource,
+        string Channel1AlphaMaterialSource,
+        string Channel1ColorAmbientSource,
+        string Channel1AlphaAmbientSource,
+        string Channel1ColorLighting,
+        string Channel1AlphaLighting,
+        string Channel1ColorLights,
+        string Channel1AlphaLights);
+
+    private readonly record struct XfChannelTimelineSnapshot(
+        string Ambient,
+        string Material,
+        string ColorControl,
+        string AlphaControl,
+        string ColorMaterialSource,
+        string AlphaMaterialSource,
+        string ColorAmbientSource,
+        string AlphaAmbientSource,
+        string ColorLighting,
+        string AlphaLighting,
+        string ColorLights,
+        string AlphaLights);
+
+    private static string FormatVector(float x, float y, float z) =>
+        $"{FormatFloat(x)}/{FormatFloat(y)}/{FormatFloat(z)}";
+
+    private static bool TryAnalyzeDraw(byte[] fifo, int payloadOffset, int format, uint vertexCount, GxVertexState state, GameCubeMemory? memory, out int decodedVertices, out int projectedVertices, out int clippedVertices, out bool allZeroXy, out bool allBlackRgb, out float minX, out float maxX, out float minY, out float maxY)
     {
         decodedVertices = 0;
+        projectedVertices = 0;
+        clippedVertices = 0;
         allZeroXy = true;
         allBlackRgb = true;
         minX = float.PositiveInfinity;
@@ -2610,6 +4210,15 @@ public static class GxFifoSoftwareRenderer
             }
 
             decodedVertices++;
+            if (vertex.ClipRejected)
+            {
+                clippedVertices++;
+            }
+            else
+            {
+                projectedVertices++;
+            }
+
             allZeroXy &= vertex.X == 0 && vertex.Y == 0;
             allBlackRgb &= vertex.R == 0 && vertex.G == 0 && vertex.B == 0;
             minX = MathF.Min(minX, vertex.X);
@@ -2691,8 +4300,13 @@ public static class GxFifoSoftwareRenderer
     private sealed class RasterDiagnosticCounters
     {
         public int CoveredPixels { get; private set; }
+        public int ClipInputTriangles { get; private set; }
+        public int NearClipOutputVertices { get; private set; }
+        public int NearClipOutputTriangles { get; private set; }
+        public int NearClipCulledTriangles { get; private set; }
         public int DepthRejected { get; private set; }
         public int AlphaRejected { get; private set; }
+        public int FoggedPixels { get; private set; }
         public int ColorUpdateDisabled { get; private set; }
         public int ColorWrites { get; private set; }
         public int BlackColorWrites { get; private set; }
@@ -2701,9 +4315,24 @@ public static class GxFifoSoftwareRenderer
 
         public void RecordCoveredPixel() => CoveredPixels++;
 
+        public void RecordClipInputTriangle() => ClipInputTriangles++;
+
+        public void RecordNearClipResult(int outputVertices)
+        {
+            NearClipOutputVertices += outputVertices;
+            NearClipOutputTriangles += outputVertices >= 3 ? outputVertices - 2 : 0;
+
+            if (outputVertices < 3)
+            {
+                NearClipCulledTriangles++;
+            }
+        }
+
         public void RecordDepthRejected() => DepthRejected++;
 
         public void RecordAlphaRejected() => AlphaRejected++;
+
+        public void RecordFoggedPixel() => FoggedPixels++;
 
         public void RecordColorUpdateDisabled() => ColorUpdateDisabled++;
 
@@ -2719,6 +4348,207 @@ public static class GxFifoSoftwareRenderer
         public void RecordAlphaUpdate() => AlphaUpdates++;
 
         public void RecordDepthUpdate() => DepthUpdates++;
+    }
+
+    private sealed class DiagnosticRegionRasterCounters
+    {
+        private readonly DiagnosticRegionBounds[] _regions;
+
+        public DiagnosticRegionRasterCounters(int frameWidth, int frameHeight)
+        {
+            _regions = DiagnosticRegions
+                .Select(region =>
+                {
+                    int left = Math.Clamp(region.Left, 0, frameWidth);
+                    int top = Math.Clamp(region.Top, 0, frameHeight);
+                    int right = Math.Clamp(region.Left + region.Width, left, frameWidth);
+                    int bottom = Math.Clamp(region.Top + region.Height, top, frameHeight);
+                    return new DiagnosticRegionBounds(region.Name, left, top, right, bottom);
+                })
+                .ToArray();
+            CoveredPixels = new int[_regions.Length];
+            DepthRejected = new int[_regions.Length];
+            AlphaRejected = new int[_regions.Length];
+            TextureSamples = new int[_regions.Length];
+            TextureNonBlackSamples = new int[_regions.Length];
+            TextureBlackSamples = new int[_regions.Length];
+            TextureAlphaZeroSamples = new int[_regions.Length];
+            TextureMinS = CreateFloatArray(_regions.Length, float.PositiveInfinity);
+            TextureMaxS = CreateFloatArray(_regions.Length, float.NegativeInfinity);
+            TextureMinT = CreateFloatArray(_regions.Length, float.PositiveInfinity);
+            TextureMaxT = CreateFloatArray(_regions.Length, float.NegativeInfinity);
+            TextureNonBlackMinS = CreateFloatArray(_regions.Length, float.PositiveInfinity);
+            TextureNonBlackMaxS = CreateFloatArray(_regions.Length, float.NegativeInfinity);
+            TextureNonBlackMinT = CreateFloatArray(_regions.Length, float.PositiveInfinity);
+            TextureNonBlackMaxT = CreateFloatArray(_regions.Length, float.NegativeInfinity);
+            TextureFrac8Buckets = CreateBucketArrays(_regions.Length);
+            TextureFrac8NonBlackBuckets = CreateBucketArrays(_regions.Length);
+            ColorWrites = new int[_regions.Length];
+            BlackColorWrites = new int[_regions.Length];
+        }
+
+        public int[] CoveredPixels { get; }
+
+        public int[] DepthRejected { get; }
+
+        public int[] AlphaRejected { get; }
+
+        public int[] TextureSamples { get; }
+
+        public int[] TextureNonBlackSamples { get; }
+
+        public int[] TextureBlackSamples { get; }
+
+        public int[] TextureAlphaZeroSamples { get; }
+
+        public float[] TextureMinS { get; }
+
+        public float[] TextureMaxS { get; }
+
+        public float[] TextureMinT { get; }
+
+        public float[] TextureMaxT { get; }
+
+        public float[] TextureNonBlackMinS { get; }
+
+        public float[] TextureNonBlackMaxS { get; }
+
+        public float[] TextureNonBlackMinT { get; }
+
+        public float[] TextureNonBlackMaxT { get; }
+
+        public int[][] TextureFrac8Buckets { get; }
+
+        public int[][] TextureFrac8NonBlackBuckets { get; }
+
+        public int[] ColorWrites { get; }
+
+        public int[] BlackColorWrites { get; }
+
+        public void RecordCoveredPixel(int x, int y) => Increment(CoveredPixels, x, y);
+
+        public void RecordDepthRejected(int x, int y) => Increment(DepthRejected, x, y);
+
+        public void RecordAlphaRejected(int x, int y) => Increment(AlphaRejected, x, y);
+
+        public void RecordTextureSample(int x, int y, float s, float t, byte r, byte g, byte b, byte a)
+        {
+            for (int index = 0; index < _regions.Length; index++)
+            {
+                if (!Contains(_regions[index], x, y))
+                {
+                    continue;
+                }
+
+                TextureSamples[index]++;
+                RecordFloatRange(TextureMinS, TextureMaxS, index, s);
+                RecordFloatRange(TextureMinT, TextureMaxT, index, t);
+                int bucket = FractionalBucket8(s, t);
+                if (bucket >= 0)
+                {
+                    TextureFrac8Buckets[index][bucket]++;
+                }
+
+                if (r == 0 && g == 0 && b == 0)
+                {
+                    TextureBlackSamples[index]++;
+                }
+                else
+                {
+                    TextureNonBlackSamples[index]++;
+                    RecordFloatRange(TextureNonBlackMinS, TextureNonBlackMaxS, index, s);
+                    RecordFloatRange(TextureNonBlackMinT, TextureNonBlackMaxT, index, t);
+                    if (bucket >= 0)
+                    {
+                        TextureFrac8NonBlackBuckets[index][bucket]++;
+                    }
+                }
+
+                if (a == 0)
+                {
+                    TextureAlphaZeroSamples[index]++;
+                }
+            }
+        }
+
+        private static float[] CreateFloatArray(int length, float value)
+        {
+            float[] array = new float[length];
+            Array.Fill(array, value);
+            return array;
+        }
+
+        private static int[][] CreateBucketArrays(int length)
+        {
+            int[][] arrays = new int[length][];
+            for (int index = 0; index < arrays.Length; index++)
+            {
+                arrays[index] = new int[64];
+            }
+
+            return arrays;
+        }
+
+        private static void RecordFloatRange(float[] mins, float[] maxes, int index, float value)
+        {
+            if (!float.IsFinite(value))
+            {
+                return;
+            }
+
+            mins[index] = MathF.Min(mins[index], value);
+            maxes[index] = MathF.Max(maxes[index], value);
+        }
+
+        private static int FractionalBucket8(float s, float t)
+        {
+            if (!float.IsFinite(s) || !float.IsFinite(t))
+            {
+                return -1;
+            }
+
+            int bucketS = Math.Clamp((int)MathF.Floor(RepeatFraction(s) * 8f), 0, 7);
+            int bucketT = Math.Clamp((int)MathF.Floor(RepeatFraction(t) * 8f), 0, 7);
+            return bucketT * 8 + bucketS;
+        }
+
+        private static float RepeatFraction(float value)
+        {
+            float floor = MathF.Floor(value);
+            float fraction = value - floor;
+            return fraction < 0f ? fraction + 1f : fraction;
+        }
+
+        public void RecordColorWrite(int x, int y, byte r, byte g, byte b)
+        {
+            for (int index = 0; index < _regions.Length; index++)
+            {
+                if (!Contains(_regions[index], x, y))
+                {
+                    continue;
+                }
+
+                ColorWrites[index]++;
+                if (r == 0 && g == 0 && b == 0)
+                {
+                    BlackColorWrites[index]++;
+                }
+            }
+        }
+
+        private void Increment(int[] counters, int x, int y)
+        {
+            for (int index = 0; index < _regions.Length; index++)
+            {
+                if (Contains(_regions[index], x, y))
+                {
+                    counters[index]++;
+                }
+            }
+        }
+
+        private static bool Contains(DiagnosticRegionBounds bounds, int x, int y) =>
+            x >= bounds.Left && x < bounds.Right && y >= bounds.Top && y < bounds.Bottom;
     }
 
     private sealed class RasterTimingAccumulator
@@ -2912,14 +4742,15 @@ public static class GxFifoSoftwareRenderer
         ref int rasterPixelsRemaining,
         RasterDiagnosticCounters? counters,
         RasterTimingAccumulator? timings = null,
-        FastPathDiagnosticCounters? fastPathCounters = null)
+        FastPathDiagnosticCounters? fastPathCounters = null,
+        DiagnosticRegionRasterCounters? regionCounters = null)
     {
         switch (command & 0xF8)
         {
             case 0x80:
                 for (int vertex = 0; vertex + 3 < vertices.Length; vertex += 4)
                 {
-                    if (FillQuadBounds(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], vertices[vertex + 3], state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters))
+                    if (FillQuadBounds(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], vertices[vertex + 3], state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters, regionCounters))
                     {
                         renderedQuads++;
                     }
@@ -2933,7 +4764,7 @@ public static class GxFifoSoftwareRenderer
             case 0x90:
                 for (int vertex = 0; vertex + 2 < vertices.Length; vertex += 3)
                 {
-                    FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
+                    FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings, fastPathCounters, regionCounters);
                 }
 
                 break;
@@ -2942,11 +4773,11 @@ public static class GxFifoSoftwareRenderer
                 {
                     if ((vertex & 1) == 0)
                     {
-                        FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
+                        FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex], vertices[vertex + 1], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings, fastPathCounters, regionCounters);
                     }
                     else
                     {
-                        FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex + 1], vertices[vertex], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
+                        FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[vertex + 1], vertices[vertex], vertices[vertex + 2], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings, fastPathCounters, regionCounters);
                     }
                 }
 
@@ -2954,16 +4785,16 @@ public static class GxFifoSoftwareRenderer
             case 0xA0:
                 for (int vertex = 1; vertex + 1 < vertices.Length; vertex++)
                 {
-                    FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[0], vertices[vertex], vertices[vertex + 1], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
+                    FillTriangleOrCount(rgb, alpha, depth, width, height, vertices[0], vertices[vertex], vertices[vertex + 1], state, memory, ref renderedTriangles, ref degenerateTriangles, ref rasterPixelsRemaining, counters, timings, fastPathCounters, regionCounters);
                 }
 
                 break;
         }
     }
 
-    private static void FillTriangleOrCount(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int renderedTriangles, ref int degenerateTriangles, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings, FastPathDiagnosticCounters? fastPathCounters = null)
+    private static void FillTriangleOrCount(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int renderedTriangles, ref int degenerateTriangles, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings, FastPathDiagnosticCounters? fastPathCounters = null, DiagnosticRegionRasterCounters? regionCounters = null)
     {
-        if (FillTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters))
+        if (FillTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters, regionCounters))
         {
             renderedTriangles++;
         }
@@ -2973,14 +4804,14 @@ public static class GxFifoSoftwareRenderer
         }
     }
 
-    private static bool FillQuadBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertex d, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings, FastPathDiagnosticCounters? fastPathCounters = null)
+    private static bool FillQuadBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertex d, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings, FastPathDiagnosticCounters? fastPathCounters = null, DiagnosticRegionRasterCounters? regionCounters = null)
     {
-        bool first = FillTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
-        bool second = FillTriangleBounds(rgb, alpha, depth, width, height, a, c, d, state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
+        bool first = FillTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters, regionCounters);
+        bool second = FillTriangleBounds(rgb, alpha, depth, width, height, a, c, d, state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters, regionCounters);
         return first || second;
     }
 
-    private static bool FillTriangleBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings, FastPathDiagnosticCounters? fastPathCounters = null)
+    private static bool FillTriangleBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings, FastPathDiagnosticCounters? fastPathCounters = null, DiagnosticRegionRasterCounters? regionCounters = null, bool skipClipVolume = false)
     {
         long setupStart = timings is null ? 0 : Stopwatch.GetTimestamp();
         if (rasterPixelsRemaining <= 0)
@@ -2993,14 +4824,15 @@ public static class GxFifoSoftwareRenderer
             return false;
         }
 
-        if (a.ClipRejected || b.ClipRejected || c.ClipRejected)
+        if (!DisableClipVolumeRasterization && !skipClipVolume && NeedsClipVolumeTriangle(a, b, c, state, width, height))
         {
+            counters?.RecordClipInputTriangle();
             if (timings is not null)
             {
                 timings.SetupTicks += Stopwatch.GetTimestamp() - setupStart;
             }
 
-            return FillNearClippedTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters);
+            return FillClipVolumeTriangleBounds(rgb, alpha, depth, width, height, a, b, c, state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters, regionCounters);
         }
 
         float minX = MathF.Min(MathF.Min(a.X, b.X), c.X);
@@ -3028,7 +4860,9 @@ public static class GxFifoSoftwareRenderer
             return false;
         }
 
-        RenderCoordinateTransform transform = RenderCoordinateTransform.FromBounds(minX, maxX, minY, maxY, width, height);
+        bool coordinatesAreProjectedScreenSpace = a.HasViewPosition && b.HasViewPosition && c.HasViewPosition;
+        bool allowDirectScreenSpaceWrap = !coordinatesAreProjectedScreenSpace;
+        RenderCoordinateTransform transform = RenderCoordinateTransform.FromBounds(minX, maxX, minY, maxY, width, height, allowDirectScreenSpaceWrap, coordinatesAreProjectedScreenSpace);
         int left = transform.ToScreenX(minX, width);
         int right = transform.ToScreenX(maxX, width);
         int top = transform.ToScreenY(minY, height);
@@ -3099,8 +4933,13 @@ public static class GxFifoSoftwareRenderer
             && a.TryGetTexCoord(texCoord, out aTexS, out aTexT)
             && b.TryGetTexCoord(texCoord, out bTexS, out bTexT)
             && c.TryGetTexCoord(texCoord, out cTexS, out cTexT);
+        float? triangleTextureLod = canSampleTexture
+            ? ForcedTextureLod ?? state.EstimateTextureLod(textureMap, ax, ay, bx, by, cx, cy, aTexS, aTexT, bTexS, bTexT, cTexS, cTexT, area)
+            : null;
         GxTevStage0Mode stage0Mode = state.Stage0Mode;
-        bool canEvaluateSingleTevStageFast = state.TryCreateSingleTevStageFastEvaluator(memory, out GxVertexState.SingleTevStageFastEvaluator singleTevStageFast);
+        GxVertexState.SingleTevStageFastEvaluator singleTevStageFast = default;
+        bool canEvaluateSingleTevStageFast = !DisableSingleStageTevFastPath
+            && state.TryCreateSingleTevStageFastEvaluator(memory, out singleTevStageFast);
         if (canEvaluateSingleTevStageFast)
         {
             fastPathCounters?.RecordSingleStageTevFastTriangle(singleTevStageFast.TextureSampler.IsValid, singleTevStageFast.TextureFormat, singleTevStageFast.TextureSamplerFallbackReason);
@@ -3144,6 +4983,7 @@ public static class GxFifoSoftwareRenderer
                 }
 
                 counters?.RecordCoveredPixel();
+                regionCounters?.RecordCoveredPixel(x, y);
                 int index = row + x * 3;
                 float aWeight = w0 * inverseArea;
                 float bWeight = w1 * inverseArea;
@@ -3164,6 +5004,7 @@ public static class GxFifoSoftwareRenderer
                     }
 
                     counters?.RecordDepthRejected();
+                    regionCounters?.RecordDepthRejected(x, y);
                     w0 += w0StepX;
                     w1 += w1StepX;
                     w2 += w2StepX;
@@ -3184,6 +5025,15 @@ public static class GxFifoSoftwareRenderer
                 byte rasterG = g;
                 byte rasterB = bValue;
                 byte rasterA = sourceAlpha;
+                if (regionCounters is not null && canSampleTexture)
+                {
+                    InterpolateTexCoordValues(a, b, c, aWeight, bWeight, cWeight, aTexS, aTexT, bTexS, bTexT, cTexS, cTexT, out float diagnosticTexS, out float diagnosticTexT);
+                    if (state.TrySampleTexture(memory, textureMap, diagnosticTexS, diagnosticTexT, triangleTextureLod, out byte diagnosticSampleR, out byte diagnosticSampleG, out byte diagnosticSampleB, out byte diagnosticSampleA))
+                    {
+                        regionCounters.RecordTextureSample(x, y, diagnosticTexS, diagnosticTexT, diagnosticSampleR, diagnosticSampleG, diagnosticSampleB, diagnosticSampleA);
+                    }
+                }
+
                 bool tevEvaluated = false;
                 if (canEvaluateSingleTevStageFast)
                 {
@@ -3195,14 +5045,14 @@ public static class GxFifoSoftwareRenderer
                         InterpolateTexCoordValues(a, b, c, aWeight, bWeight, cWeight, aTexS, aTexT, bTexS, bTexT, cTexS, cTexT, out fastTexS, out fastTexT);
                     }
 
-                    singleTevStageFast.Evaluate(state, memory, a, b, c, aWeight, bWeight, cWeight, hasFastTexCoord, fastTexS, fastTexT, rasterR, rasterG, rasterB, rasterA, out r, out g, out bValue, out sourceAlpha, out bool usedDirectTextureSampler);
+                    singleTevStageFast.Evaluate(state, memory, a, b, c, aWeight, bWeight, cWeight, hasFastTexCoord, fastTexS, fastTexT, triangleTextureLod, rasterR, rasterG, rasterB, rasterA, out r, out g, out bValue, out sourceAlpha, out bool usedDirectTextureSampler);
                     fastPathCounters?.RecordSingleStageTevFastPixel(usedDirectTextureSampler);
                     tevEvaluated = true;
                 }
 
                 if (!tevEvaluated)
                 {
-                    tevEvaluated = state.TryEvaluateTevStages(memory, a, b, c, aWeight, bWeight, cWeight, rasterR, rasterG, rasterB, rasterA, out r, out g, out bValue, out sourceAlpha);
+                    tevEvaluated = state.TryEvaluateTevStages(memory, a, b, c, aWeight, bWeight, cWeight, rasterR, rasterG, rasterB, rasterA, out r, out g, out bValue, out sourceAlpha, triangleTextureLod);
                     if (tevEvaluated)
                     {
                         fastPathCounters?.RecordGenericTevPixel();
@@ -3214,7 +5064,7 @@ public static class GxFifoSoftwareRenderer
                     fastPathCounters?.RecordLegacyTextureFallbackPixel();
                     InterpolateTexCoordValues(a, b, c, aWeight, bWeight, cWeight, aTexS, aTexT, bTexS, bTexT, cTexS, cTexT, out float s, out float t);
 
-                    if (state.TrySampleTexture(memory, textureMap, s, t, out byte sampledR, out byte sampledG, out byte sampledB, out byte sampledA))
+                    if (state.TrySampleTexture(memory, textureMap, s, t, triangleTextureLod, out byte sampledR, out byte sampledG, out byte sampledB, out byte sampledA))
                     {
                         ApplyStage0Mode(stage0Mode, ref r, ref g, ref bValue, ref sourceAlpha, sampledR, sampledG, sampledB, sampledA);
                     }
@@ -3234,6 +5084,7 @@ public static class GxFifoSoftwareRenderer
                     }
 
                     counters?.RecordAlphaRejected();
+                    regionCounters?.RecordAlphaRejected(x, y);
                     w0 += w0StepX;
                     w1 += w1StepX;
                     w2 += w2StepX;
@@ -3245,6 +5096,11 @@ public static class GxFifoSoftwareRenderer
                     timings.AlphaTestTicks += Stopwatch.GetTimestamp() - alphaTestStart;
                 }
 
+                if (state.ApplyFog(x, z, width, ref r, ref g, ref bValue))
+                {
+                    counters?.RecordFoggedPixel();
+                }
+
                 long blendWriteStart = timings is null ? 0 : Stopwatch.GetTimestamp();
                 if (state.ColorUpdateEnabled)
                 {
@@ -3253,6 +5109,7 @@ public static class GxFifoSoftwareRenderer
                     rgb[index + 1] = g;
                     rgb[index + 2] = bValue;
                     counters?.RecordColorWrite(r, g, bValue);
+                    regionCounters?.RecordColorWrite(x, y, r, g, bValue);
                 }
                 else
                 {
@@ -3286,32 +5143,137 @@ public static class GxFifoSoftwareRenderer
         return wrotePixel;
     }
 
-    private static bool FillNearClippedTriangleBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings, FastPathDiagnosticCounters? fastPathCounters = null)
+    private static bool FillClipVolumeTriangleBounds(byte[] rgb, byte[] alpha, float[] depth, int width, int height, GxVertex a, GxVertex b, GxVertex c, GxVertexState state, GameCubeMemory? memory, ref int rasterPixelsRemaining, RasterDiagnosticCounters? counters, RasterTimingAccumulator? timings, FastPathDiagnosticCounters? fastPathCounters = null, DiagnosticRegionRasterCounters? regionCounters = null)
     {
+        if (!a.HasViewPosition || !b.HasViewPosition || !c.HasViewPosition)
+        {
+            counters?.RecordNearClipResult(0);
+            return false;
+        }
+
+        List<GxVertex> clipped = ClipTriangleToClipVolume([a, b, c], state);
+        counters?.RecordNearClipResult(clipped.Count);
+        if (clipped.Count < 3)
+        {
+            return false;
+        }
+
+        bool wrotePixel = false;
+        for (int index = 1; index + 1 < clipped.Count; index++)
+        {
+            wrotePixel |= FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[index], clipped[index + 1], state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters, regionCounters, skipClipVolume: true);
+        }
+
+        return wrotePixel;
+    }
+
+    private enum ClipPlane
+    {
+        Near,
+        Far,
+        PositiveW,
+        Left,
+        Right,
+        Bottom,
+        Top,
+    }
+
+    private static bool NeedsClipVolumeTriangle(GxVertex a, GxVertex b, GxVertex c, GxVertexState state, int width, int height)
+    {
+        if (a.ClipRejected || b.ClipRejected || c.ClipRejected)
+        {
+            return true;
+        }
+
         if (!a.HasViewPosition || !b.HasViewPosition || !c.HasViewPosition)
         {
             return false;
         }
 
-        List<GxVertex> clipped = ClipTriangleToNearPlane([a, b, c], state);
-        return clipped.Count switch
+        if (state.HasCanonicalViewport(width, height))
         {
-            3 => FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[1], clipped[2], state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters),
-            4 => FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[1], clipped[2], state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters)
-                | FillTriangleBounds(rgb, alpha, depth, width, height, clipped[0], clipped[2], clipped[3], state, memory, ref rasterPixelsRemaining, counters, timings, fastPathCounters),
-            _ => false,
-        };
+            return false;
+        }
+
+        foreach (ClipPlane plane in Enum.GetValues<ClipPlane>())
+        {
+            if (IsClipPlaneDisabled(plane))
+            {
+                continue;
+            }
+
+            if (!IsInsideClipPlane(a, state, plane)
+                || !IsInsideClipPlane(b, state, plane)
+                || !IsInsideClipPlane(c, state, plane))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
-    private static List<GxVertex> ClipTriangleToNearPlane(IReadOnlyList<GxVertex> vertices, GxVertexState state)
+    private static List<GxVertex> ClipTriangleToClipVolume(IReadOnlyList<GxVertex> vertices, GxVertexState state)
+    {
+        List<GxVertex> output = [.. vertices];
+        foreach (ClipPlane plane in Enum.GetValues<ClipPlane>())
+        {
+            if (IsClipPlaneDisabled(plane))
+            {
+                continue;
+            }
+
+            output = ClipPolygonToPlane(output, state, plane);
+            if (output.Count == 0)
+            {
+                break;
+            }
+        }
+
+        return ProjectClippedPolygon(output, state);
+    }
+
+    private static List<GxVertex> ProjectClippedPolygon(IReadOnlyList<GxVertex> vertices, GxVertexState state)
+    {
+        List<GxVertex> projected = new(vertices.Count);
+        foreach (GxVertex vertex in vertices)
+        {
+            foreach (ClipPlane plane in Enum.GetValues<ClipPlane>())
+            {
+                if (!IsClipPlaneDisabled(plane) && !IsInsideClipPlane(vertex, state, plane))
+                {
+                    return [];
+                }
+            }
+
+            if (!state.TryProjectViewPositionUnchecked(vertex.ViewX, vertex.ViewY, vertex.ViewZ, out float screenX, out float screenY, out float screenZ, out float invW))
+            {
+                return [];
+            }
+
+            projected.Add(vertex with
+            {
+                X = screenX,
+                Y = screenY,
+                Z = screenZ,
+                InvW = invW,
+                ClipRejected = false,
+                HasViewPosition = true,
+            });
+        }
+
+        return projected;
+    }
+
+    private static List<GxVertex> ClipPolygonToPlane(IReadOnlyList<GxVertex> vertices, GxVertexState state, ClipPlane plane)
     {
         List<GxVertex> output = [];
         for (int index = 0; index < vertices.Count; index++)
         {
             GxVertex current = vertices[index];
             GxVertex next = vertices[(index + 1) % vertices.Count];
-            bool currentInside = IsInsideNearPlane(current, state);
-            bool nextInside = IsInsideNearPlane(next, state);
+            bool currentInside = IsInsideClipPlane(current, state, plane);
+            bool nextInside = IsInsideClipPlane(next, state, plane);
 
             if (currentInside && nextInside)
             {
@@ -3319,14 +5281,14 @@ public static class GxFifoSoftwareRenderer
             }
             else if (currentInside && !nextInside)
             {
-                if (TryInterpolateNearClipVertex(current, next, state, out GxVertex intersection))
+                if (TryInterpolateClipPlaneVertex(current, next, state, plane, out GxVertex intersection))
                 {
                     output.Add(intersection);
                 }
             }
             else if (!currentInside && nextInside)
             {
-                if (TryInterpolateNearClipVertex(current, next, state, out GxVertex intersection))
+                if (TryInterpolateClipPlaneVertex(current, next, state, plane, out GxVertex intersection))
                 {
                     output.Add(intersection);
                 }
@@ -3338,26 +5300,31 @@ public static class GxFifoSoftwareRenderer
         return output;
     }
 
-    private static bool IsInsideNearPlane(GxVertex vertex, GxVertexState state) =>
-        vertex.HasViewPosition && -vertex.ViewZ >= state.GetPerspectiveNearClipW();
+    private static bool IsInsideClipPlane(GxVertex vertex, GxVertexState state, ClipPlane plane) =>
+        vertex.HasViewPosition
+            && TryGetClipPlaneDistance(vertex, state, plane, out float distance)
+            && distance >= -0.000001f;
 
-    private static bool TryInterpolateNearClipVertex(GxVertex a, GxVertex b, GxVertexState state, out GxVertex vertex)
+    private static bool TryInterpolateClipPlaneVertex(GxVertex a, GxVertex b, GxVertexState state, ClipPlane plane, out GxVertex vertex)
     {
         vertex = default;
-        float aW = -a.ViewZ;
-        float bW = -b.ViewZ;
-        float denominator = bW - aW;
+        if (!TryGetClipPlaneDistance(a, state, plane, out float aDistance)
+            || !TryGetClipPlaneDistance(b, state, plane, out float bDistance))
+        {
+            return false;
+        }
+
+        float denominator = aDistance - bDistance;
         if (MathF.Abs(denominator) < 0.000001f)
         {
             return false;
         }
 
-        float targetW = state.GetPerspectiveNearClipW();
-        float t = Math.Clamp((targetW - aW) / denominator, 0f, 1f);
+        float t = Math.Clamp(aDistance / denominator, 0f, 1f);
         float viewX = Lerp(a.ViewX, b.ViewX, t);
         float viewY = Lerp(a.ViewY, b.ViewY, t);
         float viewZ = Lerp(a.ViewZ, b.ViewZ, t);
-        if (!state.TryProjectViewPosition(viewX, viewY, viewZ, out float screenX, out float screenY, out float screenZ, out float invW))
+        if (!state.TryProjectViewPositionUnchecked(viewX, viewY, viewZ, out float screenX, out float screenY, out float screenZ, out float invW))
         {
             return false;
         }
@@ -3384,8 +5351,71 @@ public static class GxFifoSoftwareRenderer
             ViewX: viewX,
             ViewY: viewY,
             ViewZ: viewZ,
-            TexCoords: GxTexCoordSet.Interpolate(a.TexCoords, b.TexCoords, t));
+            TexCoords: GxTexCoordSet.Interpolate(a.TexCoords, b.TexCoords, t),
+            ModelX: Lerp(a.ModelX, b.ModelX, t),
+            ModelY: Lerp(a.ModelY, b.ModelY, t),
+            ModelZ: Lerp(a.ModelZ, b.ModelZ, t),
+            HasColor0: a.HasColor0 || b.HasColor0,
+            HasColor1: a.HasColor1 || b.HasColor1,
+            R1: InterpolateByte(a.R1, b.R1, t),
+            G1: InterpolateByte(a.G1, b.G1, t),
+            B1: InterpolateByte(a.B1, b.B1, t),
+            A1: InterpolateByte(a.A1, b.A1, t));
         return true;
+    }
+
+    private static bool TryGetClipPlaneDistance(GxVertex vertex, GxVertexState state, ClipPlane plane, out float distance)
+    {
+        distance = 0;
+        if (!vertex.HasViewPosition
+            || !state.TryGetClipPosition(vertex.ViewX, vertex.ViewY, vertex.ViewZ, out float clipX, out float clipY, out _, out float clipW, out float nearDistance, out float farDistance))
+        {
+            return false;
+        }
+
+        distance = plane switch
+        {
+            ClipPlane.Near => nearDistance,
+            ClipPlane.Far => farDistance,
+            ClipPlane.PositiveW => clipW - NearClipW,
+            ClipPlane.Left => clipX + clipW,
+            ClipPlane.Right => clipW - clipX,
+            ClipPlane.Bottom => clipY + clipW,
+            ClipPlane.Top => clipW - clipY,
+            _ => 0,
+        };
+        return float.IsFinite(distance);
+    }
+
+    private static bool IsClipPlaneDisabled(ClipPlane plane)
+    {
+        string? value = Environment.GetEnvironmentVariable("NGCSHARP_GX_DISABLE_CLIP_PLANES");
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        ReadOnlySpan<char> remaining = value.AsSpan();
+        while (!remaining.IsEmpty)
+        {
+            int comma = remaining.IndexOf(',');
+            ReadOnlySpan<char> token = comma >= 0 ? remaining[..comma] : remaining;
+            token = token.Trim();
+            if (token.Equals("all".AsSpan(), StringComparison.OrdinalIgnoreCase)
+                || token.Equals(plane.ToString().AsSpan(), StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (comma < 0)
+            {
+                break;
+            }
+
+            remaining = remaining[(comma + 1)..];
+        }
+
+        return false;
     }
 
     private static float Edge(float ax, float ay, float bx, float by, float px, float py) =>
@@ -3423,10 +5453,38 @@ public static class GxFifoSoftwareRenderer
         float perspectiveWeight = a.InvW * aWeight + b.InvW * bWeight + c.InvW * cWeight;
         s = aTexS * aWeight + bTexS * bWeight + cTexS * cWeight;
         t = aTexT * aWeight + bTexT * bWeight + cTexT * cWeight;
-        if (MathF.Abs(perspectiveWeight) > 0.000001f)
+        if (!ForceAffineTextureCoordinates && MathF.Abs(perspectiveWeight) > 0.000001f)
         {
             s = (aTexS * a.InvW * aWeight + bTexS * b.InvW * bWeight + cTexS * c.InvW * cWeight) / perspectiveWeight;
             t = (aTexT * a.InvW * aWeight + bTexT * b.InvW * bWeight + cTexT * c.InvW * cWeight) / perspectiveWeight;
+        }
+    }
+
+    private static bool ForceAffineTextureCoordinates =>
+        string.Equals(Environment.GetEnvironmentVariable("NGCSHARP_GX_AFFINE_TEXCOORDS"), "1", StringComparison.Ordinal);
+
+    private static bool DisableSingleStageTevFastPath =>
+        string.Equals(Environment.GetEnvironmentVariable("NGCSHARP_GX_DISABLE_FAST_TEV"), "1", StringComparison.Ordinal);
+
+    private static bool DisableClipVolumeRasterization =>
+        string.Equals(Environment.GetEnvironmentVariable("NGCSHARP_GX_DISABLE_CLIP_VOLUME"), "1", StringComparison.Ordinal);
+
+    private static float? ForcedTextureLod
+    {
+        get
+        {
+            if (string.Equals(Environment.GetEnvironmentVariable("NGCSHARP_GX_BASE_TEXTURE_LOD"), "1", StringComparison.Ordinal))
+            {
+                return 0f;
+            }
+
+            string? value = Environment.GetEnvironmentVariable("NGCSHARP_GX_FORCE_TEXTURE_LOD");
+            if (float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float lod) && float.IsFinite(lod))
+            {
+                return MathF.Max(0f, lod);
+            }
+
+            return null;
         }
     }
 
@@ -3477,20 +5535,24 @@ public static class GxFifoSoftwareRenderer
     private static int ToScreenY(float y, int height) =>
         y is >= -1f and <= 1f ? (int)MathF.Round((0.5f - y * 0.5f) * (height - 1)) : (int)MathF.Round(y);
 
-    private readonly record struct RenderCoordinateTransform(float OffsetX, float OffsetY)
+    private readonly record struct RenderCoordinateTransform(float OffsetX, float OffsetY, bool CoordinatesAreProjectedScreenSpace)
     {
-        public static RenderCoordinateTransform FromBounds(float minX, float maxX, float minY, float maxY, int width, int height)
+        public static RenderCoordinateTransform FromBounds(float minX, float maxX, float minY, float maxY, int width, int height, bool allowDirectScreenSpaceWrap, bool coordinatesAreProjectedScreenSpace)
         {
-            float offsetX = maxX <= 1f && minX < -1f ? width : 0f;
-            float offsetY = maxY <= 1f && minY < -1f ? height : 0f;
-            return new RenderCoordinateTransform(offsetX, offsetY);
+            float offsetX = allowDirectScreenSpaceWrap && maxX <= 1f && minX < -1f ? width : 0f;
+            float offsetY = allowDirectScreenSpaceWrap && maxY <= 1f && minY < -1f ? height : 0f;
+            return new RenderCoordinateTransform(offsetX, offsetY, coordinatesAreProjectedScreenSpace);
         }
 
-        public int ToScreenX(float x, int width) => OffsetX != 0f
+        public int ToScreenX(float x, int width) => CoordinatesAreProjectedScreenSpace
+            ? (int)MathF.Round(x)
+            : OffsetX != 0f
             ? (int)MathF.Round(x + OffsetX)
             : GxFifoSoftwareRenderer.ToScreenX(x, width);
 
-        public int ToScreenY(float y, int height) => OffsetY != 0f
+        public int ToScreenY(float y, int height) => CoordinatesAreProjectedScreenSpace
+            ? (int)MathF.Round(y)
+            : OffsetY != 0f
             ? (int)MathF.Round(y + OffsetY)
             : GxFifoSoftwareRenderer.ToScreenY(y, height);
     }
@@ -3524,6 +5586,9 @@ public static class GxFifoSoftwareRenderer
 
     private static string FormatFloat(float value) =>
         value.ToString("0.###", CultureInfo.InvariantCulture);
+
+    private static string FormatFiniteFloat(float value) =>
+        float.IsFinite(value) ? FormatFloat(value) : string.Empty;
 
     private static string FormatHexInline(byte[] bytes, int offset, int length)
     {
@@ -3601,10 +5666,27 @@ public static class GxFifoSoftwareRenderer
         float ViewX = 0,
         float ViewY = 0,
         float ViewZ = 0,
-        GxTexCoordSet TexCoords = default)
+        GxTexCoordSet TexCoords = default,
+        float ModelX = 0,
+        float ModelY = 0,
+        float ModelZ = 0,
+        bool HasColor0 = false,
+        bool HasColor1 = false,
+        byte R1 = 224,
+        byte G1 = 224,
+        byte B1 = 224,
+        byte A1 = 255)
     {
         public bool TryGetTexCoord(int index, out float s, out float t) =>
             TexCoords.TryGet(index, out s, out t);
+
+        public GxTevColor GetRasterColor(int channel) =>
+            channel switch
+            {
+                1 when HasColor0 && HasColor1 => new GxTevColor(R1, G1, B1, A1),
+                0 when !HasColor0 && HasColor1 => new GxTevColor(R1, G1, B1, A1),
+                _ => new GxTevColor(R, G, B, A),
+            };
     }
 
     private readonly record struct GxTexCoordSet(
@@ -3731,8 +5813,10 @@ public static class GxFifoSoftwareRenderer
         private readonly GxTevColor[] _tevRegisterColors = new GxTevColor[4];
         private readonly GxTevColor[] _tevKColors = new GxTevColor[4];
         private readonly Dictionary<int, GxTlutLoadState> _tlutLoads = [];
+        private readonly Dictionary<TextureMipCacheKey, DecodedTextureMip> _decodedTextureMips = [];
         private readonly Dictionary<ushort, uint> _xfRegisters = [];
         private uint? _pendingTlutSourceAddress;
+        private int _textureMemoryGeneration;
 
         public GxMemorySnapshotSet? MemorySnapshots { get; init; }
 
@@ -3779,7 +5863,23 @@ public static class GxFifoSoftwareRenderer
             WriteTextureRegister(register, _bpRegisters[register]);
             WriteTevColorRegister(register, _bpRegisters[register]);
             WriteTevKColorRegister(register, _bpRegisters[register]);
+            if (IsTextureSamplerRegister(register))
+            {
+                ClearDecodedTextureMipCache();
+            }
         }
+
+        private void ClearDecodedTextureMipCache() => _decodedTextureMips.Clear();
+
+        private void InvalidateTextureMemoryCache()
+        {
+            _decodedTextureMips.Clear();
+            _textureMemoryGeneration++;
+        }
+
+        private static bool IsTextureSamplerRegister(byte register) =>
+            register is 0x64 or 0x65
+            || (register is >= 0x80 and <= 0xBB);
 
         public void WriteXfRegisters(byte[] bytes, int offset, ushort register, int wordCount)
         {
@@ -3819,6 +5919,10 @@ public static class GxFifoSoftwareRenderer
             byte g = 224;
             byte b = 224;
             byte a = 255;
+            byte r1 = 224;
+            byte g1 = 224;
+            byte b1 = 224;
+            byte a1 = 255;
 
             for (int bit = 0; bit < 9; bit++)
             {
@@ -3831,7 +5935,7 @@ public static class GxFifoSoftwareRenderer
             if (!TryReadPosition(bytes, ref offset, positionDescriptor, vatA, memory, out float x, out float y, out float z)
                 || !SkipAttribute(bytes, ref offset, normalDescriptor, ComponentBytes((vatA >> 10) & 7, ((vatA >> 9) & 1) == 0 ? 3 : 9))
                 || !TryReadColorOrSkip(bytes, ref offset, color0Descriptor, vatA, memory, out r, out g, out b, out a)
-                || !SkipAttribute(bytes, ref offset, color1Descriptor, ColorBytes((vatA >> 18) & 7)))
+                || !TryReadColorOrSkip(bytes, ref offset, color1Descriptor, vatA, memory, out r1, out g1, out b1, out a1))
             {
                 return false;
             }
@@ -3896,7 +6000,36 @@ public static class GxFifoSoftwareRenderer
                 hasViewPosition = TryTransformModelToView(x, y, z, out viewX, out viewY, out viewZ);
             }
 
-            vertex = new GxVertex(x, y, z, invW, r, g, b, a, hasTex0, tex0S, tex0T, hasRawTex0, rawTex0S, rawTex0T, clipRejected, hasViewPosition, viewX, viewY, viewZ, texCoords);
+            vertex = new GxVertex(
+                x,
+                y,
+                z,
+                invW,
+                r,
+                g,
+                b,
+                a,
+                hasTex0,
+                tex0S,
+                tex0T,
+                hasRawTex0,
+                rawTex0S,
+                rawTex0T,
+                clipRejected,
+                hasViewPosition,
+                viewX,
+                viewY,
+                viewZ,
+                texCoords,
+                modelX,
+                modelY,
+                modelZ,
+                color0Descriptor != 0,
+                color1Descriptor != 0,
+                r1,
+                g1,
+                b1,
+                a1);
             return true;
         }
 
@@ -3978,6 +6111,21 @@ public static class GxFifoSoftwareRenderer
                 yield return $"BP PE control raw: 0x{peControl:X6}";
             }
 
+            bool hasFogParam0 = TryGetBp(0xEE, out uint fogParam0);
+            bool hasFogBMagnitude = TryGetBp(0xEF, out uint fogBMagnitude);
+            bool hasFogBExponent = TryGetBp(0xF0, out uint fogBExponent);
+            bool hasFogParam3 = TryGetBp(0xF1, out uint fogParam3);
+            bool hasFogColor = TryGetBp(0xF2, out uint fogColor);
+            if (hasFogParam0 || hasFogBMagnitude || hasFogBExponent || hasFogParam3 || hasFogColor)
+            {
+                yield return $"BP fog raw: a=0x{fogParam0:X6}, b-mag=0x{fogBMagnitude:X6}, b-shift=0x{fogBExponent:X6}, param3=0x{fogParam3:X6}, color=0x{fogColor:X6}, {DescribeFogMode(fogParam3)}, {DescribeFogColor(fogColor)}";
+            }
+
+            if (TryGetBp(0xE8, out uint fogRangeBase))
+            {
+                yield return $"BP fog range: {DescribeFogRangeBase(fogRangeBase)}";
+            }
+
             foreach (string copyLine in DescribeEfbCopyState())
             {
                 yield return copyLine;
@@ -3991,6 +6139,11 @@ public static class GxFifoSoftwareRenderer
             if (_xfRegisters.TryGetValue(0x1018, out uint matrixIndexLow))
             {
                 yield return $"XF matrix index low raw: 0x{matrixIndexLow:X8}, pos-base=0x{CurrentPositionMatrixBaseRegister:X4}, tex0-base=0x{CurrentTex0MatrixBaseRegister:X4}";
+            }
+
+            foreach (string colorLine in DescribeXfColorChannelState())
+            {
+                yield return colorLine;
             }
 
             if (TryGetXfFloat(0x1020, out float projection00)
@@ -4031,11 +6184,381 @@ public static class GxFifoSoftwareRenderer
             }
         }
 
+        public TransformDiagnosticState GetTransformDiagnosticState()
+        {
+            string matrixIndexRaw = _xfRegisters.TryGetValue(0x1018, out uint matrixIndexLow)
+                ? $"0x{matrixIndexLow:X8}"
+                : string.Empty;
+            string positionMatrixBase = _xfRegisters.ContainsKey(0x1018)
+                ? $"0x{CurrentPositionMatrixBaseRegister:X4}"
+                : string.Empty;
+            string projectionTypeText = _xfRegisters.TryGetValue(0x1026, out uint projectionType)
+                ? projectionType == 0 ? "perspective" : "orthographic"
+                : string.Empty;
+
+            return new TransformDiagnosticState(
+                matrixIndexRaw,
+                positionMatrixBase,
+                projectionTypeText,
+                TryGetXfFloat(0x101A, out float viewportScaleX) ? FormatFloat(viewportScaleX) : string.Empty,
+                TryGetXfFloat(0x101B, out float viewportScaleY) ? FormatFloat(viewportScaleY) : string.Empty,
+                TryGetXfFloat(0x101C, out float viewportScaleZ) ? FormatFloat(viewportScaleZ) : string.Empty,
+                TryGetXfFloat(0x101D, out float viewportOriginX) ? FormatFloat(viewportOriginX) : string.Empty,
+                TryGetXfFloat(0x101E, out float viewportOriginY) ? FormatFloat(viewportOriginY) : string.Empty,
+                TryGetXfFloat(0x101F, out float viewportOriginZ) ? FormatFloat(viewportOriginZ) : string.Empty,
+                TryGetXfFloat(0x1020, out float projection00) ? FormatFloat(projection00) : string.Empty,
+                TryGetXfFloat(0x1021, out float projection01Or03) ? FormatFloat(projection01Or03) : string.Empty,
+                TryGetXfFloat(0x1022, out float projection11) ? FormatFloat(projection11) : string.Empty,
+                TryGetXfFloat(0x1023, out float projection12Or13) ? FormatFloat(projection12Or13) : string.Empty,
+                TryGetXfFloat(0x1024, out float projection22) ? FormatFloat(projection22) : string.Empty,
+                TryGetXfFloat(0x1025, out float projection23) ? FormatFloat(projection23) : string.Empty);
+        }
+
+        public StateTimelineSnapshot GetStateTimelineSnapshot()
+        {
+            TransformDiagnosticState transform = GetTransformDiagnosticState();
+            GetPositionMatrixRows(out string row0, out string row1, out string row2);
+
+            string scissorLeft = string.Empty;
+            string scissorTop = string.Empty;
+            string scissorRight = string.Empty;
+            string scissorBottom = string.Empty;
+            string scissorTopLeftRaw = TryGetBp(0x20, out uint scissorTopLeft) ? $"0x{scissorTopLeft:X6}" : string.Empty;
+            string scissorBottomRightRaw = TryGetBp(0x21, out uint scissorBottomRight) ? $"0x{scissorBottomRight:X6}" : string.Empty;
+            if (!string.IsNullOrEmpty(scissorTopLeftRaw)
+                && !string.IsNullOrEmpty(scissorBottomRightRaw)
+                && TryDecodeScissor(scissorTopLeft, scissorBottomRight, out int decodedLeft, out int decodedTop, out int decodedRight, out int decodedBottom))
+            {
+                scissorLeft = decodedLeft.ToString(CultureInfo.InvariantCulture);
+                scissorTop = decodedTop.ToString(CultureInfo.InvariantCulture);
+                scissorRight = decodedRight.ToString(CultureInfo.InvariantCulture);
+                scissorBottom = decodedBottom.ToString(CultureInfo.InvariantCulture);
+            }
+
+            string copyKind = string.Empty;
+            string copyDestinationAddress = string.Empty;
+            string copySourceRect = string.Empty;
+            string copyOutputSize = string.Empty;
+            string copyFormat = string.Empty;
+            string copyClear = string.Empty;
+            if (TryGetEfbCopyInfo(out EfbCopyInfo copy))
+            {
+                copyKind = copy.IsDisplayCopy ? "display" : "texture";
+                copyDestinationAddress = $"0x{copy.DestinationAddress:X8}";
+                copySourceRect = $"{copy.SourceLeft}/{copy.SourceTop}/{copy.SourceWidth}/{copy.SourceHeight}";
+                copyOutputSize = $"{copy.OutputWidth}x{copy.OutputHeight}";
+                copyFormat = TextureFormatName(copy.Format);
+                copyClear = copy.Clear ? "True" : "False";
+            }
+
+            string tex0MatrixBase = _xfRegisters.ContainsKey(0x1018) ? $"0x{CurrentTex0MatrixBaseRegister:X4}" : string.Empty;
+            string texGen0Raw = string.Empty;
+            string texGen0Projection = string.Empty;
+            string texGen0Source = string.Empty;
+            string texGen0Type = string.Empty;
+            if (_xfRegisters.TryGetValue(0x1040, out uint texGen0))
+            {
+                texGen0Raw = $"0x{texGen0:X8}";
+                texGen0Projection = TextureProjectionName((int)((texGen0 >> 1) & 1));
+                texGen0Source = TextureSourceName((int)((texGen0 >> 7) & 0x1F));
+                texGen0Type = TextureGenTypeName((int)((texGen0 >> 4) & 7));
+            }
+
+            return new StateTimelineSnapshot(
+                transform,
+                row0,
+                row1,
+                row2,
+                scissorLeft,
+                scissorTop,
+                scissorRight,
+                scissorBottom,
+                scissorTopLeftRaw,
+                scissorBottomRightRaw,
+                TryGetBp(0x40, out uint zMode) ? $"0x{zMode:X6}" : string.Empty,
+                TryGetBp(0x41, out uint blendMode) ? $"0x{blendMode:X6}" : string.Empty,
+                TryGetBp(0xF3, out uint alphaCompare) ? $"0x{alphaCompare:X6}" : string.Empty,
+                TryGetBp(0xF1, out uint fogParam3) ? DescribeFogMode(fogParam3) : string.Empty,
+                TryGetBp(0xF2, out uint fogColor) ? DescribeFogColor(fogColor) : string.Empty,
+                TryGetBp(0xE8, out uint fogRangeBase) ? DescribeFogRangeBase(fogRangeBase) : string.Empty,
+                TryGetBp(0x00, out uint genMode) ? $"0x{genMode:X6}" : string.Empty,
+                copyKind,
+                copyDestinationAddress,
+                copySourceRect,
+                copyOutputSize,
+                copyFormat,
+                copyClear,
+                tex0MatrixBase,
+                texGen0Raw,
+                texGen0Projection,
+                texGen0Source,
+                texGen0Type,
+                GetXfColorTimelineSnapshot());
+        }
+
+        private XfColorTimelineSnapshot GetXfColorTimelineSnapshot()
+        {
+            XfChannelTimelineSnapshot channel0 = GetXfChannelTimelineSnapshot(0);
+            XfChannelTimelineSnapshot channel1 = GetXfChannelTimelineSnapshot(1);
+            return new XfColorTimelineSnapshot(
+                TryGetXfRegister(0x1009, out uint channelCount) ? channelCount.ToString(CultureInfo.InvariantCulture) : string.Empty,
+                channel0.Ambient,
+                channel0.Material,
+                channel0.ColorControl,
+                channel0.AlphaControl,
+                channel0.ColorMaterialSource,
+                channel0.AlphaMaterialSource,
+                channel0.ColorAmbientSource,
+                channel0.AlphaAmbientSource,
+                channel0.ColorLighting,
+                channel0.AlphaLighting,
+                channel0.ColorLights,
+                channel0.AlphaLights,
+                channel1.Ambient,
+                channel1.Material,
+                channel1.ColorControl,
+                channel1.AlphaControl,
+                channel1.ColorMaterialSource,
+                channel1.AlphaMaterialSource,
+                channel1.ColorAmbientSource,
+                channel1.AlphaAmbientSource,
+                channel1.ColorLighting,
+                channel1.AlphaLighting,
+                channel1.ColorLights,
+                channel1.AlphaLights);
+        }
+
+        private XfChannelTimelineSnapshot GetXfChannelTimelineSnapshot(int channel)
+        {
+            string ambient = TryGetXfRgba((ushort)(0x100A + channel), out GxTevColor ambientColor)
+                ? FormatXfColor(ambientColor)
+                : string.Empty;
+            string material = TryGetXfRgba((ushort)(0x100C + channel), out GxTevColor materialColor)
+                ? FormatXfColor(materialColor)
+                : string.Empty;
+
+            bool hasColorControl = TryGetXfRegister((ushort)(0x100E + channel), out uint colorControl);
+            bool hasAlphaControl = TryGetXfRegister((ushort)(0x1010 + channel), out uint alphaControl);
+
+            return new XfChannelTimelineSnapshot(
+                ambient,
+                material,
+                hasColorControl ? $"0x{colorControl:X8}" : string.Empty,
+                hasAlphaControl ? $"0x{alphaControl:X8}" : string.Empty,
+                hasColorControl ? MaterialSourceName((int)(colorControl & 1)) : string.Empty,
+                hasAlphaControl ? MaterialSourceName((int)(alphaControl & 1)) : string.Empty,
+                hasColorControl ? AmbientSourceName((int)((colorControl >> 6) & 1)) : string.Empty,
+                hasAlphaControl ? AmbientSourceName((int)((alphaControl >> 6) & 1)) : string.Empty,
+                hasColorControl ? ((((colorControl >> 1) & 1) != 0) ? "True" : "False") : string.Empty,
+                hasAlphaControl ? ((((alphaControl >> 1) & 1) != 0) ? "True" : "False") : string.Empty,
+                hasColorControl ? $"0x{GetFullLightMask(colorControl):X2}" : string.Empty,
+                hasAlphaControl ? $"0x{GetFullLightMask(alphaControl):X2}" : string.Empty);
+        }
+
+        private static string FormatXfColor(GxTevColor color) =>
+            $"{color.R}/{color.G}/{color.B}/{color.A}";
+
+        private void GetPositionMatrixRows(out string row0, out string row1, out string row2)
+        {
+            row0 = string.Empty;
+            row1 = string.Empty;
+            row2 = string.Empty;
+            ushort matrixBase = CurrentPositionMatrixBaseRegister;
+            Span<float> matrix = stackalloc float[12];
+            for (ushort index = 0; index < matrix.Length; index++)
+            {
+                if (!TryGetXfFloat((ushort)(matrixBase + index), out matrix[index]))
+                {
+                    return;
+                }
+            }
+
+            row0 = FormatVector(matrix[0], matrix[1], matrix[2]) + "/" + FormatFloat(matrix[3]);
+            row1 = FormatVector(matrix[4], matrix[5], matrix[6]) + "/" + FormatFloat(matrix[7]);
+            row2 = FormatVector(matrix[8], matrix[9], matrix[10]) + "/" + FormatFloat(matrix[11]);
+        }
+
         private bool TryGetBp(byte register, out uint value)
         {
             value = _bpRegisters[register];
             return _bpRegisterWritten[register];
         }
+
+        public bool TryGetBpDiagnostic(byte register, out uint value) => TryGetBp(register, out value);
+
+        public int TevDiagnosticStageCount => TevStageCount;
+
+        public int IndirectDiagnosticStageCount =>
+            TryGetBp(0x00, out uint genMode)
+                ? DecodeGenModeIndirectStageCount(genMode)
+                : 0;
+
+        public string DescribeTevDiagnosticState()
+        {
+            int stageCount = TevStageCount;
+            if (stageCount <= 0)
+            {
+                return string.Empty;
+            }
+
+            List<string> stages = [];
+            for (int stage = 0; stage < stageCount; stage++)
+            {
+                bool hasColor = TryGetTevColorEnv(stage, out uint colorEnv);
+                bool hasAlpha = TryGetTevAlphaEnv(stage, out uint alphaEnv);
+                TevOrder order = GetTevOrder(stage);
+                string indirect = TryGetIndirectTevStage(stage, out IndirectTevStage indirectStage)
+                    ? $";ind={DescribeIndirectTevStage(PackIndirectTevStage(indirectStage))}"
+                    : string.Empty;
+                stages.Add(
+                    string.Concat(
+                        "stage", stage.ToString(CultureInfo.InvariantCulture),
+                        "{color=", hasColor ? $"0x{colorEnv:X6}" : string.Empty,
+                        ";color_inputs=", hasColor ? DescribeTevColorInputs(colorEnv) : string.Empty,
+                        ";alpha=", hasAlpha ? $"0x{alphaEnv:X6}" : string.Empty,
+                        ";alpha_inputs=", hasAlpha ? DescribeTevAlphaInputs(alphaEnv) : string.Empty,
+                        ";dst=", hasColor ? TevDestination(colorEnv).ToString(CultureInfo.InvariantCulture) : hasAlpha ? TevDestination(alphaEnv).ToString(CultureInfo.InvariantCulture) : string.Empty,
+                        ";order=texcoord", order.TexCoord.ToString(CultureInfo.InvariantCulture),
+                        "/texmap", order.TexMap.ToString(CultureInfo.InvariantCulture),
+                        "/tex=", order.TextureEnabled ? "on" : "off",
+                        "/chan", order.ColorChannel.ToString(CultureInfo.InvariantCulture),
+                        ";ksel=", DescribeKSel(stage),
+                        indirect,
+                        "}"));
+            }
+
+            return string.Join(" | ", stages);
+        }
+
+        public string DescribeTextureMapDiagnostic(int map)
+        {
+            if (map is < 0 or >= 8)
+            {
+                return string.Empty;
+            }
+
+            GxTextureState texture = _textures[map];
+            if (!texture.HasAnyState)
+            {
+                return string.Empty;
+            }
+
+            return string.Concat(
+                "map", map.ToString(CultureInfo.InvariantCulture),
+                "{addr=0x", texture.SourceAddress.ToString("X8", CultureInfo.InvariantCulture),
+                ";size=", texture.Width.ToString(CultureInfo.InvariantCulture), "x", texture.Height.ToString(CultureInfo.InvariantCulture),
+                ";fmt=", TextureFormatName(texture.Format),
+                ";wrap=", TextureWrapName(texture.WrapS), "/", TextureWrapName(texture.WrapT),
+                ";filter=", TextureMagFilterName(texture.MagFilter), "/", TextureMinFilterName(texture.MinFilter),
+                ";lod=bias", FormatFloat(texture.LodBias), ":min", FormatFloat(texture.MinLod), ":max", FormatFloat(texture.MaxLod),
+                ";mode0=0x", texture.Mode0.ToString("X6", CultureInfo.InvariantCulture),
+                ";mode1=0x", texture.Mode1.ToString("X6", CultureInfo.InvariantCulture),
+                ";image0=0x", texture.Image0.ToString("X6", CultureInfo.InvariantCulture),
+                ";image3=0x", texture.Image3.ToString("X6", CultureInfo.InvariantCulture),
+                "}");
+        }
+
+        public string DescribeTevRegistersDiagnostic() =>
+            string.Join(
+                " ",
+                Enumerable.Range(0, _tevRegisterColors.Length)
+                    .Select(index => $"reg{index}={FormatTevColor(_tevRegisterColors[index])}"));
+
+        public string DescribeTevKColorsDiagnostic() =>
+            string.Join(
+                " ",
+                Enumerable.Range(0, _tevKColors.Length)
+                    .Select(index => $"k{index}={FormatTevColor(_tevKColors[index])}"));
+
+        private string DescribeKSel(int stage)
+        {
+            string color = TryGetKSel(stage, oddStageShift: 14, evenStageShift: 4, out int colorSelector)
+                ? colorSelector.ToString(CultureInfo.InvariantCulture)
+                : string.Empty;
+            string alpha = TryGetKSel(stage, oddStageShift: 19, evenStageShift: 9, out int alphaSelector)
+                ? alphaSelector.ToString(CultureInfo.InvariantCulture)
+                : string.Empty;
+            return color + "/" + alpha;
+        }
+
+        private static uint PackIndirectTevStage(IndirectTevStage stage) =>
+            (uint)(stage.IndTexStage & 3)
+            | ((uint)(stage.Format & 3) << 2)
+            | ((uint)(stage.Bias & 7) << 4)
+            | ((uint)(stage.Alpha & 3) << 7)
+            | ((uint)(stage.Matrix & 0xF) << 9)
+            | ((uint)(stage.WrapS & 7) << 13)
+            | ((uint)(stage.WrapT & 7) << 16)
+            | (stage.UseTexCoordLod ? 1u << 19 : 0)
+            | (stage.AddPrevious ? 1u << 20 : 0);
+
+        private static string DescribeTevColorInputs(uint env) =>
+            string.Concat(
+                ColorInputName((int)((env >> 12) & 0xF)), '/',
+                ColorInputName((int)((env >> 8) & 0xF)), '/',
+                ColorInputName((int)((env >> 4) & 0xF)), '/',
+                ColorInputName((int)(env & 0xF)),
+                ";op=", TevOperationName(env),
+                ";bias=", ((env >> 16) & 3).ToString(CultureInfo.InvariantCulture),
+                ";scale=", ((env >> 20) & 3).ToString(CultureInfo.InvariantCulture),
+                ";clamp=", ((env >> 19) & 1) != 0 ? "on" : "off");
+
+        private static string DescribeTevAlphaInputs(uint env) =>
+            string.Concat(
+                AlphaInputName((int)((env >> 13) & 7)), '/',
+                AlphaInputName((int)((env >> 10) & 7)), '/',
+                AlphaInputName((int)((env >> 7) & 7)), '/',
+                AlphaInputName((int)((env >> 4) & 7)),
+                ";op=", TevOperationName(env),
+                ";bias=", ((env >> 16) & 3).ToString(CultureInfo.InvariantCulture),
+                ";scale=", ((env >> 20) & 3).ToString(CultureInfo.InvariantCulture),
+                ";clamp=", ((env >> 19) & 1) != 0 ? "on" : "off");
+
+        private static string TevOperationName(uint env) =>
+            IsTevCompareOperation(env)
+                ? $"compare{(env >> 19) & 7}"
+                : ((env >> 18) & 1) switch
+                {
+                    0 => "add",
+                    1 => "sub",
+                    _ => "add",
+                };
+
+        private static string ColorInputName(int selector) =>
+            selector switch
+            {
+                0 => "prev",
+                1 => "prev.a",
+                2 => "reg1",
+                3 => "reg1.a",
+                4 => "reg2",
+                5 => "reg2.a",
+                6 => "reg3",
+                7 => "reg3.a",
+                8 => "tex",
+                9 => "tex.a",
+                10 => "ras",
+                11 => "ras.a",
+                12 => "one",
+                13 => "half",
+                14 => "konst",
+                15 => "zero",
+                _ => $"c{selector}",
+            };
+
+        private static string AlphaInputName(int selector) =>
+            selector switch
+            {
+                0 => "prev.a",
+                1 => "reg1.a",
+                2 => "reg2.a",
+                3 => "reg3.a",
+                4 => "tex.a",
+                5 => "ras.a",
+                6 => "konst.a",
+                7 => "zero",
+                _ => $"a{selector}",
+            };
 
         public bool TryGetEfbCopyInfo(out EfbCopyInfo info)
         {
@@ -4097,6 +6620,28 @@ public static class GxFifoSoftwareRenderer
             return false;
         }
 
+        private bool TryGetXfRegister(ushort register, out uint value) =>
+            _xfRegisters.TryGetValue(register, out value);
+
+        private bool TryGetXfRgba(ushort register, out GxTevColor color)
+        {
+            if (TryGetXfRegister(register, out uint value))
+            {
+                color = DecodeXfRgba(value);
+                return true;
+            }
+
+            color = default;
+            return false;
+        }
+
+        private static GxTevColor DecodeXfRgba(uint value) =>
+            new(
+                (byte)((value >> 24) & 0xFF),
+                (byte)((value >> 16) & 0xFF),
+                (byte)((value >> 8) & 0xFF),
+                (byte)(value & 0xFF));
+
         private IEnumerable<string> DescribeEfbCopyState()
         {
             bool hasTopLeft = TryGetBp(0x49, out uint topLeft);
@@ -4154,10 +6699,39 @@ public static class GxFifoSoftwareRenderer
             return TryCopyEfb(memory, rgb, alpha, depth: null, frameWidth, frameHeight, clearAfterCopy, out displayCopy, counters: null);
         }
 
-        public bool TryCopyEfb(GameCubeMemory? memory, byte[] rgb, byte[] alpha, float[]? depth, int frameWidth, int frameHeight, bool clearAfterCopy, out DisplayCopyResult? displayCopy, EfbCopyDiagnosticCounters? counters = null)
+        public bool TryCaptureCurrentDisplayCopyRgb(byte[] rgb, byte[] alpha, int frameWidth, int frameHeight, out DisplayCopyResult displayCopy, out byte[] displayRgb)
+        {
+            displayCopy = default;
+            displayRgb = [];
+            if (rgb.Length < frameWidth * frameHeight * 3
+                || alpha.Length < frameWidth * frameHeight
+                || !TryGetBp(0x52, out uint control)
+                || (control & 0x4000) == 0
+                || !TryGetBp(0x49, out uint topLeft)
+                || !TryGetBp(0x4A, out uint size)
+                || !TryGetBp(0x4B, out uint destination))
+            {
+                return false;
+            }
+
+            DecodeCopyRectangle(topLeft, size, out int sourceLeft, out int sourceTop, out int copyWidth, out int copyHeight);
+            int format = DecodeCopyTextureFormat(control);
+            if (!IsSupportedEfbColorCopyFormat(format) || copyWidth <= 0 || copyHeight <= 0)
+            {
+                return false;
+            }
+
+            DisplayCopyOptions options = GetDisplayCopyOptions(copyWidth, copyHeight, control);
+            uint destinationAddress = (destination & 0x00FF_FFFF) << 5;
+            displayCopy = new DisplayCopyResult(destinationAddress, options.DestinationWidth, options.DestinationHeight, FramebufferPixelFormat.Yuyv);
+            displayRgb = CaptureEfbDisplayCopyRgb(rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, options);
+            return true;
+        }
+
+        public bool TryCopyEfb(GameCubeMemory? memory, byte[] rgb, byte[] alpha, float[]? depth, int frameWidth, int frameHeight, bool clearAfterCopy, out DisplayCopyResult? displayCopy, EfbCopyDiagnosticCounters? counters = null, bool skipMemoryWrite = false)
         {
             displayCopy = null;
-            if (memory is null
+            if ((!skipMemoryWrite && memory is null)
                 || rgb.Length < frameWidth * frameHeight * 3
                 || alpha.Length < frameWidth * frameHeight
                 || (depth is not null && depth.Length < frameWidth * frameHeight)
@@ -4182,8 +6756,14 @@ public static class GxFifoSoftwareRenderer
                 if ((control & 0x4000) != 0)
                 {
                     DisplayCopyOptions options = GetDisplayCopyOptions(copyWidth, copyHeight, control);
+                    bool direct = false;
                     long copyStart = counters is null ? 0 : Stopwatch.GetTimestamp();
-                    bool direct = WriteEfbDisplayCopy(memory, destinationAddress, rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, options);
+                    if (!skipMemoryWrite && memory is not null)
+                    {
+                        direct = WriteEfbDisplayCopy(memory, destinationAddress, rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, options);
+                        InvalidateTextureMemoryCache();
+                    }
+
                     counters?.RecordDisplayCopy(Stopwatch.GetTimestamp() - copyStart, direct, copyWidth, copyHeight, options.DestinationWidth, options.DestinationHeight, options.YScale, options.VerticalFilter, options.Gamma);
                     displayCopy = new DisplayCopyResult(destinationAddress, options.DestinationWidth, options.DestinationHeight, FramebufferPixelFormat.Yuyv);
                 }
@@ -4191,7 +6771,12 @@ public static class GxFifoSoftwareRenderer
                 {
                     int destinationWidth = GetTextureCopyDestinationWidth(format, copyWidth);
                     long copyStart = counters is null ? 0 : Stopwatch.GetTimestamp();
-                    WriteEfbCopyTexture(memory, destinationAddress, rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, destinationWidth, format);
+                    if (!skipMemoryWrite && memory is not null)
+                    {
+                        WriteEfbCopyTexture(memory, destinationAddress, rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, destinationWidth, format);
+                        InvalidateTextureMemoryCache();
+                    }
+
                     counters?.RecordTextureCopy(Stopwatch.GetTimestamp() - copyStart, format);
                 }
 
@@ -4892,6 +7477,57 @@ public static class GxFifoSoftwareRenderer
             b = Clamp8((accumB + weightSum / 2) / weightSum);
         }
 
+        private static byte[] CaptureEfbDisplayCopyRgb(
+            byte[] rgb,
+            byte[] alpha,
+            int frameWidth,
+            int frameHeight,
+            int sourceLeft,
+            int sourceTop,
+            int copyWidth,
+            int copyHeight,
+            DisplayCopyOptions options)
+        {
+            byte[] output = new byte[checked(options.DestinationWidth * options.DestinationHeight * 3)];
+            for (int y = 0; y < options.DestinationHeight; y++)
+            {
+                Span<byte> outputRow = output.AsSpan(y * options.DestinationWidth * 3, options.DestinationWidth * 3);
+                for (int x = 0; x < options.DestinationWidth; x += 2)
+                {
+                    SampleDisplayCopyPixel(rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, options, x, y, out byte r0, out byte g0, out byte b0);
+                    SampleDisplayCopyPixel(rgb, alpha, frameWidth, frameHeight, sourceLeft, sourceTop, copyWidth, copyHeight, options, Math.Min(x + 1, options.DestinationWidth - 1), y, out byte r1, out byte g1, out byte b1);
+                    if (options.Gamma != 0)
+                    {
+                        ApplyCopyGamma(options.Gamma, ref r0, ref g0, ref b0);
+                        ApplyCopyGamma(options.Gamma, ref r1, ref g1, ref b1);
+                    }
+
+                    RgbToYcbcr(r0, g0, b0, out byte y0, out byte cb0, out byte cr0);
+                    RgbToYcbcr(r1, g1, b1, out byte y1, out byte cb1, out byte cr1);
+                    byte cb = (byte)((cb0 + cb1 + 1) / 2);
+                    byte cr = (byte)((cr0 + cr1 + 1) / 2);
+                    WriteYcbcrDisplayPixel(outputRow, x, y0, cb, cr);
+                    if (x + 1 < options.DestinationWidth)
+                    {
+                        WriteYcbcrDisplayPixel(outputRow, x + 1, y1, cb, cr);
+                    }
+                }
+            }
+
+            return output;
+        }
+
+        private static void WriteYcbcrDisplayPixel(Span<byte> rgb, int x, byte y, byte cb, byte cr)
+        {
+            int c = y - 16;
+            int d = cb - 128;
+            int e = cr - 128;
+            int offset = x * 3;
+            rgb[offset] = Clamp8((298 * c + 409 * e + 128) >> 8);
+            rgb[offset + 1] = Clamp8((298 * c - 100 * d - 208 * e + 128) >> 8);
+            rgb[offset + 2] = Clamp8((298 * c + 516 * d + 128) >> 8);
+        }
+
         private static int ScaleCopyCoordinate(int destinationCoordinate, int destinationSize, int sourceSize)
         {
             if (destinationSize <= 1 || sourceSize <= 1)
@@ -5190,6 +7826,109 @@ public static class GxFifoSoftwareRenderer
             int op = (int)((alphaCompare >> 22) & 3);
             return $"alpha-test=({CompareName(comp0)} {ref0}) {AlphaOpName(op)} ({CompareName(comp1)} {ref1})";
         }
+
+        private static string DescribeFogMode(uint fogParam3)
+        {
+            int projection = DecodeFogProjection(fogParam3);
+            int type = DecodeFogType(fogParam3);
+            return $"fog={FogTypeName(type)}, projection={(projection == 0 ? "perspective" : "orthographic")}, c={FormatFloat(DecodeFogFloat(fogParam3, 0, 11, 19))}";
+        }
+
+        private static string DescribeFogColor(uint fogColor)
+        {
+            int r = (int)((fogColor >> 16) & 0xFF);
+            int g = (int)((fogColor >> 8) & 0xFF);
+            int b = (int)(fogColor & 0xFF);
+            return $"fog-color=({r},{g},{b})";
+        }
+
+        private static string DescribeFogRangeBase(uint fogRangeBase)
+        {
+            int center = (int)(fogRangeBase & 0x3FF);
+            bool enabled = ((fogRangeBase >> 10) & 1) != 0;
+            return $"range-base=0x{fogRangeBase:X6}, center={center}, enabled={enabled}";
+        }
+
+        private static string FogTypeName(int type) =>
+            type switch
+            {
+                0 => "off",
+                2 => "linear",
+                4 => "exp",
+                5 => "exp2",
+                6 => "backward-exp",
+                7 => "backward-exp2",
+                _ => $"unknown-{type}",
+            };
+
+        private IEnumerable<string> DescribeXfColorChannelState()
+        {
+            bool hasNumChannels = TryGetXfRegister(0x1009, out uint numChannels);
+            bool hasAnyColorState = hasNumChannels;
+            for (int channel = 0; channel < 2 && !hasAnyColorState; channel++)
+            {
+                hasAnyColorState = TryGetXfRegister((ushort)(0x100A + channel), out _)
+                    || TryGetXfRegister((ushort)(0x100C + channel), out _)
+                    || TryGetXfRegister((ushort)(0x100E + channel), out _)
+                    || TryGetXfRegister((ushort)(0x1010 + channel), out _);
+            }
+
+            if (!hasAnyColorState)
+            {
+                yield break;
+            }
+
+            string count = hasNumChannels ? (numChannels & 3).ToString(CultureInfo.InvariantCulture) : "unknown";
+            yield return $"XF color channels: count={count}";
+            for (int channel = 0; channel < 2; channel++)
+            {
+                string ambient = TryGetXfRgba((ushort)(0x100A + channel), out GxTevColor ambientColor)
+                    ? FormatTevColor(ambientColor)
+                    : "unknown";
+                string material = TryGetXfRgba((ushort)(0x100C + channel), out GxTevColor materialColor)
+                    ? FormatTevColor(materialColor)
+                    : "unknown";
+                string colorControl = TryGetXfRegister((ushort)(0x100E + channel), out uint colorControlRaw)
+                    ? $"0x{colorControlRaw:X8} {DescribeLitChannelControl(colorControlRaw)}"
+                    : "unknown";
+                string alphaControl = TryGetXfRegister((ushort)(0x1010 + channel), out uint alphaControlRaw)
+                    ? $"0x{alphaControlRaw:X8} {DescribeLitChannelControl(alphaControlRaw)}"
+                    : "unknown";
+
+                yield return $"XF color channel{channel}: ambient={ambient}, material={material}, color={colorControl}, alpha={alphaControl}";
+            }
+        }
+
+        private static string DescribeLitChannelControl(uint value) =>
+            $"mat={MaterialSourceName((int)(value & 1))}, lighting={(((value >> 1) & 1) != 0)}, lights=0x{GetFullLightMask(value):X2}, ambient={AmbientSourceName((int)((value >> 6) & 1))}, diffuse={DiffuseFunctionName((int)((value >> 7) & 3))}, attenuation={AttenuationFunctionName((int)((value >> 9) & 3))}";
+
+        private static int GetFullLightMask(uint value) =>
+            (int)(((value >> 2) & 0xF) | (((value >> 11) & 0xF) << 4));
+
+        private static string MaterialSourceName(int source) =>
+            source == 0 ? "register" : "vertex";
+
+        private static string AmbientSourceName(int source) =>
+            source == 0 ? "register" : "vertex";
+
+        private static string DiffuseFunctionName(int function) =>
+            function switch
+            {
+                0 => "none",
+                1 => "sign",
+                2 => "clamp",
+                _ => $"unknown-{function}",
+            };
+
+        private static string AttenuationFunctionName(int function) =>
+            function switch
+            {
+                0 => "none",
+                1 => "spec",
+                2 => "dir",
+                3 => "spot",
+                _ => $"unknown-{function}",
+            };
 
         private static string DescribeTevOrder(uint tevOrder) =>
             $"order=texcoord{(tevOrder >> 3) & 7}/texmap{tevOrder & 7}/color{(tevOrder >> 7) & 7}/tex-enabled={(((tevOrder >> 6) & 1) != 0)}";
@@ -5536,39 +8275,20 @@ public static class GxFifoSoftwareRenderer
                 || !TryGetXfFloat(0x101D, out float viewportOriginX)
                 || !TryGetXfFloat(0x101E, out float viewportOriginY)
                 || !TryGetXfFloat(0x101F, out float viewportOriginZ)
-                || !TryGetXfFloat(0x1020, out float projection00)
-                || !TryGetXfFloat(0x1021, out float projection01Or03)
-                || !TryGetXfFloat(0x1022, out float projection11)
-                || !TryGetXfFloat(0x1023, out float projection12Or13)
-                || !TryGetXfFloat(0x1024, out float projection22)
-                || !TryGetXfFloat(0x1025, out float projection23)
-                || !_xfRegisters.TryGetValue(0x1026, out uint projectionType))
+                || !TryGetClipPosition(viewX, viewY, viewZ, out float clipX, out float clipY, out float clipZ, out float clipW, out float nearDistance, out float farDistance))
             {
                 return false;
             }
 
-            float ndcX;
-            float ndcY;
-            float ndcZ;
-            if (projectionType == 0)
+            if (nearDistance < -0.000001f || farDistance < -0.000001f || clipW <= 0.000001f)
             {
-                float w = -viewZ;
-                if (w <= 0.0001f)
-                {
-                    return false;
-                }
+                return false;
+            }
 
-                invW = 1f / w;
-                ndcX = (projection00 * viewX + projection01Or03 * viewZ) / w;
-                ndcY = (projection11 * viewY + projection12Or13 * viewZ) / w;
-                ndcZ = (projection22 * viewZ + projection23) / w;
-            }
-            else
-            {
-                ndcX = projection00 * viewX + projection01Or03;
-                ndcY = projection11 * viewY + projection12Or13;
-                ndcZ = projection22 * viewZ + projection23;
-            }
+            invW = 1f / clipW;
+            float ndcX = clipX * invW;
+            float ndcY = clipY * invW;
+            float ndcZ = clipZ * invW;
 
             screenX = (viewportOriginX - 342f) + viewportScaleX * ndcX;
             screenY = (viewportOriginY - 342f) + viewportScaleY * ndcY;
@@ -5577,6 +8297,36 @@ public static class GxFifoSoftwareRenderer
         }
 
         public bool TryProjectViewPosition(float viewX, float viewY, float viewZ, out float screenX, out float screenY, out float screenZ, out float invW)
+        {
+            return TryProjectViewPosition(viewX, viewY, viewZ, requireInsideClipVolume: true, out screenX, out screenY, out screenZ, out invW);
+        }
+
+        public bool TryProjectViewPositionUnchecked(float viewX, float viewY, float viewZ, out float screenX, out float screenY, out float screenZ, out float invW)
+        {
+            return TryProjectViewPosition(viewX, viewY, viewZ, requireInsideClipVolume: false, out screenX, out screenY, out screenZ, out invW);
+        }
+
+        public bool HasCanonicalViewport(int width, int height)
+        {
+            if (!TryGetXfFloat(0x101A, out float viewportScaleX)
+                || !TryGetXfFloat(0x101B, out float viewportScaleY)
+                || !TryGetXfFloat(0x101D, out float viewportOriginX)
+                || !TryGetXfFloat(0x101E, out float viewportOriginY))
+            {
+                return false;
+            }
+
+            float expectedCenterX = width * 0.5f;
+            float expectedCenterY = height * 0.5f;
+            float originX = viewportOriginX - 342f;
+            float originY = viewportOriginY - 342f;
+            return NearlyEqual(originX, expectedCenterX)
+                && NearlyEqual(MathF.Abs(viewportScaleX), expectedCenterX)
+                && NearlyEqual(originY, expectedCenterY)
+                && NearlyEqual(MathF.Abs(viewportScaleY), expectedCenterY);
+        }
+
+        private bool TryProjectViewPosition(float viewX, float viewY, float viewZ, bool requireInsideClipVolume, out float screenX, out float screenY, out float screenZ, out float invW)
         {
             screenX = 0;
             screenY = 0;
@@ -5588,7 +8338,39 @@ public static class GxFifoSoftwareRenderer
                 || !TryGetXfFloat(0x101D, out float viewportOriginX)
                 || !TryGetXfFloat(0x101E, out float viewportOriginY)
                 || !TryGetXfFloat(0x101F, out float viewportOriginZ)
-                || !TryGetXfFloat(0x1020, out float projection00)
+                || !TryGetClipPosition(viewX, viewY, viewZ, out float clipX, out float clipY, out float clipZ, out float clipW, out float nearDistance, out float farDistance))
+            {
+                return false;
+            }
+
+            if (clipW <= 0.000001f || (requireInsideClipVolume && (nearDistance < -0.000001f || farDistance < -0.000001f)))
+            {
+                return false;
+            }
+
+            invW = 1f / clipW;
+            float ndcX = clipX * invW;
+            float ndcY = clipY * invW;
+            float ndcZ = clipZ * invW;
+
+            screenX = (viewportOriginX - 342f) + viewportScaleX * ndcX;
+            screenY = (viewportOriginY - 342f) + viewportScaleY * ndcY;
+            screenZ = Math.Clamp(viewportOriginZ + viewportScaleZ * ndcZ, 0f, FarDepthValue);
+            return float.IsFinite(screenX) && float.IsFinite(screenY) && float.IsFinite(screenZ);
+        }
+
+        private static bool NearlyEqual(float actual, float expected) =>
+            float.IsFinite(actual) && MathF.Abs(actual - expected) <= 0.51f;
+
+        public bool TryGetClipPosition(float viewX, float viewY, float viewZ, out float clipX, out float clipY, out float clipZ, out float clipW, out float nearDistance, out float farDistance)
+        {
+            clipX = 0;
+            clipY = 0;
+            clipZ = 0;
+            clipW = 1;
+            nearDistance = 0;
+            farDistance = 0;
+            if (!TryGetXfFloat(0x1020, out float projection00)
                 || !TryGetXfFloat(0x1021, out float projection01Or03)
                 || !TryGetXfFloat(0x1022, out float projection11)
                 || !TryGetXfFloat(0x1023, out float projection12Or13)
@@ -5599,33 +8381,29 @@ public static class GxFifoSoftwareRenderer
                 return false;
             }
 
-            float ndcX;
-            float ndcY;
-            float ndcZ;
             if (projectionType == 0)
             {
-                float w = -viewZ;
-                if (w <= NearClipW)
-                {
-                    return false;
-                }
-
-                invW = 1f / w;
-                ndcX = (projection00 * viewX + projection01Or03 * viewZ) / w;
-                ndcY = (projection11 * viewY + projection12Or13 * viewZ) / w;
-                ndcZ = (projection22 * viewZ + projection23) / w;
+                clipX = projection00 * viewX + projection01Or03 * viewZ;
+                clipY = projection11 * viewY + projection12Or13 * viewZ;
+                clipZ = projection22 * viewZ + projection23;
+                clipW = -viewZ;
             }
             else
             {
-                ndcX = projection00 * viewX + projection01Or03;
-                ndcY = projection11 * viewY + projection12Or13;
-                ndcZ = projection22 * viewZ + projection23;
+                clipX = projection00 * viewX + projection01Or03;
+                clipY = projection11 * viewY + projection12Or13;
+                clipZ = projection22 * viewZ + projection23;
+                clipW = 1f;
             }
 
-            screenX = (viewportOriginX - 342f) + viewportScaleX * ndcX;
-            screenY = (viewportOriginY - 342f) + viewportScaleY * ndcY;
-            screenZ = Math.Clamp(viewportOriginZ + viewportScaleZ * ndcZ, 0f, FarDepthValue);
-            return float.IsFinite(screenX) && float.IsFinite(screenY) && float.IsFinite(screenZ);
+            nearDistance = clipZ + clipW;
+            farDistance = -clipZ;
+            return float.IsFinite(clipX)
+                && float.IsFinite(clipY)
+                && float.IsFinite(clipZ)
+                && float.IsFinite(clipW)
+                && float.IsFinite(nearDistance)
+                && float.IsFinite(farDistance);
         }
 
         public float GetPerspectiveNearClipW()
@@ -5635,12 +8413,22 @@ public static class GxFifoSoftwareRenderer
                 return NearClipW * 1.01f;
             }
 
-            if (!TryGetXfFloat(0x1025, out float projection23) || !float.IsFinite(projection23))
+            if (!TryGetXfFloat(0x1024, out float projection22)
+                || !TryGetXfFloat(0x1025, out float projection23)
+                || !float.IsFinite(projection22)
+                || !float.IsFinite(projection23))
             {
                 return NearClipW * 1.01f;
             }
 
-            float nearW = MathF.Abs(projection23);
+            float denominator = projection22 - 1f;
+            if (MathF.Abs(denominator) < 0.000001f)
+            {
+                return NearClipW * 1.01f;
+            }
+
+            float nearViewZ = -projection23 / denominator;
+            float nearW = -nearViewZ;
             return float.IsFinite(nearW) && nearW > NearClipW
                 ? nearW
                 : NearClipW * 1.01f;
@@ -5719,6 +8507,11 @@ public static class GxFifoSoftwareRenderer
 
         public bool TrySampleTexture(GameCubeMemory? memory, int textureMap, float s, float t, out byte r, out byte g, out byte b, out byte a)
         {
+            return TrySampleTexture(memory, textureMap, s, t, textureLod: null, out r, out g, out b, out a);
+        }
+
+        public bool TrySampleTexture(GameCubeMemory? memory, int textureMap, float s, float t, float? textureLod, out byte r, out byte g, out byte b, out byte a)
+        {
             r = 0;
             g = 0;
             b = 0;
@@ -5736,6 +8529,17 @@ public static class GxFifoSoftwareRenderer
 
             try
             {
+                if (TryGetTexturePhaseProbe(texture.SourceAddress, out float phaseS, out float phaseT))
+                {
+                    s += phaseS;
+                    t += phaseT;
+                }
+
+                if (textureLod.HasValue && TextureUsesMipmaps(texture.MinFilter))
+                {
+                    return TrySampleTextureMinified(memory, texture, s, t, textureLod.Value, out r, out g, out b, out a);
+                }
+
                 return texture.MagFilter == 1
                     ? TrySampleTextureLinear(memory, texture, s, t, out r, out g, out b, out a)
                     : TrySampleTextureNearest(memory, texture, s, t, out r, out g, out b, out a);
@@ -5746,7 +8550,82 @@ public static class GxFifoSoftwareRenderer
             }
         }
 
+        public float? EstimateTextureLod(
+            int textureMap,
+            float ax,
+            float ay,
+            float bx,
+            float by,
+            float cx,
+            float cy,
+            float aTexS,
+            float aTexT,
+            float bTexS,
+            float bTexT,
+            float cTexS,
+            float cTexT,
+            float area)
+        {
+            if (textureMap is < 0 or >= 8 || MathF.Abs(area) < 0.0001f)
+            {
+                return null;
+            }
+
+            GxTextureState texture = _textures[textureMap];
+            if (!texture.HasImage0 || !texture.HasImage3 || texture.Width <= 0 || texture.Height <= 0 || !TextureUsesMipmaps(texture.MinFilter))
+            {
+                return null;
+            }
+
+            float inverseArea = 1f / area;
+            float dsDx = (aTexS * (by - cy) + bTexS * (cy - ay) + cTexS * (ay - by)) * inverseArea;
+            float dsDy = (aTexS * (cx - bx) + bTexS * (ax - cx) + cTexS * (bx - ax)) * inverseArea;
+            float dtDx = (aTexT * (by - cy) + bTexT * (cy - ay) + cTexT * (ay - by)) * inverseArea;
+            float dtDy = (aTexT * (cx - bx) + bTexT * (ax - cx) + cTexT * (bx - ax)) * inverseArea;
+            float rhoX = MathF.Sqrt(dsDx * dsDx * texture.Width * texture.Width + dtDx * dtDx * texture.Height * texture.Height);
+            float rhoY = MathF.Sqrt(dsDy * dsDy * texture.Width * texture.Width + dtDy * dtDy * texture.Height * texture.Height);
+            float rho = MathF.Max(rhoX, rhoY);
+            if (!float.IsFinite(rho) || rho <= 0f)
+            {
+                return null;
+            }
+
+            float lod = MathF.Log2(MathF.Max(1f, rho)) + texture.LodBias;
+            if (!float.IsFinite(lod))
+            {
+                return null;
+            }
+
+            int availableMax = TextureMipLevelCount(texture.Width, texture.Height) - 1;
+            float minLod = texture.HasMode1 ? texture.MinLod : 0f;
+            float maxLod = texture.HasMode1 ? texture.MaxLod : availableMax;
+            return Math.Clamp(lod, Math.Max(0f, minLod), Math.Min(availableMax, maxLod));
+        }
+
         public bool TryDumpTextureMap(GameCubeMemory? memory, int textureMap, out TextureDumpSnapshot snapshot, out byte[]? rgb, out byte[]? alphaRgb, out string? error)
+        {
+            return TryDumpTextureMap(memory, textureMap, mipLevel: 0, out snapshot, out rgb, out alphaRgb, out error);
+        }
+
+        public int GetTextureDiagnosticMipLevelCount(int textureMap)
+        {
+            if (textureMap is < 0 or >= 8)
+            {
+                return 0;
+            }
+
+            GxTextureState texture = _textures[textureMap];
+            if (!texture.HasImage0 || !texture.HasImage3 || texture.Width <= 0 || texture.Height <= 0)
+            {
+                return 0;
+            }
+
+            return TextureUsesMipmaps(texture.MinFilter)
+                ? TextureMipLevelCount(texture.Width, texture.Height)
+                : 1;
+        }
+
+        public bool TryDumpTextureMap(GameCubeMemory? memory, int textureMap, int mipLevel, out TextureDumpSnapshot snapshot, out byte[]? rgb, out byte[]? alphaRgb, out string? error)
         {
             snapshot = default;
             rgb = null;
@@ -5771,8 +8650,20 @@ public static class GxFifoSoftwareRenderer
                 return false;
             }
 
-            rgb = new byte[checked(texture.Width * texture.Height * 3)];
-            alphaRgb = new byte[checked(texture.Width * texture.Height * 3)];
+            if (!TryGetTextureMipLevel(texture, mipLevel, out TextureMipLevel level))
+            {
+                error = "texture mip level is unavailable.";
+                return false;
+            }
+
+            if ((long)level.Width * level.Height > MaxDiagnosticPixels)
+            {
+                error = "texture mip level is too large.";
+                return false;
+            }
+
+            rgb = new byte[checked(level.Width * level.Height * 3)];
+            alphaRgb = new byte[checked(level.Width * level.Height * 3)];
             int nonBlack = 0;
             int nonTransparent = 0;
             int transparent = 0;
@@ -5780,17 +8671,17 @@ public static class GxFifoSoftwareRenderer
             int maxAlpha = 0;
             try
             {
-                for (int y = 0; y < texture.Height; y++)
+                for (int y = 0; y < level.Height; y++)
                 {
-                    for (int x = 0; x < texture.Width; x++)
+                    for (int x = 0; x < level.Width; x++)
                     {
-                        if (!TrySampleTextureTexel(memory, texture, x, y, out byte r, out byte g, out byte b, out byte a))
+                        if (!TrySampleTextureTexel(memory, texture, level, x, y, out byte r, out byte g, out byte b, out byte a))
                         {
                             error = $"texture map {textureMap} uses unsupported format {TextureFormatName(texture.Format)}.";
                             return false;
                         }
 
-                        int offset = (y * texture.Width + x) * 3;
+                        int offset = (y * level.Width + x) * 3;
                         rgb[offset] = r;
                         rgb[offset + 1] = g;
                         rgb[offset + 2] = b;
@@ -5825,17 +8716,18 @@ public static class GxFifoSoftwareRenderer
             string tlut = texture.HasTlut
                 ? $"base-0x{texture.TlutBaseIndex:X3}/{TlutFormatName(texture.TlutFormat)}"
                 : string.Empty;
-            int sourceByteLength = TextureSourceByteLength(texture.Width, texture.Height, texture.Format);
+            int sourceByteLength = TextureSourceByteLength(level.Width, level.Height, texture.Format);
             uint sourceHash = sourceByteLength > 0
-                ? HashTextureRange(memory, texture.SourceAddress, sourceByteLength)
+                ? HashTextureRange(memory, level.SourceAddress, sourceByteLength)
                 : 0;
-            string sampleSource = MemorySnapshots?.DescribeSource(CurrentFifoOffset, texture.SourceAddress, sourceByteLength) ?? "main-ram";
+            string sampleSource = MemorySnapshots?.DescribeSource(CurrentFifoOffset, level.SourceAddress, sourceByteLength) ?? "main-ram";
             snapshot = new TextureDumpSnapshot(
                 textureMap,
-                texture.Width,
-                texture.Height,
+                level.Level,
+                level.Width,
+                level.Height,
                 TextureFormatName(texture.Format),
-                texture.SourceAddress,
+                level.SourceAddress,
                 texture.TmemEven,
                 texture.TmemOdd,
                 TextureWrapName(texture.WrapS),
@@ -5857,15 +8749,13 @@ public static class GxFifoSoftwareRenderer
                 transparent,
                 minAlpha,
                 maxAlpha,
-                DescribeTextureSamples(rgb, texture.Width, texture.Height));
+                DescribeTextureSamples(rgb, level.Width, level.Height));
             return true;
         }
 
         private bool TrySampleTextureNearest(GameCubeMemory memory, GxTextureState texture, float s, float t, out byte r, out byte g, out byte b, out byte a)
         {
-            int x = TextureCoordinateToIndex(s, texture.Width, texture.WrapS);
-            int y = TextureCoordinateToIndex(t, texture.Height, texture.WrapT);
-            return TrySampleTextureTexel(memory, texture, x, y, out r, out g, out b, out a);
+            return TrySampleTextureNearest(memory, texture, mipLevel: 0, s, t, out r, out g, out b, out a);
         }
 
         private static string DescribeTextureSamples(byte[] rgb, int width, int height)
@@ -5902,6 +8792,71 @@ public static class GxFifoSoftwareRenderer
             };
         }
 
+        private static bool TextureUsesMipmaps(int minFilter) =>
+            minFilter is 1 or 2 or 5 or 6;
+
+        private static int TextureMipLevelCount(int width, int height)
+        {
+            int levels = 0;
+            while (width > 0 && height > 0)
+            {
+                levels++;
+                if (width == 1 && height == 1)
+                {
+                    break;
+                }
+
+                width = Math.Max(1, width >> 1);
+                height = Math.Max(1, height >> 1);
+            }
+
+            return levels;
+        }
+
+        private static bool TryGetTextureMipLevel(GxTextureState texture, int requestedLevel, out TextureMipLevel level)
+        {
+            level = default;
+            if (texture.Width <= 0 || texture.Height <= 0)
+            {
+                return false;
+            }
+
+            int maxLevel = TextureMipLevelCount(texture.Width, texture.Height) - 1;
+            int mipLevel = Math.Clamp(requestedLevel, 0, maxLevel);
+            uint sourceAddress = texture.SourceAddress;
+            int width = texture.Width;
+            int height = texture.Height;
+            for (int index = 0; index < mipLevel; index++)
+            {
+                int byteLength = TextureSourceByteLength(width, height, texture.Format);
+                if (byteLength <= 0)
+                {
+                    return false;
+                }
+
+                sourceAddress = checked(sourceAddress + (uint)byteLength);
+                width = Math.Max(1, width >> 1);
+                height = Math.Max(1, height >> 1);
+            }
+
+            level = new TextureMipLevel(mipLevel, sourceAddress, width, height);
+            return true;
+        }
+
+        private static int MaxDiagnosticMipLevel(GxTextureState texture)
+        {
+            int availableMax = TextureMipLevelCount(texture.Width, texture.Height) - 1;
+            if (availableMax <= 0)
+            {
+                return 0;
+            }
+
+            int lodMax = texture.HasMode1
+                ? Math.Max(0, (int)Math.Ceiling(texture.MaxLod))
+                : availableMax;
+            return Math.Min(availableMax, lodMax);
+        }
+
         private uint HashTextureRange(GameCubeMemory memory, uint address, int length)
         {
             if (MemorySnapshots is not null && MemorySnapshots.TryHashRange(CurrentFifoOffset, address, length, out uint snapshotHash))
@@ -5923,12 +8878,127 @@ public static class GxFifoSoftwareRenderer
 
         private bool TrySampleTextureLinear(GameCubeMemory memory, GxTextureState texture, float s, float t, out byte r, out byte g, out byte b, out byte a)
         {
-            SampleCoordinate sampleS = TextureCoordinateToLinearSample(s, texture.Width, texture.WrapS);
-            SampleCoordinate sampleT = TextureCoordinateToLinearSample(t, texture.Height, texture.WrapT);
-            if (!TrySampleTextureTexel(memory, texture, sampleS.Index0, sampleT.Index0, out byte r00, out byte g00, out byte b00, out byte a00)
-                || !TrySampleTextureTexel(memory, texture, sampleS.Index1, sampleT.Index0, out byte r10, out byte g10, out byte b10, out byte a10)
-                || !TrySampleTextureTexel(memory, texture, sampleS.Index0, sampleT.Index1, out byte r01, out byte g01, out byte b01, out byte a01)
-                || !TrySampleTextureTexel(memory, texture, sampleS.Index1, sampleT.Index1, out byte r11, out byte g11, out byte b11, out byte a11))
+            return TrySampleTextureLinear(memory, texture, mipLevel: 0, s, t, out r, out g, out b, out a);
+        }
+
+        private bool TrySampleTextureMinified(GameCubeMemory memory, GxTextureState texture, float s, float t, float lod, out byte r, out byte g, out byte b, out byte a)
+        {
+            int maxLevel = TextureMipLevelCount(texture.Width, texture.Height) - 1;
+            float clampedLod = Math.Clamp(lod, 0f, maxLevel);
+            bool linearWithinMip = texture.MinFilter is 5 or 6;
+            bool linearBetweenMips = texture.MinFilter is 2 or 6;
+
+            if (!linearBetweenMips)
+            {
+                int mipLevel = Math.Clamp((int)MathF.Floor(clampedLod + 0.5f), 0, maxLevel);
+                return linearWithinMip
+                    ? TrySampleTextureLinear(memory, texture, mipLevel, s, t, out r, out g, out b, out a)
+                    : TrySampleTextureNearest(memory, texture, mipLevel, s, t, out r, out g, out b, out a);
+            }
+
+            int level0 = Math.Clamp((int)MathF.Floor(clampedLod), 0, maxLevel);
+            int level1 = Math.Clamp(level0 + 1, 0, maxLevel);
+            float fraction = clampedLod - level0;
+            byte r0;
+            byte g0;
+            byte b0;
+            byte a0;
+            byte r1;
+            byte g1;
+            byte b1;
+            byte a1;
+            bool sampled0 = linearWithinMip
+                ? TrySampleTextureLinear(memory, texture, level0, s, t, out r0, out g0, out b0, out a0)
+                : TrySampleTextureNearest(memory, texture, level0, s, t, out r0, out g0, out b0, out a0);
+            bool sampled1 = linearWithinMip
+                ? TrySampleTextureLinear(memory, texture, level1, s, t, out r1, out g1, out b1, out a1)
+                : TrySampleTextureNearest(memory, texture, level1, s, t, out r1, out g1, out b1, out a1);
+            if (!sampled0 || !sampled1)
+            {
+                r = 0;
+                g = 0;
+                b = 0;
+                a = 255;
+                return false;
+            }
+
+            r = LerpByte(r0, r1, fraction);
+            g = LerpByte(g0, g1, fraction);
+            b = LerpByte(b0, b1, fraction);
+            a = LerpByte(a0, a1, fraction);
+            return true;
+        }
+
+        private static bool TryGetTexturePhaseProbe(uint sourceAddress, out float phaseS, out float phaseT)
+        {
+            phaseS = 0;
+            phaseT = 0;
+            string? value = Environment.GetEnvironmentVariable("NGCSHARP_GX_TEXTURE_PHASE_PROBE");
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            string[] parts = value.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length != 3
+                || !TryParseUint(parts[0], out uint probeAddress)
+                || probeAddress != sourceAddress
+                || !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out phaseS)
+                || !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out phaseT)
+                || !float.IsFinite(phaseS)
+                || !float.IsFinite(phaseT))
+            {
+                phaseS = 0;
+                phaseT = 0;
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryParseUint(string text, out uint value)
+        {
+            if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            {
+                return uint.TryParse(text[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out value);
+            }
+
+            return uint.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+        }
+
+        private bool TrySampleTextureNearest(GameCubeMemory memory, GxTextureState texture, int mipLevel, float s, float t, out byte r, out byte g, out byte b, out byte a)
+        {
+            if (!TryGetTextureMipLevel(texture, mipLevel, out TextureMipLevel level))
+            {
+                r = 0;
+                g = 0;
+                b = 0;
+                a = 255;
+                return false;
+            }
+
+            int x = TextureCoordinateToIndex(s, level.Width, texture.WrapS);
+            int y = TextureCoordinateToIndex(t, level.Height, texture.WrapT);
+            return TrySampleTextureTexel(memory, texture, level, x, y, out r, out g, out b, out a);
+        }
+
+        private bool TrySampleTextureLinear(GameCubeMemory memory, GxTextureState texture, int mipLevel, float s, float t, out byte r, out byte g, out byte b, out byte a)
+        {
+            if (!TryGetTextureMipLevel(texture, mipLevel, out TextureMipLevel level))
+            {
+                r = 0;
+                g = 0;
+                b = 0;
+                a = 255;
+                return false;
+            }
+
+            SampleCoordinate sampleS = TextureCoordinateToLinearSample(s, level.Width, texture.WrapS);
+            SampleCoordinate sampleT = TextureCoordinateToLinearSample(t, level.Height, texture.WrapT);
+            if (!TrySampleTextureTexel(memory, texture, level, sampleS.Index0, sampleT.Index0, out byte r00, out byte g00, out byte b00, out byte a00)
+                || !TrySampleTextureTexel(memory, texture, level, sampleS.Index1, sampleT.Index0, out byte r10, out byte g10, out byte b10, out byte a10)
+                || !TrySampleTextureTexel(memory, texture, level, sampleS.Index0, sampleT.Index1, out byte r01, out byte g01, out byte b01, out byte a01)
+                || !TrySampleTextureTexel(memory, texture, level, sampleS.Index1, sampleT.Index1, out byte r11, out byte g11, out byte b11, out byte a11))
             {
                 r = 0;
                 g = 0;
@@ -5946,25 +9016,116 @@ public static class GxFifoSoftwareRenderer
 
         private bool TrySampleTextureTexel(GameCubeMemory memory, GxTextureState texture, int x, int y, out byte r, out byte g, out byte b, out byte a)
         {
+            if (!TryGetTextureMipLevel(texture, requestedLevel: 0, out TextureMipLevel level))
+            {
+                r = 0;
+                g = 0;
+                b = 0;
+                a = 255;
+                return false;
+            }
+
+            return TrySampleTextureTexel(memory, texture, level, x, y, out r, out g, out b, out a);
+        }
+
+        private bool TrySampleTextureTexel(GameCubeMemory memory, GxTextureState texture, TextureMipLevel level, int x, int y, out byte r, out byte g, out byte b, out byte a)
+        {
+            r = 0;
+            g = 0;
+            b = 0;
+            a = 255;
+            if (TryGetDecodedTextureMip(memory, texture, level, out DecodedTextureMip decoded))
+            {
+                int offset = checked((y * level.Width + x) * 4);
+                r = decoded.Rgba[offset];
+                g = decoded.Rgba[offset + 1];
+                b = decoded.Rgba[offset + 2];
+                a = decoded.Rgba[offset + 3];
+                return true;
+            }
+
+            return TrySampleTextureTexelUncached(memory, texture, level, x, y, out r, out g, out b, out a);
+        }
+
+        private bool TrySampleTextureTexelUncached(GameCubeMemory memory, GxTextureState texture, TextureMipLevel level, int x, int y, out byte r, out byte g, out byte b, out byte a)
+        {
             r = 0;
             g = 0;
             b = 0;
             a = 255;
             return texture.Format switch
             {
-                0 => TrySampleI4(memory, texture, x, y, out r, out g, out b, out a),
-                1 => TrySampleI8(memory, texture, x, y, out r, out g, out b, out a),
-                2 => TrySampleIA4(memory, texture, x, y, out r, out g, out b, out a),
-                3 => TrySampleIA8(memory, texture, x, y, out r, out g, out b, out a),
-                4 => TrySampleRgb565(memory, texture, x, y, out r, out g, out b, out a),
-                5 => TrySampleRgb5A3(memory, texture, x, y, out r, out g, out b, out a),
-                6 => TrySampleRgba8(memory, texture, x, y, out r, out g, out b, out a),
-                8 => TrySampleCI4(memory, texture, x, y, out r, out g, out b, out a),
-                9 => TrySampleCI8(memory, texture, x, y, out r, out g, out b, out a),
-                14 => TrySampleCmpr(memory, texture, x, y, out r, out g, out b, out a),
+                0 => TrySampleI4(memory, level, x, y, out r, out g, out b, out a),
+                1 => TrySampleI8(memory, level, x, y, out r, out g, out b, out a),
+                2 => TrySampleIA4(memory, level, x, y, out r, out g, out b, out a),
+                3 => TrySampleIA8(memory, level, x, y, out r, out g, out b, out a),
+                4 => TrySampleRgb565(memory, level, x, y, out r, out g, out b, out a),
+                5 => TrySampleRgb5A3(memory, level, x, y, out r, out g, out b, out a),
+                6 => TrySampleRgba8(memory, level, x, y, out r, out g, out b, out a),
+                8 => TrySampleCI4(memory, texture, level, x, y, out r, out g, out b, out a),
+                9 => TrySampleCI8(memory, texture, level, x, y, out r, out g, out b, out a),
+                14 => TrySampleCmpr(memory, level, x, y, out r, out g, out b, out a),
                 _ => false,
             };
         }
+
+        private bool TryGetDecodedTextureMip(GameCubeMemory memory, GxTextureState texture, TextureMipLevel level, out DecodedTextureMip decoded)
+        {
+            decoded = default;
+            if (!CanCacheDecodedTextureFormat(texture.Format)
+                || level.Width <= 0
+                || level.Height <= 0
+                || (long)level.Width * level.Height > MaxDiagnosticPixels)
+            {
+                return false;
+            }
+
+            TextureMipCacheKey key = new(
+                level.SourceAddress,
+                level.Level,
+                level.Width,
+                level.Height,
+                texture.Format,
+                texture.Image0,
+                texture.Image3,
+                _textureMemoryGeneration,
+                MemorySnapshots is null ? -1 : CurrentFifoOffset);
+            if (_decodedTextureMips.TryGetValue(key, out decoded))
+            {
+                return true;
+            }
+
+            byte[] rgba = new byte[checked(level.Width * level.Height * 4)];
+            for (int y = 0; y < level.Height; y++)
+            {
+                for (int x = 0; x < level.Width; x++)
+                {
+                    if (!TrySampleTextureTexelUncached(memory, texture, level, x, y, out byte r, out byte g, out byte b, out byte a))
+                    {
+                        decoded = default;
+                        return false;
+                    }
+
+                    int offset = (y * level.Width + x) * 4;
+                    rgba[offset] = r;
+                    rgba[offset + 1] = g;
+                    rgba[offset + 2] = b;
+                    rgba[offset + 3] = a;
+                }
+            }
+
+            decoded = new DecodedTextureMip(rgba);
+            if (_decodedTextureMips.Count >= 64)
+            {
+                _decodedTextureMips.Clear();
+            }
+
+            _decodedTextureMips[key] = decoded;
+            return true;
+        }
+
+        private static bool CanCacheDecodedTextureFormat(int format) =>
+            format is 0 or 1 or 2 or 3 or 4 or 5 or 6 or 14;
 
         public bool TryCreateSingleTevStageFastEvaluator(GameCubeMemory? memory, out SingleTevStageFastEvaluator evaluator)
         {
@@ -6024,7 +9185,10 @@ public static class GxFifoSoftwareRenderer
             }
 
             GxTextureState texture = _textures[textureMap];
-            int sourceByteLength = TextureSourceByteLength(texture.Width, texture.Height, texture.Format);
+            int mipLevelCount = TextureUsesMipmaps(texture.MinFilter)
+                ? TextureMipLevelCount(texture.Width, texture.Height)
+                : 1;
+            int sourceByteLength = TextureMipChainSourceByteLength(texture.Width, texture.Height, texture.Format, mipLevelCount);
             if (!texture.HasImage0
                 || !texture.HasImage3
                 || texture.Width <= 0
@@ -6035,21 +9199,8 @@ public static class GxFifoSoftwareRenderer
                 return false;
             }
 
-            byte[]? sourceBytes = null;
-            int sourceOffset;
-            if (MemorySnapshots is not null)
+            if (!TryBuildFastTextureMipLevels(memory, texture, mipLevelCount, out FastTextureMipLevel[] mipLevels, out fallbackReason))
             {
-                if (!MemorySnapshots.TryGetRange(CurrentFifoOffset, texture.SourceAddress, sourceByteLength, out sourceBytes, out sourceOffset))
-                {
-                    fallbackReason = "snapshot-texture-range";
-                    return false;
-                }
-            }
-            else if (memory is null
-                || !GameCubeAddress.TryTranslateMainRam(texture.SourceAddress, out sourceOffset)
-                || sourceOffset > GameCubeAddress.MainRamSize - sourceByteLength)
-            {
-                fallbackReason = "texture-range";
                 return false;
             }
 
@@ -6089,18 +9240,102 @@ public static class GxFifoSoftwareRenderer
             }
 
             sampler = new FastTextureSampler(
-                sourceBytes,
-                sourceOffset,
-                texture.Width,
-                texture.Height,
+                texture.SourceAddress,
+                mipLevels,
                 texture.Format,
                 texture.WrapS,
                 texture.WrapT,
                 texture.MagFilter,
+                texture.MinFilter,
                 paletteBytes,
                 paletteSourceOffset,
                 paletteEntries,
                 paletteFormat);
+            return true;
+        }
+
+        private static int TextureMipChainSourceByteLength(int width, int height, int format, int mipLevelCount)
+        {
+            if (mipLevelCount <= 0)
+            {
+                return 0;
+            }
+
+            int total = 0;
+            int levelWidth = width;
+            int levelHeight = height;
+            for (int level = 0; level < mipLevelCount; level++)
+            {
+                int byteLength = TextureSourceByteLength(levelWidth, levelHeight, format);
+                if (byteLength <= 0)
+                {
+                    return 0;
+                }
+
+                total = checked(total + byteLength);
+                if (levelWidth == 1 && levelHeight == 1)
+                {
+                    break;
+                }
+
+                levelWidth = Math.Max(1, levelWidth >> 1);
+                levelHeight = Math.Max(1, levelHeight >> 1);
+            }
+
+            return total;
+        }
+
+        private bool TryBuildFastTextureMipLevels(GameCubeMemory? memory, GxTextureState texture, int requestedMipLevels, out FastTextureMipLevel[] levels, out string? fallbackReason)
+        {
+            fallbackReason = null;
+            int mipLevelCount = Math.Max(1, requestedMipLevels);
+            levels = new FastTextureMipLevel[mipLevelCount];
+            uint sourceAddress = texture.SourceAddress;
+            int width = texture.Width;
+            int height = texture.Height;
+            for (int level = 0; level < levels.Length; level++)
+            {
+                int byteLength = TextureSourceByteLength(width, height, texture.Format);
+                if (byteLength <= 0)
+                {
+                    fallbackReason = "incomplete-texture";
+                    return false;
+                }
+
+                byte[]? sourceBytes = null;
+                int sourceOffset;
+                if (MemorySnapshots is not null
+                    && MemorySnapshots.TryGetRange(CurrentFifoOffset, sourceAddress, byteLength, out sourceBytes, out sourceOffset))
+                {
+                    levels[level] = new FastTextureMipLevel(sourceBytes, sourceOffset, width, height);
+                }
+                else if (memory is not null
+                    && GameCubeAddress.TryTranslateMainRam(sourceAddress, out sourceOffset)
+                    && sourceOffset <= GameCubeAddress.MainRamSize - byteLength)
+                {
+                    levels[level] = new FastTextureMipLevel(null, sourceOffset, width, height);
+                }
+                else
+                {
+                    fallbackReason = MemorySnapshots is not null ? "snapshot-texture-range" : "texture-range";
+                    return false;
+                }
+
+                sourceAddress = checked(sourceAddress + (uint)byteLength);
+                if (width == 1 && height == 1)
+                {
+                    for (int fill = level + 1; fill < levels.Length; fill++)
+                    {
+                        levels[fill] = levels[level];
+                    }
+
+                    break;
+                }
+
+                width = Math.Max(1, width >> 1);
+                height = Math.Max(1, height >> 1);
+            }
+
             return true;
         }
 
@@ -6131,6 +9366,7 @@ public static class GxFifoSoftwareRenderer
                 bool hasTexCoord,
                 float texS,
                 float texT,
+                float? textureLod,
                 byte rasterR,
                 byte rasterG,
                 byte rasterB,
@@ -6150,12 +9386,12 @@ public static class GxFifoSoftwareRenderer
                 GxTevColor previous = new(rasterR, rasterG, rasterB, rasterA);
                 IndirectOffsetState indirectOffset = default;
                 GxTevColor texture = usedDirectTextureSampler
-                    ? TextureSampler.Sample(memory, texS, texT)
+                    ? TextureSampler.Sample(memory, texS, texT, textureLod)
                     : TextureFallbackIsOne
                         || (Order.TextureEnabled && !hasTexCoord)
                         ? GxTevColor.One
-                    : state.SampleTevTexture(memory, 0, Order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset);
-                GxTevColor raster = SelectTevRasterColor(0, Order, previous, indirectOffset);
+                    : state.SampleTevTexture(memory, 0, Order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset, textureLod);
+                GxTevColor raster = state.SelectTevRasterColor(0, Order, previous, a, b, c, aWeight, bWeight, cWeight, indirectOffset);
                 raster = ApplyTevSwap(raster, RasterSwap);
                 texture = ApplyTevSwap(texture, TextureSwap);
 
@@ -6172,33 +9408,71 @@ public static class GxFifoSoftwareRenderer
         }
 
         public readonly record struct FastTextureSampler(
-            byte[]? SourceBytes,
-            int SourceOffset,
-            int Width,
-            int Height,
+            uint SourceAddress,
+            FastTextureMipLevel[]? MipLevels,
             int Format,
             int WrapS,
             int WrapT,
             int MagFilter,
+            int MinFilter,
             byte[]? PaletteBytes,
             int PaletteSourceOffset,
             int PaletteEntries,
             int PaletteFormat)
         {
-            public bool IsValid => Width > 0 && Height > 0;
+            public bool IsValid => MipLevels is { Length: > 0 } && MipLevels[0].Width > 0 && MipLevels[0].Height > 0;
 
-            public GxTevColor Sample(GameCubeMemory? memory, float s, float t)
+            public GxTevColor Sample(GameCubeMemory? memory, float s, float t, float? lod)
             {
-                ReadOnlySpan<byte> textureBytes = SourceBytes ?? memory!.MainRam.Span;
-                ReadOnlySpan<byte> paletteBytes = PaletteBytes ?? memory!.MainRam.Span;
-                if (MagFilter == 1)
+                if (TryGetTexturePhaseProbe(SourceAddress, out float phaseS, out float phaseT))
                 {
-                    SampleCoordinate sampleS = TextureCoordinateToLinearSample(s, Width, WrapS);
-                    SampleCoordinate sampleT = TextureCoordinateToLinearSample(t, Height, WrapT);
-                    GxTevColor c00 = SampleTexel(textureBytes, paletteBytes, sampleS.Index0, sampleT.Index0);
-                    GxTevColor c10 = SampleTexel(textureBytes, paletteBytes, sampleS.Index1, sampleT.Index0);
-                    GxTevColor c01 = SampleTexel(textureBytes, paletteBytes, sampleS.Index0, sampleT.Index1);
-                    GxTevColor c11 = SampleTexel(textureBytes, paletteBytes, sampleS.Index1, sampleT.Index1);
+                    s += phaseS;
+                    t += phaseT;
+                }
+
+                ReadOnlySpan<byte> paletteBytes = PaletteBytes ?? memory!.MainRam.Span;
+                if (lod.HasValue && TextureUsesMipmaps(MinFilter) && MipLevels is { Length: > 1 })
+                {
+                    return SampleMinified(memory, paletteBytes, s, t, lod.Value);
+                }
+
+                return SampleWithinMip(memory, paletteBytes, MipLevels![0], s, t, MagFilter == 1);
+            }
+
+            private GxTevColor SampleMinified(GameCubeMemory? memory, ReadOnlySpan<byte> paletteBytes, float s, float t, float lod)
+            {
+                int maxLevel = MipLevels!.Length - 1;
+                float clampedLod = Math.Clamp(lod, 0f, maxLevel);
+                bool linearWithinMip = MinFilter is 5 or 6;
+                bool linearBetweenMips = MinFilter is 2 or 6;
+                if (!linearBetweenMips)
+                {
+                    int mipLevel = Math.Clamp((int)MathF.Floor(clampedLod + 0.5f), 0, maxLevel);
+                    return SampleWithinMip(memory, paletteBytes, MipLevels[mipLevel], s, t, linearWithinMip);
+                }
+
+                int level0 = Math.Clamp((int)MathF.Floor(clampedLod), 0, maxLevel);
+                int level1 = Math.Clamp(level0 + 1, 0, maxLevel);
+                float fraction = clampedLod - level0;
+                GxTevColor c0 = SampleWithinMip(memory, paletteBytes, MipLevels[level0], s, t, linearWithinMip);
+                GxTevColor c1 = SampleWithinMip(memory, paletteBytes, MipLevels[level1], s, t, linearWithinMip);
+                return new GxTevColor(
+                    LerpByte(c0.R, c1.R, fraction),
+                    LerpByte(c0.G, c1.G, fraction),
+                    LerpByte(c0.B, c1.B, fraction),
+                    LerpByte(c0.A, c1.A, fraction));
+            }
+
+            private GxTevColor SampleWithinMip(GameCubeMemory? memory, ReadOnlySpan<byte> paletteBytes, FastTextureMipLevel level, float s, float t, bool linear)
+            {
+                if (linear)
+                {
+                    SampleCoordinate sampleS = TextureCoordinateToLinearSample(s, level.Width, WrapS);
+                    SampleCoordinate sampleT = TextureCoordinateToLinearSample(t, level.Height, WrapT);
+                    GxTevColor c00 = SampleTexel(memory, paletteBytes, level, sampleS.Index0, sampleT.Index0);
+                    GxTevColor c10 = SampleTexel(memory, paletteBytes, level, sampleS.Index1, sampleT.Index0);
+                    GxTevColor c01 = SampleTexel(memory, paletteBytes, level, sampleS.Index0, sampleT.Index1);
+                    GxTevColor c11 = SampleTexel(memory, paletteBytes, level, sampleS.Index1, sampleT.Index1);
                     return new GxTevColor(
                         BilinearByte(c00.R, c10.R, c01.R, c11.R, sampleS.Fraction, sampleT.Fraction),
                         BilinearByte(c00.G, c10.G, c01.G, c11.G, sampleS.Fraction, sampleT.Fraction),
@@ -6206,101 +9480,104 @@ public static class GxFifoSoftwareRenderer
                         BilinearByte(c00.A, c10.A, c01.A, c11.A, sampleS.Fraction, sampleT.Fraction));
                 }
 
-                int x = TextureCoordinateToIndex(s, Width, WrapS);
-                int y = TextureCoordinateToIndex(t, Height, WrapT);
-                return SampleTexel(textureBytes, paletteBytes, x, y);
+                int x = TextureCoordinateToIndex(s, level.Width, WrapS);
+                int y = TextureCoordinateToIndex(t, level.Height, WrapT);
+                return SampleTexel(memory, paletteBytes, level, x, y);
             }
 
-            private GxTevColor SampleTexel(ReadOnlySpan<byte> textureBytes, ReadOnlySpan<byte> paletteBytes, int x, int y) =>
-                Format switch
+            private GxTevColor SampleTexel(GameCubeMemory? memory, ReadOnlySpan<byte> paletteBytes, FastTextureMipLevel level, int x, int y)
+            {
+                ReadOnlySpan<byte> textureBytes = level.SourceBytes ?? memory!.MainRam.Span;
+                return Format switch
                 {
-                    0 => SampleI4(textureBytes, x, y),
-                    1 => SampleI8(textureBytes, x, y),
-                    2 => SampleIA4(textureBytes, x, y),
-                    3 => SampleIA8(textureBytes, x, y),
-                    4 => SampleRgb565(textureBytes, x, y),
-                    5 => SampleRgb5A3(textureBytes, x, y),
-                    6 => SampleRgba8(textureBytes, x, y),
-                    8 => SampleCI4(textureBytes, paletteBytes, x, y),
-                    9 => SampleCI8(textureBytes, paletteBytes, x, y),
-                    14 => SampleCmpr(textureBytes, x, y),
+                    0 => SampleI4(textureBytes, level, x, y),
+                    1 => SampleI8(textureBytes, level, x, y),
+                    2 => SampleIA4(textureBytes, level, x, y),
+                    3 => SampleIA8(textureBytes, level, x, y),
+                    4 => SampleRgb565(textureBytes, level, x, y),
+                    5 => SampleRgb5A3(textureBytes, level, x, y),
+                    6 => SampleRgba8(textureBytes, level, x, y),
+                    8 => SampleCI4(textureBytes, paletteBytes, level, x, y),
+                    9 => SampleCI8(textureBytes, paletteBytes, level, x, y),
+                    14 => SampleCmpr(textureBytes, level, x, y),
                     _ => GxTevColor.One,
                 };
+            }
 
-            private GxTevColor SampleI4(ReadOnlySpan<byte> ram, int x, int y)
+            private static GxTevColor SampleI4(ReadOnlySpan<byte> ram, FastTextureMipLevel level, int x, int y)
             {
-                int blockColumns = (Width + 7) / 8;
+                int blockColumns = (level.Width + 7) / 8;
                 int block = (y / 8) * blockColumns + x / 8;
                 int offset = block * 32 + (y & 7) * 4 + (x & 7) / 2;
-                byte packed = ram[SourceOffset + offset];
+                byte packed = ram[level.SourceOffset + offset];
                 int nibble = (x & 1) == 0 ? packed >> 4 : packed & 0x0F;
                 byte intensity = Expand4(nibble);
                 return new GxTevColor(intensity, intensity, intensity, 255);
             }
 
-            private GxTevColor SampleI8(ReadOnlySpan<byte> ram, int x, int y)
+            private static GxTevColor SampleI8(ReadOnlySpan<byte> ram, FastTextureMipLevel level, int x, int y)
             {
-                int blockColumns = (Width + 7) / 8;
+                int blockColumns = (level.Width + 7) / 8;
                 int block = (y / 4) * blockColumns + x / 8;
                 int offset = block * 32 + (y & 3) * 8 + (x & 7);
-                byte intensity = ram[SourceOffset + offset];
+                byte intensity = ram[level.SourceOffset + offset];
                 return new GxTevColor(intensity, intensity, intensity, 255);
             }
 
-            private GxTevColor SampleIA4(ReadOnlySpan<byte> ram, int x, int y)
+            private static GxTevColor SampleIA4(ReadOnlySpan<byte> ram, FastTextureMipLevel level, int x, int y)
             {
-                int blockColumns = (Width + 7) / 8;
+                int blockColumns = (level.Width + 7) / 8;
                 int block = (y / 4) * blockColumns + x / 8;
                 int offset = block * 32 + (y & 3) * 8 + (x & 7);
-                byte packed = ram[SourceOffset + offset];
+                byte packed = ram[level.SourceOffset + offset];
                 byte intensity = Expand4(packed & 0x0F);
                 return new GxTevColor(intensity, intensity, intensity, Expand4(packed >> 4));
             }
 
-            private GxTevColor SampleIA8(ReadOnlySpan<byte> ram, int x, int y)
+            private static GxTevColor SampleIA8(ReadOnlySpan<byte> ram, FastTextureMipLevel level, int x, int y)
             {
-                ushort value = ReadTiled16(ram, x, y);
+                ushort value = ReadTiled16(ram, level, x, y);
                 byte intensity = (byte)value;
                 return new GxTevColor(intensity, intensity, intensity, (byte)(value >> 8));
             }
 
-            private GxTevColor SampleRgb565(ReadOnlySpan<byte> ram, int x, int y)
+            private static GxTevColor SampleRgb565(ReadOnlySpan<byte> ram, FastTextureMipLevel level, int x, int y)
             {
-                DecodeRgb565(ReadTiled16(ram, x, y), out byte r, out byte g, out byte b);
+                DecodeRgb565(ReadTiled16(ram, level, x, y), out byte r, out byte g, out byte b);
                 return new GxTevColor(r, g, b, 255);
             }
 
-            private GxTevColor SampleRgb5A3(ReadOnlySpan<byte> ram, int x, int y)
+            private static GxTevColor SampleRgb5A3(ReadOnlySpan<byte> ram, FastTextureMipLevel level, int x, int y)
             {
-                DecodeRgb5A3(ReadTiled16(ram, x, y), out byte r, out byte g, out byte b, out byte a);
+                DecodeRgb5A3(ReadTiled16(ram, level, x, y), out byte r, out byte g, out byte b, out byte a);
                 return new GxTevColor(r, g, b, a);
             }
 
-            private GxTevColor SampleRgba8(ReadOnlySpan<byte> ram, int x, int y)
+            private static GxTevColor SampleRgba8(ReadOnlySpan<byte> ram, FastTextureMipLevel level, int x, int y)
             {
-                int blockColumns = (Width + 3) / 4;
+                int blockColumns = (level.Width + 3) / 4;
                 int block = (y / 4) * blockColumns + x / 4;
                 int texel = (y & 3) * 4 + (x & 3);
-                int offset = SourceOffset + block * 64 + texel * 2;
+                int offset = level.SourceOffset + block * 64 + texel * 2;
                 return new GxTevColor(ram[offset + 1], ram[offset + 32], ram[offset + 33], ram[offset]);
             }
 
-            private GxTevColor SampleCI4(ReadOnlySpan<byte> ram, ReadOnlySpan<byte> paletteBytes, int x, int y)
+            private GxTevColor SampleCI4(ReadOnlySpan<byte> ram, ReadOnlySpan<byte> paletteBytes, FastTextureMipLevel level, int x, int y)
             {
-                int blockColumns = (Width + 7) / 8;
+                int blockColumns = (level.Width + 7) / 8;
                 int block = (y / 8) * blockColumns + x / 8;
                 int offset = block * 32 + (y & 7) * 4 + (x & 7) / 2;
-                byte packed = ram[SourceOffset + offset];
+                byte packed = ram[level.SourceOffset + offset];
                 int index = (x & 1) == 0 ? packed >> 4 : packed & 0x0F;
                 return SamplePalette(paletteBytes, index);
             }
 
-            private GxTevColor SampleCI8(ReadOnlySpan<byte> ram, ReadOnlySpan<byte> paletteBytes, int x, int y)
+            private GxTevColor SampleCI8(ReadOnlySpan<byte> ram, ReadOnlySpan<byte> paletteBytes, FastTextureMipLevel level, int x, int y)
             {
-                int blockColumns = (Width + 7) / 8;
+                int blockColumns = (level.Width + 7) / 8;
                 int block = (y / 4) * blockColumns + x / 8;
                 int offset = block * 32 + (y & 3) * 8 + (x & 7);
-                return SamplePalette(paletteBytes, ram[SourceOffset + offset]);
+                return SamplePalette(paletteBytes, ram[level.SourceOffset + offset]);
             }
 
             private GxTevColor SamplePalette(ReadOnlySpan<byte> ram, int index)
@@ -6329,12 +9606,12 @@ public static class GxFifoSoftwareRenderer
                 }
             }
 
-            private GxTevColor SampleCmpr(ReadOnlySpan<byte> ram, int x, int y)
+            private static GxTevColor SampleCmpr(ReadOnlySpan<byte> ram, FastTextureMipLevel level, int x, int y)
             {
-                int blockColumns = (Width + 7) / 8;
+                int blockColumns = (level.Width + 7) / 8;
                 int block = (y / 8) * blockColumns + x / 8;
                 int subBlock = ((y >> 2) & 1) * 2 + ((x >> 2) & 1);
-                int offset = SourceOffset + block * 32 + subBlock * 8;
+                int offset = level.SourceOffset + block * 32 + subBlock * 8;
                 ushort color0 = ReadUInt16(ram, offset);
                 ushort color1 = ReadUInt16(ram, offset + 2);
                 uint selectors = ReadUInt32(ram, offset + 4);
@@ -6354,11 +9631,11 @@ public static class GxFifoSoftwareRenderer
                 };
             }
 
-            private ushort ReadTiled16(ReadOnlySpan<byte> ram, int x, int y)
+            private static ushort ReadTiled16(ReadOnlySpan<byte> ram, FastTextureMipLevel level, int x, int y)
             {
-                int blockColumns = (Width + 3) / 4;
+                int blockColumns = (level.Width + 3) / 4;
                 int block = (y / 4) * blockColumns + x / 4;
-                int offset = SourceOffset + block * 32 + ((y & 3) * 4 + (x & 3)) * 2;
+                int offset = level.SourceOffset + block * 32 + ((y & 3) * 4 + (x & 3)) * 2;
                 return ReadUInt16(ram, offset);
             }
 
@@ -6384,7 +9661,8 @@ public static class GxFifoSoftwareRenderer
             out byte r,
             out byte g,
             out byte bValue,
-            out byte alpha)
+            out byte alpha,
+            float? textureLod = null)
         {
             r = rasterR;
             g = rasterG;
@@ -6418,8 +9696,8 @@ public static class GxFifoSoftwareRenderer
                 }
 
                 TevOrder order = GetTevOrder(stage);
-                GxTevColor texture = SampleTevTexture(memory, stage, order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset);
-                GxTevColor raster = SelectTevRasterColor(stage, order, rasterBase, indirectOffset);
+                GxTevColor texture = SampleTevTexture(memory, stage, order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset, stage == 0 ? textureLod : null);
+                GxTevColor raster = SelectTevRasterColor(stage, order, rasterBase, a, b, c, aWeight, bWeight, cWeight, indirectOffset);
                 raster = ApplyTevSwap(raster, TevRasterSwapTable(alphaEnv));
                 texture = ApplyTevSwap(texture, TevTextureSwapTable(alphaEnv));
                 GxTevColor konstColor = GetKonstColor(stage);
@@ -6476,7 +9754,8 @@ public static class GxFifoSoftwareRenderer
             out byte g,
             out byte bValue,
             out byte alpha,
-            out string stageSummary)
+            out string stageSummary,
+            float? textureLod = null)
         {
             r = rasterR;
             g = rasterG;
@@ -6512,8 +9791,8 @@ public static class GxFifoSoftwareRenderer
                 }
 
                 TevOrder order = GetTevOrder(stage);
-                GxTevColor texture = SampleTevTexture(memory, stage, order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset, out string textureDetail);
-                GxTevColor raster = SelectTevRasterColor(stage, order, rasterBase, indirectOffset);
+                GxTevColor texture = SampleTevTexture(memory, stage, order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset, out string textureDetail, stage == 0 ? textureLod : null);
+                GxTevColor raster = SelectTevRasterColor(stage, order, rasterBase, a, b, c, aWeight, bWeight, cWeight, indirectOffset);
                 raster = ApplyTevSwap(raster, TevRasterSwapTable(alphaEnv));
                 texture = ApplyTevSwap(texture, TevTextureSwapTable(alphaEnv));
                 GxTevColor konstColor = GetKonstColor(stage);
@@ -6629,12 +9908,12 @@ public static class GxFifoSoftwareRenderer
             return TryGetBp((byte)(0xC1 + stage * 2), out value);
         }
 
-        private GxTevColor SampleTevTexture(GameCubeMemory? memory, int stage, TevOrder order, GxVertex a, GxVertex b, GxVertex c, float aWeight, float bWeight, float cWeight, ref IndirectOffsetState indirectOffset)
+        private GxTevColor SampleTevTexture(GameCubeMemory? memory, int stage, TevOrder order, GxVertex a, GxVertex b, GxVertex c, float aWeight, float bWeight, float cWeight, ref IndirectOffsetState indirectOffset, float? textureLod = null)
         {
-            return SampleTevTexture(memory, stage, order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset, out _);
+            return SampleTevTexture(memory, stage, order, a, b, c, aWeight, bWeight, cWeight, ref indirectOffset, out _, textureLod);
         }
 
-        private GxTevColor SampleTevTexture(GameCubeMemory? memory, int stage, TevOrder order, GxVertex a, GxVertex b, GxVertex c, float aWeight, float bWeight, float cWeight, ref IndirectOffsetState indirectOffset, out string textureDetail)
+        private GxTevColor SampleTevTexture(GameCubeMemory? memory, int stage, TevOrder order, GxVertex a, GxVertex b, GxVertex c, float aWeight, float bWeight, float cWeight, ref IndirectOffsetState indirectOffset, out string textureDetail, float? textureLod = null)
         {
             textureDetail = $"texmap{order.TexMap}/texcoord{order.TexCoord}";
             bool hasRegularTexCoord = TryInterpolateTexCoord(a, b, c, order.TexCoord, aWeight, bWeight, cWeight, out float s, out float t);
@@ -6666,14 +9945,74 @@ public static class GxFifoSoftwareRenderer
 
             int x = TextureCoordinateToIndex(s, textureState.Width, textureState.WrapS);
             int y = TextureCoordinateToIndex(t, textureState.Height, textureState.WrapT);
-            textureDetail += $"/addr=0x{textureState.SourceAddress:X8}/fmt={TextureFormatName(textureState.Format)}/size={textureState.Width}x{textureState.Height}/wrap={TextureWrapName(textureState.WrapS)}:{TextureWrapName(textureState.WrapT)}/filter={TextureMagFilterName(textureState.MagFilter)}:{TextureMinFilterName(textureState.MinFilter)}/lod=bias{FormatFloat(textureState.LodBias)}:min{FormatFloat(textureState.MinLod)}:max{FormatFloat(textureState.MaxLod)}/s={FormatFloat(s)}/t={FormatFloat(t)}/xy={x}:{y}";
-            if (!TrySampleTexture(memory, order.TexMap, s, t, out byte r, out byte g, out byte bValue, out byte alpha))
+            string selectedLod = textureLod.HasValue
+                ? $":selected{FormatFloat(textureLod.Value)}"
+                : string.Empty;
+            textureDetail += $"/addr=0x{textureState.SourceAddress:X8}/fmt={TextureFormatName(textureState.Format)}/size={textureState.Width}x{textureState.Height}/wrap={TextureWrapName(textureState.WrapS)}:{TextureWrapName(textureState.WrapT)}/filter={TextureMagFilterName(textureState.MagFilter)}:{TextureMinFilterName(textureState.MinFilter)}/lod=bias{FormatFloat(textureState.LodBias)}:min{FormatFloat(textureState.MinLod)}:max{FormatFloat(textureState.MaxLod)}{selectedLod}/s={FormatFloat(s)}/t={FormatFloat(t)}/xy={x}:{y}";
+            string mipSamples = DescribeMipSamples(memory, textureState, s, t);
+            if (mipSamples.Length > 0)
+            {
+                textureDetail += $"/mips={mipSamples}";
+            }
+
+            if (!TrySampleTexture(memory, order.TexMap, s, t, textureLod, out byte r, out byte g, out byte bValue, out byte alpha))
             {
                 textureDetail += "/sample-failed";
                 return GxTevColor.One;
             }
 
             return new GxTevColor(r, g, bValue, alpha);
+        }
+
+        private string DescribeMipSamples(GameCubeMemory? memory, GxTextureState texture, float s, float t)
+        {
+            if (memory is null || !TextureUsesMipmaps(texture.MinFilter))
+            {
+                return string.Empty;
+            }
+
+            int maxLevel = Math.Min(MaxDiagnosticMipLevel(texture), 6);
+            if (maxLevel <= 0)
+            {
+                return string.Empty;
+            }
+
+            List<string> samples = [];
+            try
+            {
+                for (int mipLevel = 0; mipLevel <= maxLevel; mipLevel++)
+                {
+                    if (!TryGetTextureMipLevel(texture, mipLevel, out TextureMipLevel level))
+                    {
+                        break;
+                    }
+
+                    byte r;
+                    byte g;
+                    byte b;
+                    byte a;
+                    bool sampled = texture.MinFilter is 5 or 6
+                        ? TrySampleTextureLinear(memory, texture, mipLevel, s, t, out r, out g, out b, out a)
+                        : TrySampleTextureNearest(memory, texture, mipLevel, s, t, out r, out g, out b, out a);
+                    if (!sampled)
+                    {
+                        samples.Add($"mip{mipLevel}@{level.Width}x{level.Height}=failed");
+                        continue;
+                    }
+
+                    int x = TextureCoordinateToIndex(s, level.Width, texture.WrapS);
+                    int y = TextureCoordinateToIndex(t, level.Height, texture.WrapT);
+                    samples.Add($"mip{mipLevel}@{level.Width}x{level.Height}:{x}:{y}={r}/{g}/{b}/{a}");
+                }
+            }
+            catch (AddressTranslationException)
+            {
+                samples.Add("address-failed");
+            }
+
+            return samples.Count == 0
+                ? string.Empty
+                : string.Join("|", samples);
         }
 
         private bool TryApplySimpleIndirectOffset(
@@ -6791,15 +10130,103 @@ public static class GxFifoSoftwareRenderer
             return component & 0x1F;
         }
 
-        private static GxTevColor SelectTevRasterColor(int stage, TevOrder order, GxTevColor rasterBase, IndirectOffsetState indirectOffset)
+        private GxTevColor SelectTevRasterColor(
+            int stage,
+            TevOrder order,
+            GxTevColor rasterBase,
+            GxVertex a,
+            GxVertex b,
+            GxVertex c,
+            float aWeight,
+            float bWeight,
+            float cWeight,
+            IndirectOffsetState indirectOffset)
         {
             return order.ColorChannel switch
             {
                 5 => ReplicateColorComponent(stage == 0 ? (byte)0 : (byte)(indirectOffset.BumpAlphaBits << 3)),
                 6 => ReplicateColorComponent(stage == 0 ? (byte)0 : Expand5(indirectOffset.BumpAlphaBits)),
                 7 => GxTevColor.Zero,
+                0 or 1 => ResolveXfRasterColor(order.ColorChannel, InterpolateRasterColor(order.ColorChannel, a, b, c, aWeight, bWeight, cWeight)),
                 _ => rasterBase,
             };
+        }
+
+        private static GxTevColor InterpolateRasterColor(int channel, GxVertex a, GxVertex b, GxVertex c, float aWeight, float bWeight, float cWeight)
+        {
+            GxTevColor colorA = a.GetRasterColor(channel);
+            GxTevColor colorB = b.GetRasterColor(channel);
+            GxTevColor colorC = c.GetRasterColor(channel);
+            return new GxTevColor(
+                InterpolateByte(colorA.R, colorB.R, colorC.R, aWeight, bWeight, cWeight),
+                InterpolateByte(colorA.G, colorB.G, colorC.G, aWeight, bWeight, cWeight),
+                InterpolateByte(colorA.B, colorB.B, colorC.B, aWeight, bWeight, cWeight),
+                InterpolateByte(colorA.A, colorB.A, colorC.A, aWeight, bWeight, cWeight));
+        }
+
+        private GxTevColor ResolveXfRasterColor(int channel, GxTevColor vertexColor)
+        {
+            if (channel is < 0 or > 1)
+            {
+                return vertexColor;
+            }
+
+            bool hasColorControl = TryGetXfRegister((ushort)(0x100E + channel), out uint colorControl);
+            bool hasAlphaControl = TryGetXfRegister((ushort)(0x1010 + channel), out uint alphaControl);
+            byte r = vertexColor.R;
+            byte g = vertexColor.G;
+            byte b = vertexColor.B;
+            byte a = vertexColor.A;
+
+            if (hasColorControl && CanUseRegisterOrAmbientColor(colorControl))
+            {
+                int materialSource = (int)(colorControl & 1);
+                if (materialSource == 0 && TryGetXfRgba((ushort)(0x100C + channel), out GxTevColor material))
+                {
+                    r = material.R;
+                    g = material.G;
+                    b = material.B;
+                }
+                else if (((colorControl >> 1) & 1) != 0
+                    && GetFullLightMask(colorControl) == 0
+                    && ((colorControl >> 6) & 1) == 0
+                    && TryGetXfRgba((ushort)(0x100A + channel), out GxTevColor ambient))
+                {
+                    r = ApplyMaterialAmbient(r, ambient.R);
+                    g = ApplyMaterialAmbient(g, ambient.G);
+                    b = ApplyMaterialAmbient(b, ambient.B);
+                }
+            }
+
+            if (hasAlphaControl && CanUseRegisterOrAmbientColor(alphaControl))
+            {
+                int materialSource = (int)(alphaControl & 1);
+                if (materialSource == 0 && TryGetXfRgba((ushort)(0x100C + channel), out GxTevColor material))
+                {
+                    a = material.A;
+                }
+                else if (((alphaControl >> 1) & 1) != 0
+                    && GetFullLightMask(alphaControl) == 0
+                    && ((alphaControl >> 6) & 1) == 0
+                    && TryGetXfRgba((ushort)(0x100A + channel), out GxTevColor ambient))
+                {
+                    a = ApplyMaterialAmbient(a, ambient.A);
+                }
+            }
+
+            return new GxTevColor(r, g, b, a);
+        }
+
+        private static bool CanUseRegisterOrAmbientColor(uint channelControl)
+        {
+            bool lightingEnabled = ((channelControl >> 1) & 1) != 0;
+            return !lightingEnabled || GetFullLightMask(channelControl) == 0;
+        }
+
+        private static byte ApplyMaterialAmbient(byte material, byte ambient)
+        {
+            int value = material * (ambient + (ambient >> 7));
+            return (byte)Math.Clamp(value >> 8, 0, 255);
         }
 
         private float ApplyIndirectWrap(float coordinate, int wrap, int textureMap, bool coordinateIsS)
@@ -6903,7 +10330,7 @@ public static class GxFifoSoftwareRenderer
             float perspectiveWeight = a.InvW * aWeight + b.InvW * bWeight + c.InvW * cWeight;
             s = aTexS * aWeight + bTexS * bWeight + cTexS * cWeight;
             t = aTexT * aWeight + bTexT * bWeight + cTexT * cWeight;
-            if (MathF.Abs(perspectiveWeight) > 0.000001f)
+            if (!ForceAffineTextureCoordinates && MathF.Abs(perspectiveWeight) > 0.000001f)
             {
                 s = (aTexS * a.InvW * aWeight + bTexS * b.InvW * bWeight + cTexS * c.InvW * cWeight) / perspectiveWeight;
                 t = (aTexT * a.InvW * aWeight + bTexT * b.InvW * bWeight + cTexT * c.InvW * cWeight) / perspectiveWeight;
@@ -7478,7 +10905,7 @@ public static class GxFifoSoftwareRenderer
                 2 => MirrorCoordinate(coordinate),
                 _ => Math.Clamp(coordinate, 0f, 1f),
             };
-            return Math.Clamp((int)MathF.Round(normalized * (size - 1)), 0, size - 1);
+            return Math.Clamp((int)MathF.Floor(normalized * size), 0, size - 1);
         }
 
         private static SampleCoordinate TextureCoordinateToLinearSample(float coordinate, int size, int wrapMode)
@@ -7535,6 +10962,9 @@ public static class GxFifoSoftwareRenderer
             float bottom = Lerp(v01, v11, s);
             return (byte)Math.Clamp((int)MathF.Round(Lerp(top, bottom, t)), 0, 255);
         }
+
+        private static byte LerpByte(byte a, byte b, float fraction) =>
+            (byte)Math.Clamp((int)MathF.Round(Lerp(a, b, fraction)), 0, 255);
 
         private static float RepeatCoordinate(float coordinate) =>
             coordinate - MathF.Floor(coordinate);
@@ -7635,6 +11065,149 @@ public static class GxFifoSoftwareRenderer
                 _ => true,
             };
         }
+
+        public bool ApplyFog(int screenX, float zCoord, int frameWidth, ref byte r, ref byte g, ref byte b)
+        {
+            if (!TryGetBp(0xF1, out uint fogParam3))
+            {
+                return false;
+            }
+
+            int fogType = DecodeFogType(fogParam3);
+            if (fogType == 0 || !float.IsFinite(zCoord))
+            {
+                return false;
+            }
+
+            if (!TryGetBp(0xEE, out uint fogParam0)
+                || !TryGetBp(0xEF, out uint fogBMagnitude)
+                || !TryGetBp(0xF0, out uint fogBShift)
+                || !TryGetBp(0xF2, out uint fogColor))
+            {
+                return false;
+            }
+
+            float fogA = DecodeFogFloat(fogParam0, mantissaShift: 0, exponentShift: 11, signShift: 19);
+            float fogC = DecodeFogFloat(fogParam3, mantissaShift: 0, exponentShift: 11, signShift: 19);
+            if (IsFogNaNCase(fogParam0, fogParam3))
+            {
+                fogA = 0f;
+                fogC = (((fogParam0 >> 19) & 1) == 0 && ((fogParam3 >> 19) & 1) == 0)
+                    ? float.NegativeInfinity
+                    : float.PositiveInfinity;
+            }
+
+            int z = Math.Clamp((int)MathF.Round(zCoord), 0, 0xFF_FFFF);
+            float ze;
+            if (DecodeFogProjection(fogParam3) == 0)
+            {
+                int shift = (int)(fogBShift & 0x1F);
+                int denominator = (int)(fogBMagnitude & 0x00FF_FFFF) - (z >> shift);
+                if (denominator == 0)
+                {
+                    ze = fogA >= 0f ? float.PositiveInfinity : float.NegativeInfinity;
+                }
+                else
+                {
+                    ze = (fogA * 16_777_216f) / denominator;
+                }
+            }
+            else
+            {
+                ze = fogA * z / 16_777_216f;
+            }
+
+            ze *= GetFogRangeAdjustment(screenX, frameWidth);
+            float fog = Math.Clamp(ze - fogC, 0f, 1f);
+            fog = fogType switch
+            {
+                4 => 1f - MathF.Pow(2f, -8f * fog),
+                5 => 1f - MathF.Pow(2f, -8f * fog * fog),
+                6 => MathF.Pow(2f, -8f * (1f - fog)),
+                7 => MathF.Pow(2f, -8f * (1f - fog) * (1f - fog)),
+                _ => fog,
+            };
+
+            if (!float.IsFinite(fog))
+            {
+                fog = fog > 0f ? 1f : 0f;
+            }
+
+            int ifog = Math.Clamp((int)MathF.Round(fog * 256f), 0, 256);
+            if (ifog == 0)
+            {
+                return false;
+            }
+
+            int fogR = (int)((fogColor >> 16) & 0xFF);
+            int fogG = (int)((fogColor >> 8) & 0xFF);
+            int fogB = (int)(fogColor & 0xFF);
+            r = (byte)Math.Clamp(((r * (256 - ifog)) + (fogR * ifog)) >> 8, 0, 255);
+            g = (byte)Math.Clamp(((g * (256 - ifog)) + (fogG * ifog)) >> 8, 0, 255);
+            b = (byte)Math.Clamp(((b * (256 - ifog)) + (fogB * ifog)) >> 8, 0, 255);
+            return true;
+        }
+
+        private float GetFogRangeAdjustment(int screenX, int frameWidth)
+        {
+            if (!TryGetBp(0xE8, out uint fogRangeBase) || ((fogRangeBase >> 10) & 1) == 0)
+            {
+                return 1f;
+            }
+
+            float viewportWidth = frameWidth;
+            if (TryGetXfFloat(0x101A, out float viewportScaleX) && float.IsFinite(viewportScaleX) && MathF.Abs(viewportScaleX) > 0.0001f)
+            {
+                viewportWidth = MathF.Abs(2f * viewportScaleX);
+            }
+
+            float center = (int)(fogRangeBase & 0x3FF) - 342;
+            float screenSpaceCenter = (center / MathF.Max(1f, viewportWidth) * 2f) - 1f;
+            float offset = (2f * ((screenX + 0.5f) / Math.Max(1, frameWidth))) - 1f - screenSpaceCenter;
+            float floatIndex = Math.Clamp(9f - MathF.Abs(offset) * 9f, 0f, 9f);
+            int lowerIndex = Math.Clamp((int)MathF.Floor(floatIndex), 0, 9);
+            int upperIndex = Math.Clamp(lowerIndex + 1, 0, 9);
+            float lowerK = GetFogRangeK(lowerIndex);
+            float upperK = GetFogRangeK(upperIndex);
+            float k = Lerp(lowerK, upperK, floatIndex - lowerIndex);
+            if (!float.IsFinite(k) || MathF.Abs(k) < 0.0001f)
+            {
+                return 1f;
+            }
+
+            float adjustment = MathF.Sqrt(offset * offset + k * k) / k;
+            return float.IsFinite(adjustment) ? adjustment : 1f;
+        }
+
+        private float GetFogRangeK(int index)
+        {
+            int register = 0xE9 + index / 2;
+            if (!TryGetBp((byte)register, out uint value))
+            {
+                return 1f;
+            }
+
+            int raw = (index & 1) == 0
+                ? (int)((value >> 12) & 0xFFF)
+                : (int)(value & 0xFFF);
+            return raw / 64f;
+        }
+
+        private static bool IsFogNaNCase(uint fogParam0, uint fogParam3) =>
+            ((fogParam0 >> 11) & 0xFF) == 0xFF && ((fogParam3 >> 11) & 0xFF) == 0xFF;
+
+        private static float DecodeFogFloat(uint value, int mantissaShift, int exponentShift, int signShift)
+        {
+            uint mantissa = (value >> mantissaShift) & 0x7FF;
+            uint exponent = (value >> exponentShift) & 0xFF;
+            uint sign = (value >> signShift) & 1;
+            uint bits = (sign << 31) | (exponent << 23) | (mantissa << 12);
+            return BitConverter.Int32BitsToSingle((int)bits);
+        }
+
+        private static int DecodeFogProjection(uint fogParam3) => (int)((fogParam3 >> 20) & 1);
+
+        private static int DecodeFogType(uint fogParam3) => (int)((fogParam3 >> 21) & 7);
 
         public void ApplyBlend(byte[] rgb, byte[] alpha, int rgbIndex, int pixelIndex, ref byte r, ref byte g, ref byte b, ref byte a)
         {
@@ -7765,50 +11338,50 @@ public static class GxFifoSoftwareRenderer
                 _ => source,
             };
 
-        private bool TrySampleI4(GameCubeMemory memory, GxTextureState texture, int x, int y, out byte r, out byte g, out byte b, out byte a)
+        private bool TrySampleI4(GameCubeMemory memory, TextureMipLevel level, int x, int y, out byte r, out byte g, out byte b, out byte a)
         {
-            int blockColumns = (texture.Width + 7) / 8;
+            int blockColumns = (level.Width + 7) / 8;
             int block = (y / 8) * blockColumns + x / 8;
             int offset = block * 32 + (y & 7) * 4 + (x & 7) / 2;
-            byte packed = ReadTexture8(memory, texture.SourceAddress + (uint)offset);
+            byte packed = ReadTexture8(memory, level.SourceAddress + (uint)offset);
             int nibble = (x & 1) == 0 ? packed >> 4 : packed & 0x0F;
             r = g = b = Expand4(nibble);
             a = 255;
             return true;
         }
 
-        private bool TrySampleI8(GameCubeMemory memory, GxTextureState texture, int x, int y, out byte r, out byte g, out byte b, out byte a)
+        private bool TrySampleI8(GameCubeMemory memory, TextureMipLevel level, int x, int y, out byte r, out byte g, out byte b, out byte a)
         {
-            int blockColumns = (texture.Width + 7) / 8;
+            int blockColumns = (level.Width + 7) / 8;
             int block = (y / 4) * blockColumns + x / 8;
             int offset = block * 32 + (y & 3) * 8 + (x & 7);
-            r = g = b = ReadTexture8(memory, texture.SourceAddress + (uint)offset);
+            r = g = b = ReadTexture8(memory, level.SourceAddress + (uint)offset);
             a = 255;
             return true;
         }
 
-        private bool TrySampleIA4(GameCubeMemory memory, GxTextureState texture, int x, int y, out byte r, out byte g, out byte b, out byte a)
+        private bool TrySampleIA4(GameCubeMemory memory, TextureMipLevel level, int x, int y, out byte r, out byte g, out byte b, out byte a)
         {
-            int blockColumns = (texture.Width + 7) / 8;
+            int blockColumns = (level.Width + 7) / 8;
             int block = (y / 4) * blockColumns + x / 8;
             int offset = block * 32 + (y & 3) * 8 + (x & 7);
-            byte packed = ReadTexture8(memory, texture.SourceAddress + (uint)offset);
+            byte packed = ReadTexture8(memory, level.SourceAddress + (uint)offset);
             r = g = b = Expand4(packed & 0x0F);
             a = Expand4(packed >> 4);
             return true;
         }
 
-        private bool TrySampleIA8(GameCubeMemory memory, GxTextureState texture, int x, int y, out byte r, out byte g, out byte b, out byte a)
+        private bool TrySampleIA8(GameCubeMemory memory, TextureMipLevel level, int x, int y, out byte r, out byte g, out byte b, out byte a)
         {
-            ushort value = ReadTiled16(memory, texture, x, y);
+            ushort value = ReadTiled16(memory, level, x, y);
             a = (byte)(value >> 8);
             r = g = b = (byte)value;
             return true;
         }
 
-        private bool TrySampleRgb565(GameCubeMemory memory, GxTextureState texture, int x, int y, out byte r, out byte g, out byte b, out byte a)
+        private bool TrySampleRgb565(GameCubeMemory memory, TextureMipLevel level, int x, int y, out byte r, out byte g, out byte b, out byte a)
         {
-            ushort value = ReadTiled16(memory, texture, x, y);
+            ushort value = ReadTiled16(memory, level, x, y);
             r = Expand5((value >> 11) & 0x1F);
             g = Expand6((value >> 5) & 0x3F);
             b = Expand5(value & 0x1F);
@@ -7816,19 +11389,19 @@ public static class GxFifoSoftwareRenderer
             return true;
         }
 
-        private bool TrySampleRgb5A3(GameCubeMemory memory, GxTextureState texture, int x, int y, out byte r, out byte g, out byte b, out byte a)
+        private bool TrySampleRgb5A3(GameCubeMemory memory, TextureMipLevel level, int x, int y, out byte r, out byte g, out byte b, out byte a)
         {
-            ushort value = ReadTiled16(memory, texture, x, y);
+            ushort value = ReadTiled16(memory, level, x, y);
             DecodeRgb5A3(value, out r, out g, out b, out a);
             return true;
         }
 
-        private bool TrySampleRgba8(GameCubeMemory memory, GxTextureState texture, int x, int y, out byte r, out byte g, out byte b, out byte a)
+        private bool TrySampleRgba8(GameCubeMemory memory, TextureMipLevel level, int x, int y, out byte r, out byte g, out byte b, out byte a)
         {
-            int blockColumns = (texture.Width + 3) / 4;
+            int blockColumns = (level.Width + 3) / 4;
             int block = (y / 4) * blockColumns + x / 4;
             int texel = (y & 3) * 4 + (x & 3);
-            uint address = texture.SourceAddress + (uint)(block * 64 + texel * 2);
+            uint address = level.SourceAddress + (uint)(block * 64 + texel * 2);
             a = ReadTexture8(memory, address);
             r = ReadTexture8(memory, address + 1);
             g = ReadTexture8(memory, address + 32);
@@ -7836,32 +11409,32 @@ public static class GxFifoSoftwareRenderer
             return true;
         }
 
-        private bool TrySampleCI4(GameCubeMemory memory, GxTextureState texture, int x, int y, out byte r, out byte g, out byte b, out byte a)
+        private bool TrySampleCI4(GameCubeMemory memory, GxTextureState texture, TextureMipLevel level, int x, int y, out byte r, out byte g, out byte b, out byte a)
         {
-            int blockColumns = (texture.Width + 7) / 8;
+            int blockColumns = (level.Width + 7) / 8;
             int block = (y / 8) * blockColumns + x / 8;
             int offset = block * 32 + (y & 7) * 4 + (x & 7) / 2;
-            byte packed = ReadTexture8(memory, texture.SourceAddress + (uint)offset);
+            byte packed = ReadTexture8(memory, level.SourceAddress + (uint)offset);
             int index = (x & 1) == 0 ? packed >> 4 : packed & 0x0F;
             return TrySamplePalette(memory, texture, index, out r, out g, out b, out a);
         }
 
-        private bool TrySampleCI8(GameCubeMemory memory, GxTextureState texture, int x, int y, out byte r, out byte g, out byte b, out byte a)
+        private bool TrySampleCI8(GameCubeMemory memory, GxTextureState texture, TextureMipLevel level, int x, int y, out byte r, out byte g, out byte b, out byte a)
         {
-            int blockColumns = (texture.Width + 7) / 8;
+            int blockColumns = (level.Width + 7) / 8;
             int block = (y / 4) * blockColumns + x / 8;
             int offset = block * 32 + (y & 3) * 8 + (x & 7);
-            int index = ReadTexture8(memory, texture.SourceAddress + (uint)offset);
+            int index = ReadTexture8(memory, level.SourceAddress + (uint)offset);
             return TrySamplePalette(memory, texture, index, out r, out g, out b, out a);
         }
 
-        private bool TrySampleCmpr(GameCubeMemory memory, GxTextureState texture, int x, int y, out byte r, out byte g, out byte b, out byte a)
+        private bool TrySampleCmpr(GameCubeMemory memory, TextureMipLevel level, int x, int y, out byte r, out byte g, out byte b, out byte a)
         {
             a = 255;
-            int blockColumns = (texture.Width + 7) / 8;
+            int blockColumns = (level.Width + 7) / 8;
             int block = (y / 8) * blockColumns + x / 8;
             int subBlock = ((y >> 2) & 1) * 2 + ((x >> 2) & 1);
-            uint address = texture.SourceAddress + (uint)(block * 32 + subBlock * 8);
+            uint address = level.SourceAddress + (uint)(block * 32 + subBlock * 8);
             ushort color0 = ReadTexture16(memory, address);
             ushort color1 = ReadTexture16(memory, address + 2);
             uint selectors = ReadTexture32(memory, address + 4);
@@ -7936,11 +11509,11 @@ public static class GxFifoSoftwareRenderer
             }
         }
 
-        private ushort ReadTiled16(GameCubeMemory memory, GxTextureState texture, int x, int y)
+        private ushort ReadTiled16(GameCubeMemory memory, TextureMipLevel level, int x, int y)
         {
-            int blockColumns = (texture.Width + 3) / 4;
+            int blockColumns = (level.Width + 3) / 4;
             int block = (y / 4) * blockColumns + x / 4;
-            uint address = texture.SourceAddress + (uint)(block * 32 + ((y & 3) * 4 + (x & 3)) * 2);
+            uint address = level.SourceAddress + (uint)(block * 32 + ((y & 3) * 4 + (x & 3)) * 2);
             return ReadTexture16(memory, address);
         }
 
@@ -8244,6 +11817,14 @@ public static class GxFifoSoftwareRenderer
         }
 
         private readonly record struct GxTlutLoadState(uint SourceAddress, int Entries);
+
+        private readonly record struct TextureMipLevel(int Level, uint SourceAddress, int Width, int Height);
+
+        public readonly record struct FastTextureMipLevel(byte[]? SourceBytes, int SourceOffset, int Width, int Height);
+
+        private readonly record struct TextureMipCacheKey(uint SourceAddress, int Level, int Width, int Height, int Format, uint Image0, uint Image3, int MemoryGeneration, int SnapshotFifoOffset);
+
+        private readonly record struct DecodedTextureMip(byte[] Rgba);
 
         private sealed class GxTextureState
         {

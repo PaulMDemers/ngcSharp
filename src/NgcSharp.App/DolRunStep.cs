@@ -3,7 +3,7 @@ using NgcSharp.Cpu;
 
 namespace NgcSharp.App;
 
-public sealed record DolRunStep(
+public readonly record struct DolRunStep(
     int ExecutedInstructions,
     uint Pc,
     uint Instruction,

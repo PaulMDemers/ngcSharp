@@ -29,9 +29,13 @@ public sealed record RunDolOptions(
     string? GxCopyDumpPath = null,
     string? GxCopyEventDumpPath = null,
     string? GxCoverageDumpPath = null,
+    string? GxTriangleCoverageDumpPath = null,
     string? GxTevSampleDumpPath = null,
     string? GxTextureDumpPath = null,
+    string? GxVertexDumpPath = null,
     string? GxFifoWriteTracePath = null,
+    int? GxFifoWriteTraceStart = null,
+    int? GxFifoWriteTraceLength = null,
     IReadOnlyList<GxMemoryCheckpointRequest>? GxMemoryCheckpoints = null,
     bool GxDisableAutoTextureSnapshots = false,
     string? ExiTracePath = null,
@@ -48,6 +52,7 @@ public sealed record RunDolOptions(
     uint? DumpMemoryAddress = null,
     int? DumpMemoryLength = null,
     IReadOnlyList<MemoryDumpRequest>? DumpMemoryRequests = null,
+    IReadOnlyList<MemoryBinaryDumpRequest>? DumpMemoryBinaryRequests = null,
     IReadOnlyList<PointerTableDumpRequest>? PointerTableDumpRequests = null,
     IReadOnlyList<DisassemblyDumpRequest>? DumpDisassemblyRequests = null,
     int? PcProfileTop = null,
@@ -90,6 +95,7 @@ public sealed record RunDolOptions(
     GxFrameDumpSource GxFrameSource = GxFrameDumpSource.Efb,
     int? GxFrameCopyIndex = null,
     bool GxFrameIgnoreEfbCopyClear = false,
+    bool GxFrameSkipCopyMemoryWrites = false,
     int GxDrawSkipDraws = 0,
     int GxDrawMaxDraws = 10,
     bool TracePrsDecompress = false,
@@ -97,7 +103,46 @@ public sealed record RunDolOptions(
     string? RunSummaryPath = null,
     ulong? DiscCommandLatencyCycles = null,
     string? SonicPathLookupTracePath = null,
-    string? SonicResourceFlagTracePath = null)
+    string? SonicResourceFlagTracePath = null,
+    string? SonicMatrixStackTracePath = null,
+    string? SonicMatrixWriterTracePath = null,
+    string? SonicRootMatrixTracePath = null,
+    string? SonicSceneStateTracePath = null,
+    string? SonicPacketSelectionTracePath = null,
+    string? SonicTraversalSourceTracePath = null,
+    string? SonicDrawPacketTracePath = null,
+    string? SonicGxEmitterTracePath = null,
+    string? SonicTextureBindTracePath = null,
+    string? SonicVertexProvenanceTracePath = null,
+    int? SonicVertexProvenanceTraceStart = null,
+    int? SonicVertexProvenanceTraceLength = null,
+    string? SonicTransformInputTracePath = null,
+    uint? SonicTransformOutputRangeAddress = null,
+    int? SonicTransformOutputRangeLength = null,
+    string? SonicBitstreamDecoderTracePath = null,
+    uint? SonicBitstreamDecoderTraceAddress = null,
+    int? SonicBitstreamDecoderTraceLength = null,
+    string? SonicInputWriteTracePath = null,
+    uint? SonicInputWriteTraceAddress = null,
+    int? SonicInputWriteTraceLength = null,
+    string? LockedCacheWriteTracePath = null,
+    uint? LockedCacheWriteTraceAddress = null,
+    int? LockedCacheWriteTraceLength = null,
+    bool DisableSonicBitUnpackFastForward = false,
+    bool DisableSonicPairedTransformFastForward = false,
+    bool DisableSonicGxFastForward = false,
+    bool DisableSonicGeometryFastForward = false,
+    bool DisableSonicResourceFastForward = false,
+    bool DisableSonicResourceLookupFastForward = false,
+    bool DisableSonicResourceModeQueryFastForward = false,
+    bool DisableSonicResourceStatePollFastForward = false,
+    bool DisableSonicResourceFixupFastForward = false,
+    bool EnableSonicResourceLookupFastForward = false,
+    bool EnableSonicResourceModeQueryFastForward = false,
+    bool EnableSonicResourceStatePollFastForward = false,
+    bool EnableSonicResourceFixupFastForward = false,
+    string? GxTransformDumpPath = null,
+    string? GxStateTimelineDumpPath = null)
 {
     public const int DefaultGxFrameMaxDraws = 500;
     public const int DefaultGxFrameMaxRasterPixels = 8_000_000;
@@ -127,7 +172,10 @@ public sealed record RunDolOptions(
         string? gxCopyDumpPath = null;
         string? gxCopyEventDumpPath = null;
         string? gxCoverageDumpPath = null;
+        string? gxTriangleCoverageDumpPath = null;
         string? gxTevSampleDumpPath = null;
+        string? gxTransformDumpPath = null;
+        string? gxStateTimelineDumpPath = null;
         string? gxFifoWriteTracePath = null;
         List<GxMemoryCheckpointRequest> gxMemoryCheckpoints = [];
         bool gxDisableAutoTextureSnapshots = false;
@@ -148,6 +196,7 @@ public sealed record RunDolOptions(
         uint? dumpMemoryAddress = null;
         int? dumpMemoryLength = null;
         List<MemoryDumpRequest> dumpMemoryRequests = [];
+        List<MemoryBinaryDumpRequest> dumpMemoryBinaryRequests = [];
         List<PointerTableDumpRequest> pointerTableDumpRequests = [];
         List<DisassemblyDumpRequest> dumpDisassemblyRequests = [];
         int? pcProfileTop = null;
@@ -189,13 +238,54 @@ public sealed record RunDolOptions(
         GxFrameDumpSource gxFrameSource = GxFrameDumpSource.Efb;
         int? gxFrameCopyIndex = null;
         bool gxFrameIgnoreEfbCopyClear = false;
+        bool gxFrameSkipCopyMemoryWrites = false;
         int gxDrawSkipDraws = 0;
         int gxDrawMaxDraws = DefaultGxDrawMaxDraws;
         string? gxTextureDumpPath = null;
+        string? gxVertexDumpPath = null;
+        int? gxFifoWriteTraceStart = null;
+        int? gxFifoWriteTraceLength = null;
         bool tracePrsDecompress = false;
         ulong? discCommandLatencyCycles = null;
         string? sonicPathLookupTracePath = null;
         string? sonicResourceFlagTracePath = null;
+        string? sonicMatrixStackTracePath = null;
+        string? sonicMatrixWriterTracePath = null;
+        string? sonicRootMatrixTracePath = null;
+        string? sonicSceneStateTracePath = null;
+        string? sonicPacketSelectionTracePath = null;
+        string? sonicTraversalSourceTracePath = null;
+        string? sonicDrawPacketTracePath = null;
+        string? sonicGxEmitterTracePath = null;
+        string? sonicTextureBindTracePath = null;
+        string? sonicVertexProvenanceTracePath = null;
+        int? sonicVertexProvenanceTraceStart = null;
+        int? sonicVertexProvenanceTraceLength = null;
+        string? sonicTransformInputTracePath = null;
+        uint? sonicTransformOutputRangeAddress = null;
+        int? sonicTransformOutputRangeLength = null;
+        string? sonicBitstreamDecoderTracePath = null;
+        uint? sonicBitstreamDecoderTraceAddress = null;
+        int? sonicBitstreamDecoderTraceLength = null;
+        string? sonicInputWriteTracePath = null;
+        uint? sonicInputWriteTraceAddress = null;
+        int? sonicInputWriteTraceLength = null;
+        string? lockedCacheWriteTracePath = null;
+        uint? lockedCacheWriteTraceAddress = null;
+        int? lockedCacheWriteTraceLength = null;
+        bool disableSonicBitUnpackFastForward = false;
+        bool disableSonicPairedTransformFastForward = false;
+        bool disableSonicGxFastForward = false;
+        bool disableSonicGeometryFastForward = false;
+        bool disableSonicResourceFastForward = false;
+        bool disableSonicResourceLookupFastForward = false;
+        bool disableSonicResourceModeQueryFastForward = false;
+        bool disableSonicResourceStatePollFastForward = false;
+        bool disableSonicResourceFixupFastForward = false;
+        bool enableSonicResourceLookupFastForward = false;
+        bool enableSonicResourceModeQueryFastForward = false;
+        bool enableSonicResourceStatePollFastForward = false;
+        bool enableSonicResourceFixupFastForward = false;
 
         for (int index = 2; index < args.Length; index++)
         {
@@ -292,6 +382,9 @@ public sealed record RunDolOptions(
                 case "--gx-frame-ignore-efb-copy-clear":
                     gxFrameIgnoreEfbCopyClear = true;
                     break;
+                case "--gx-frame-skip-copy-memory-writes":
+                    gxFrameSkipCopyMemoryWrites = true;
+                    break;
                 case "--gx-frame-source":
                     if (index + 1 >= args.Length || !TryParseGxFrameSource(args[++index], out gxFrameSource))
                     {
@@ -345,6 +438,15 @@ public sealed record RunDolOptions(
 
                     gxCoverageDumpPath = args[++index];
                     break;
+                case "--dump-gx-triangle-coverage":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--dump-gx-triangle-coverage requires a path.");
+                        return false;
+                    }
+
+                    gxTriangleCoverageDumpPath = args[++index];
+                    break;
                 case "--dump-gx-tev-samples":
                     if (index + 1 >= args.Length)
                     {
@@ -353,6 +455,33 @@ public sealed record RunDolOptions(
                     }
 
                     gxTevSampleDumpPath = args[++index];
+                    break;
+                case "--dump-gx-transforms":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--dump-gx-transforms requires a path.");
+                        return false;
+                    }
+
+                    gxTransformDumpPath = args[++index];
+                    break;
+                case "--dump-gx-state-timeline":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--dump-gx-state-timeline requires a path.");
+                        return false;
+                    }
+
+                    gxStateTimelineDumpPath = args[++index];
+                    break;
+                case "--dump-gx-vertices":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--dump-gx-vertices requires a path.");
+                        return false;
+                    }
+
+                    gxVertexDumpPath = args[++index];
                     break;
                 case "--dump-gx-textures":
                     if (index + 1 >= args.Length)
@@ -389,6 +518,29 @@ public sealed record RunDolOptions(
                     }
 
                     gxFifoWriteTracePath = args[++index];
+                    break;
+                case "--trace-gx-fifo-window":
+                    if (index + 3 >= args.Length)
+                    {
+                        error.WriteLine("--trace-gx-fifo-window requires a path, start offset, and byte length.");
+                        return false;
+                    }
+
+                    gxFifoWriteTracePath = args[++index];
+                    if (!TryParseNonNegativeInt32(args[++index], out int parsedGxFifoTraceStart))
+                    {
+                        error.WriteLine("--trace-gx-fifo-window start offset must be a non-negative integer.");
+                        return false;
+                    }
+
+                    if (!TryParsePositiveInt32(args[++index], out int parsedGxFifoTraceLength))
+                    {
+                        error.WriteLine("--trace-gx-fifo-window byte length must be positive.");
+                        return false;
+                    }
+
+                    gxFifoWriteTraceStart = parsedGxFifoTraceStart;
+                    gxFifoWriteTraceLength = parsedGxFifoTraceLength;
                     break;
                 case "--gx-memory-checkpoint":
                     if (index + 4 >= args.Length
@@ -520,6 +672,31 @@ public sealed record RunDolOptions(
                     dumpMemoryAddress = parsedDumpMemoryAddress;
                     dumpMemoryLength = parsedDumpMemoryLength;
                     dumpMemoryRequests.Add(new MemoryDumpRequest(parsedDumpMemoryAddress, parsedDumpMemoryLength));
+                    break;
+                case "--dump-memory-bin":
+                    if (index + 3 >= args.Length
+                        || !TryParseUInt32(args[index + 1], out uint parsedDumpMemoryBinaryAddress)
+                        || !TryParsePositiveInt32(args[index + 2], out int parsedDumpMemoryBinaryLength))
+                    {
+                        error.WriteLine("--dump-memory-bin requires an address, byte length, and output path.");
+                        return false;
+                    }
+
+                    dumpMemoryBinaryRequests.Add(new MemoryBinaryDumpRequest(parsedDumpMemoryBinaryAddress, parsedDumpMemoryBinaryLength, args[index + 3]));
+                    index += 3;
+                    break;
+                case "--dump-memory-bin-at":
+                    if (index + 4 >= args.Length
+                        || !TryParsePositiveInt32(args[index + 1], out int parsedDumpMemoryBinaryInstruction)
+                        || !TryParseUInt32(args[index + 2], out uint parsedTimedDumpMemoryBinaryAddress)
+                        || !TryParsePositiveInt32(args[index + 3], out int parsedTimedDumpMemoryBinaryLength))
+                    {
+                        error.WriteLine("--dump-memory-bin-at requires an instruction count, address, byte length, and output path.");
+                        return false;
+                    }
+
+                    dumpMemoryBinaryRequests.Add(new MemoryBinaryDumpRequest(parsedTimedDumpMemoryBinaryAddress, parsedTimedDumpMemoryBinaryLength, args[index + 4], parsedDumpMemoryBinaryInstruction));
+                    index += 4;
                     break;
                 case "--dump-pointer-table":
                     if (index + 5 >= args.Length
@@ -749,6 +926,45 @@ public sealed record RunDolOptions(
                 case "--fast-forward-write-watch":
                     fastForwardWriteWatch = true;
                     break;
+                case "--disable-sonic-paired-transform-fast-forward":
+                    disableSonicPairedTransformFastForward = true;
+                    break;
+                case "--disable-sonic-gx-fast-forward":
+                    disableSonicGxFastForward = true;
+                    break;
+                case "--disable-sonic-geometry-fast-forward":
+                    disableSonicGeometryFastForward = true;
+                    break;
+                case "--disable-sonic-resource-fast-forward":
+                    disableSonicResourceFastForward = true;
+                    break;
+                case "--disable-sonic-resource-lookup-fast-forward":
+                    disableSonicResourceLookupFastForward = true;
+                    break;
+                case "--enable-sonic-resource-lookup-fast-forward":
+                    enableSonicResourceLookupFastForward = true;
+                    break;
+                case "--disable-sonic-resource-mode-query-fast-forward":
+                    disableSonicResourceModeQueryFastForward = true;
+                    break;
+                case "--enable-sonic-resource-mode-query-fast-forward":
+                    enableSonicResourceModeQueryFastForward = true;
+                    break;
+                case "--disable-sonic-resource-state-poll-fast-forward":
+                    disableSonicResourceStatePollFastForward = true;
+                    break;
+                case "--enable-sonic-resource-state-poll-fast-forward":
+                    enableSonicResourceStatePollFastForward = true;
+                    break;
+                case "--disable-sonic-resource-fixup-fast-forward":
+                    disableSonicResourceFixupFastForward = true;
+                    break;
+                case "--enable-sonic-resource-fixup-fast-forward":
+                    enableSonicResourceFixupFastForward = true;
+                    break;
+                case "--disable-sonic-bit-unpack-fast-forward":
+                    disableSonicBitUnpackFastForward = true;
+                    break;
                 case "--trace-prs-decompress":
                     tracePrsDecompress = true;
                     break;
@@ -769,6 +985,173 @@ public sealed record RunDolOptions(
                     }
 
                     sonicResourceFlagTracePath = args[++index];
+                    break;
+                case "--trace-sonic-matrix-stack":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-sonic-matrix-stack requires a CSV path.");
+                        return false;
+                    }
+
+                    sonicMatrixStackTracePath = args[++index];
+                    break;
+                case "--trace-sonic-matrix-writer":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-sonic-matrix-writer requires a CSV path.");
+                        return false;
+                    }
+
+                    sonicMatrixWriterTracePath = args[++index];
+                    break;
+                case "--trace-sonic-root-matrix":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-sonic-root-matrix requires a CSV path.");
+                        return false;
+                    }
+
+                    sonicRootMatrixTracePath = args[++index];
+                    break;
+                case "--trace-sonic-scene-state":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-sonic-scene-state requires a CSV path.");
+                        return false;
+                    }
+
+                    sonicSceneStateTracePath = args[++index];
+                    break;
+                case "--trace-sonic-packet-selection":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-sonic-packet-selection requires a CSV path.");
+                        return false;
+                    }
+
+                    sonicPacketSelectionTracePath = args[++index];
+                    break;
+                case "--trace-sonic-traversal-source":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-sonic-traversal-source requires a CSV path.");
+                        return false;
+                    }
+
+                    sonicTraversalSourceTracePath = args[++index];
+                    break;
+                case "--trace-sonic-draw-packets":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-sonic-draw-packets requires a CSV path.");
+                        return false;
+                    }
+
+                    sonicDrawPacketTracePath = args[++index];
+                    break;
+                case "--trace-sonic-gx-emitters":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-sonic-gx-emitters requires a CSV path.");
+                        return false;
+                    }
+
+                    sonicGxEmitterTracePath = args[++index];
+                    break;
+                case "--trace-sonic-texture-binds":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-sonic-texture-binds requires a CSV path.");
+                        return false;
+                    }
+
+                    sonicTextureBindTracePath = args[++index];
+                    break;
+                case "--trace-sonic-vertex-provenance":
+                    if (index + 3 >= args.Length)
+                    {
+                        error.WriteLine("--trace-sonic-vertex-provenance requires a CSV path, FIFO start offset, and FIFO byte length.");
+                        return false;
+                    }
+
+                    sonicVertexProvenanceTracePath = args[++index];
+                    if (!TryParseNonNegativeInt32(args[++index], out int parsedSonicVertexProvenanceStart))
+                    {
+                        error.WriteLine("--trace-sonic-vertex-provenance FIFO start offset must be a non-negative integer.");
+                        return false;
+                    }
+
+                    if (!TryParsePositiveInt32(args[++index], out int parsedSonicVertexProvenanceLength))
+                    {
+                        error.WriteLine("--trace-sonic-vertex-provenance FIFO byte length must be positive.");
+                        return false;
+                    }
+
+                    sonicVertexProvenanceTraceStart = parsedSonicVertexProvenanceStart;
+                    sonicVertexProvenanceTraceLength = parsedSonicVertexProvenanceLength;
+                    break;
+                case "--trace-sonic-transform-inputs":
+                    if (index + 1 >= args.Length)
+                    {
+                        error.WriteLine("--trace-sonic-transform-inputs requires a CSV path.");
+                        return false;
+                    }
+
+                    sonicTransformInputTracePath = args[++index];
+                    break;
+                case "--trace-sonic-transform-output-range":
+                    if (index + 2 >= args.Length
+                        || !TryParseUInt32(args[++index], out uint parsedSonicTransformOutputRangeAddress)
+                        || !TryParsePositiveInt32(args[++index], out int parsedSonicTransformOutputRangeLength))
+                    {
+                        error.WriteLine("--trace-sonic-transform-output-range requires an address and a positive length.");
+                        return false;
+                    }
+
+                    sonicTransformOutputRangeAddress = parsedSonicTransformOutputRangeAddress;
+                    sonicTransformOutputRangeLength = parsedSonicTransformOutputRangeLength;
+                    break;
+                case "--trace-sonic-bitstream-decoder":
+                    if (index + 3 >= args.Length
+                        || !TryParseUInt32(args[index + 2], out uint parsedSonicBitstreamDecoderTraceAddress)
+                        || !TryParsePositiveInt32(args[index + 3], out int parsedSonicBitstreamDecoderTraceLength))
+                    {
+                        error.WriteLine("--trace-sonic-bitstream-decoder requires a CSV path, address, and positive length.");
+                        return false;
+                    }
+
+                    sonicBitstreamDecoderTracePath = args[++index];
+                    sonicBitstreamDecoderTraceAddress = parsedSonicBitstreamDecoderTraceAddress;
+                    sonicBitstreamDecoderTraceLength = parsedSonicBitstreamDecoderTraceLength;
+                    index += 2;
+                    break;
+                case "--trace-sonic-input-writes":
+                    if (index + 3 >= args.Length
+                        || !TryParseUInt32(args[index + 2], out uint parsedSonicInputWriteTraceAddress)
+                        || !TryParsePositiveInt32(args[index + 3], out int parsedSonicInputWriteTraceLength))
+                    {
+                        error.WriteLine("--trace-sonic-input-writes requires a CSV path, address, and positive length.");
+                        return false;
+                    }
+
+                    sonicInputWriteTracePath = args[++index];
+                    sonicInputWriteTraceAddress = parsedSonicInputWriteTraceAddress;
+                    sonicInputWriteTraceLength = parsedSonicInputWriteTraceLength;
+                    index += 2;
+                    break;
+                case "--trace-locked-cache-writes":
+                    if (index + 3 >= args.Length
+                        || !TryParseUInt32(args[index + 2], out uint parsedLockedCacheWriteTraceAddress)
+                        || !TryParsePositiveInt32(args[index + 3], out int parsedLockedCacheWriteTraceLength))
+                    {
+                        error.WriteLine("--trace-locked-cache-writes requires a CSV path, address, and positive length.");
+                        return false;
+                    }
+
+                    lockedCacheWriteTracePath = args[++index];
+                    lockedCacheWriteTraceAddress = parsedLockedCacheWriteTraceAddress;
+                    lockedCacheWriteTraceLength = parsedLockedCacheWriteTraceLength;
+                    index += 2;
                     break;
                 case "--di-command-latency-cycles":
                     if (index + 1 >= args.Length || !TryParseUInt64(args[++index], out ulong parsedDiscCommandLatencyCycles))
@@ -884,7 +1267,7 @@ public sealed record RunDolOptions(
             return false;
         }
 
-        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCopyEventDumpPath, gxCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxFifoWriteTracePath, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, pointerTableDumpRequests, dumpDisassemblyRequests, pcProfileTop, profileAfter, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, branchSiteProfiles, pcLrProfiles, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath, discCommandLatencyCycles, sonicPathLookupTracePath, sonicResourceFlagTracePath);
+        options = new RunDolOptions(path, maxInstructions, trace, tracePath, dumpRegisters, dumpMmio, quiet, dumpThreads, frameDumpPath, gxFrameDumpPath, gxDrawDumpPath, gxCopyDumpPath, gxCopyEventDumpPath, gxCoverageDumpPath, gxTriangleCoverageDumpPath, gxTevSampleDumpPath, gxTextureDumpPath, gxVertexDumpPath, gxFifoWriteTracePath, gxFifoWriteTraceStart, gxFifoWriteTraceLength, gxMemoryCheckpoints, gxDisableAutoTextureSnapshots, exiTracePath, siTracePath, mmioTracePath, memoryCardSlotAInserted, memoryCardSlotBInserted, frameAddress, frameWidth, frameHeight, frameFormat, watchAddress, traceTail, dumpMemoryAddress, dumpMemoryLength, dumpMemoryRequests, dumpMemoryBinaryRequests, pointerTableDumpRequests, dumpDisassemblyRequests, pcProfileTop, profileAfter, indirectCallSiteProfileAddress, indirectCallSiteProfileTop, branchSiteProfiles, pcLrProfiles, stopOnPc, stopOnPcAfter, tracePcAddresses, tracePcAfter, stopOnGxFifoOffset, watchAddresses, watchLimit, stopOnHotPc, stopOnHotPcAfter, watchWriteValue, watchWriteRangeAddress, watchWriteRangeLength, watchWriteAfter, watchLoadRangeAddress, watchLoadRangeLength, watchCallTargets, watchCallRangeAddress, watchCallRangeLength, findMemoryWords, stopAfterWriteWatch, watchGpr, watchGprAfter, fastForwardIdle, fastForwardWriteWatch, controllerButtons, controllerButtonWindows, dumpMessageQueues, gxFrameMaxDraws, gxFrameSkipDraws, gxFrameMaxRasterPixels, gxFrameSweep, gxFrameSource, gxFrameCopyIndex, gxFrameIgnoreEfbCopyClear, gxFrameSkipCopyMemoryWrites, gxDrawSkipDraws, gxDrawMaxDraws, tracePrsDecompress, schedulerTracePath, runSummaryPath, discCommandLatencyCycles, sonicPathLookupTracePath, sonicResourceFlagTracePath, sonicMatrixStackTracePath, sonicMatrixWriterTracePath, sonicRootMatrixTracePath, sonicSceneStateTracePath, sonicPacketSelectionTracePath, sonicTraversalSourceTracePath, sonicDrawPacketTracePath, sonicGxEmitterTracePath, sonicTextureBindTracePath, sonicVertexProvenanceTracePath, sonicVertexProvenanceTraceStart, sonicVertexProvenanceTraceLength, sonicTransformInputTracePath, sonicTransformOutputRangeAddress, sonicTransformOutputRangeLength, sonicBitstreamDecoderTracePath, sonicBitstreamDecoderTraceAddress, sonicBitstreamDecoderTraceLength, sonicInputWriteTracePath, sonicInputWriteTraceAddress, sonicInputWriteTraceLength, lockedCacheWriteTracePath, lockedCacheWriteTraceAddress, lockedCacheWriteTraceLength, disableSonicBitUnpackFastForward, disableSonicPairedTransformFastForward, disableSonicGxFastForward, disableSonicGeometryFastForward, disableSonicResourceFastForward, disableSonicResourceLookupFastForward, disableSonicResourceModeQueryFastForward, disableSonicResourceStatePollFastForward, disableSonicResourceFixupFastForward, enableSonicResourceLookupFastForward, enableSonicResourceModeQueryFastForward, enableSonicResourceStatePollFastForward, enableSonicResourceFixupFastForward, gxTransformDumpPath, gxStateTimelineDumpPath);
         return true;
     }
 

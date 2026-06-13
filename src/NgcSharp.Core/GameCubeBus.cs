@@ -201,6 +201,8 @@ public sealed class GameCubeBus : IMemoryBus
 
     public Action<uint, int, uint>? MainRamWriteObserver { get; set; }
 
+    public Action<uint, int, uint>? LockedCacheWriteObserver { get; set; }
+
     public Action<MmioAccess>? MmioAccessObserver { get; set; }
 
     public uint SmallDataBaseRegister { get; set; }
@@ -401,6 +403,7 @@ public sealed class GameCubeBus : IMemoryBus
         if (TryTranslateLockedCache(address, out int lockedCacheOffset))
         {
             _lockedCache[lockedCacheOffset] = value;
+            LockedCacheWriteObserver?.Invoke(address, sizeof(byte), value);
             return;
         }
 
@@ -419,6 +422,7 @@ public sealed class GameCubeBus : IMemoryBus
         if (TryTranslateLockedCache(address, sizeof(ushort), out int lockedCacheOffset))
         {
             BigEndian.WriteUInt16(_lockedCache.AsSpan(lockedCacheOffset, sizeof(ushort)), value);
+            LockedCacheWriteObserver?.Invoke(address, sizeof(ushort), value);
             return;
         }
 
@@ -455,6 +459,7 @@ public sealed class GameCubeBus : IMemoryBus
         if (TryTranslateLockedCache(address, sizeof(uint), out int lockedCacheOffset))
         {
             BigEndian.WriteUInt32(_lockedCache.AsSpan(lockedCacheOffset, sizeof(uint)), value);
+            LockedCacheWriteObserver?.Invoke(address, sizeof(uint), value);
             return;
         }
 
